@@ -18,8 +18,12 @@ class SnapshotBuilder
 {
 public:
     /// Pattern mode: loops a single pattern.
-    static std::unique_ptr<PlaybackSnapshot> buildPattern(const Song& song, PatternId pattern, const SampleBank& bank,
-                                                          double sampleRate);
+    static std::unique_ptr<PlaybackSnapshot> buildPattern(const Song& song, PatternId pattern,
+                                                          const SampleBank& bank, double sampleRate);
+
+    /// Song / Arrangement mode: plays all pattern blocks across the 8 arranger tracks.
+    static std::unique_ptr<PlaybackSnapshot> buildArrangement(const Song& song, const SampleBank& bank,
+                                                              double sampleRate);
 
     /// Constant-power pan with unity gain at centre. Returns {left, right}.
     static std::pair<float, float> panGains(float pan) noexcept;

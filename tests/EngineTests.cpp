@@ -21,8 +21,6 @@ auto impulse()
     return data;
 }
 
-/// Runs the sequencer for `total` samples in blocks of `blockSize` and returns
-/// the sample indices where the left channel is non-zero (onsets).
 std::vector<std::int64_t> render(Sequencer& seq, int total, int blockSize)
 {
     std::vector<float> left(static_cast<std::size_t>(total)), right(static_cast<std::size_t>(total));
@@ -48,12 +46,12 @@ struct Fixture
 
     Fixture()
     {
-        song.setBpm(120.0); // 6000 samples per step at 48 kHz
+        song.setBpm(120.0); // 6000 samples per step at 48 kHz (96000 samples per bar)
         Sample s;
         s.name = "impulse";
         sample = song.addSample(s);
         bank[sample] = impulse();
-        pattern = song.addPattern("P", 1); // 96000 samples
+        pattern = song.addPattern("P", 1);
     }
 
     auto snapshot() const { return SnapshotBuilder::buildPattern(song, pattern, bank, kRate); }
@@ -72,7 +70,7 @@ TEST_CASE("Snapshot exchange hands over and recycles snapshots")
     REQUIRE(exchange.takePending() == nullptr);
 
     REQUIRE(exchange.tryRetire(taken));
-    REQUIRE_FALSE(exchange.tryRetire(taken)); // trash slot occupied
+    REQUIRE_FALSE(exchange.tryRetire(taken));
     exchange.collectGarbage();
     REQUIRE(exchange.tryRetire(new PlaybackSnapshot()));
 }
@@ -153,7 +151,7 @@ TEST_CASE("Nothing plays while stopped; rewind returns to start")
 
 TEST_CASE("Metronome clicks on every beat")
 {
-    Fixture f; // empty pattern, 1 bar = 4 beats of 24000 samples
+    Fixture f;
 
     SnapshotExchange exchange;
     exchange.publish(f.snapshot());
@@ -164,7 +162,6 @@ TEST_CASE("Metronome clicks on every beat")
     std::vector<float> left(96000), right(96000);
     seq.process(left.data(), right.data(), 96000);
 
-    // A click starts with a rising sine; detect the first non-zero sample after silence.
     std::vector<int> starts;
     for (int i = 1; i < 96000; ++i)
         if (left[static_cast<std::size_t>(i)] != 0.0f && left[static_cast<std::size_t>(i - 1)] == 0.0f &&
@@ -182,9 +179,51 @@ TEST_CASE("New snapshots are adopted while playing and keep the position")
     seq.requestPlaying(true);
     render(seq, 30000, 512);
 
-    f.song.placeClip(f.pattern, 0, f.sample, 8); // step 8 = sample 48000
+    f.song.placeClip(f.pattern, 0, f.sample, 8);
     exchange.publish(f.snapshot());
 
     const auto onsets = render(seq, 30000, 512);
-    REQUIRE(onsets == std::vector<std::int64_t>{18000}); // 48000 - 30000
+    REQUIRE(onsets == std::vector<std::int64_t>{18000});
+}
+
+TEST_CASE("Arrangement plays pattern blocks across multiple tracks and stops at end")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0); // hit at beat 1
+
+    const auto pat2 = f.song.addPattern("P2", 1);
+    f.song.placeClip(pat2, 0, f.sample, 4); // hit at beat 2 (step 4 = 24000 samples)
+
+    // Track 0: Pattern 1 at bar 0 (0..96000) and bar 2 (192000..288000)
+    f.song.placeBlock(0, f.pattern, 0);
+    f.song.placeBlock(0, f.pattern, 2);
+
+    // Track 1: Pattern 2 at bar 1 (96000..192000)
+    f.song.placeBlock(1, pat2, 1);
+
+    auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate);
+    REQUIRE_FALSE(snap->looping);
+    REQUIRE(snap->lengthSamples == 96000 * 3); // 3 bars total
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    const auto onsets = render(seq, 96000 * 3, 512);
+    // Bar 0: sample 0
+    // Bar 1: sample 96000 + 24000 = 120000
+    // Bar 2: sample 192000
+    REQUIRE(onsets == std::vector<std::int64_t>{0, 120000, 192000});
+}
+
+TEST_CASE("Muted arranger tracks are excluded from playback")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+    f.song.placeBlock(0, f.pattern, 0);
+    f.song.arrangerTrack(0)->muted = true;
+
+    auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate);
+    REQUIRE(snap->events.empty());
 }

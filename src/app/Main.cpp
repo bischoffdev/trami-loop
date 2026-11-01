@@ -72,6 +72,8 @@ private:
         for (int step = 0; step < kStepsPerBar; step += 2)
             song_.placeClip(pattern, 2, hihat, step);
         song_.placeClip(pattern, 3, bass, 0);
+
+        song_.placeBlock(0, pattern, 0);
     }
 
     TramiLookAndFeel lookAndFeel_;

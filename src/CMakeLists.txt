@@ -34,6 +34,10 @@ target_sources(TramiLoop PRIVATE
     ui/TrackHeader.cpp
     ui/SampleBrowserPanel.cpp
     ui/PatternView.cpp
+    ui/ArrangerGrid.cpp
+    ui/ArrangerTrackHeader.cpp
+    ui/ArrangerView.cpp
+    ui/MainContainer.cpp
 )
 
 target_compile_definitions(TramiLoop PRIVATE
