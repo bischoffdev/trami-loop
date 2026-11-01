@@ -16,6 +16,18 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
     arrangerModeButton_.onClick = [this]() { setViewMode(ViewMode::Arranger); };
     addAndMakeVisible(arrangerModeButton_);
 
+    undoButton_.onClick = [this]() { performUndo(); };
+    addAndMakeVisible(undoButton_);
+
+    redoButton_.onClick = [this]() { performRedo(); };
+    addAndMakeVisible(redoButton_);
+
+    saveButton_.onClick = [this]() { saveProjectDialog(); };
+    addAndMakeVisible(saveButton_);
+
+    openButton_.onClick = [this]() { openProjectDialog(); };
+    addAndMakeVisible(openButton_);
+
     patternView_ = std::make_unique<PatternView>(song_, engine_, stretchCache_);
     addAndMakeVisible(patternView_.get());
 
@@ -26,6 +38,8 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
 
     setViewMode(ViewMode::Pattern);
 }
+
+MainContainer::~MainContainer() = default;
 
 void MainContainer::setViewMode(ViewMode mode)
 {
@@ -63,12 +77,116 @@ void MainContainer::editPattern(PatternId patternId)
     setViewMode(ViewMode::Pattern);
 }
 
+void MainContainer::saveProjectDialog()
+{
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Save trami-loop project folder", juce::File::getSpecialLocation(juce::File::userHomeDirectory), "*", true);
+
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectDirectories,
+        [this](const juce::FileChooser& fc) {
+            const auto result = fc.getResult();
+            if (result != juce::File{})
+            {
+                const std::filesystem::path dir(result.getFullPathName().toStdString());
+                if (ProjectSerializer::saveProject(song_, stretchCache_, dir))
+                {
+                    currentProjectDir_ = dir;
+                }
+            }
+        });
+}
+
+void MainContainer::openProjectDialog()
+{
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Open trami-loop project folder", juce::File::getSpecialLocation(juce::File::userHomeDirectory), "*", true);
+
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+        [this](const juce::FileChooser& fc) {
+            const auto result = fc.getResult();
+            if (result != juce::File{})
+            {
+                const std::filesystem::path dir(result.getFullPathName().toStdString());
+                if (auto loaded = ProjectSerializer::loadProject(dir, stretchCache_, importer_, engine_.sampleRate()))
+                {
+                    song_ = std::move(*loaded);
+                    currentProjectDir_ = dir;
+                    history_.clear();
+                    updateAllViews();
+                }
+            }
+        });
+}
+
+void MainContainer::performUndo()
+{
+    if (history_.undo(song_))
+        updateAllViews();
+}
+
+void MainContainer::performRedo()
+{
+    if (history_.redo(song_))
+        updateAllViews();
+}
+
+void MainContainer::updateAllViews()
+{
+    if (patternView_ != nullptr)
+    {
+        if (!song_.patterns().empty())
+            patternView_->setPattern(song_.patterns().front().id);
+        patternView_->updateLengthSelector();
+        patternView_->updateSampleSelector();
+        patternView_->republish();
+    }
+
+    if (arrangerView_ != nullptr)
+    {
+        arrangerView_->updatePatternList();
+        arrangerView_->republish();
+    }
+}
+
 bool MainContainer::keyPressed(const juce::KeyPress& key)
 {
+    const auto mods = key.getModifiers();
+    const bool isCmdOrCtrl = mods.isCommandDown() || mods.isCtrlDown();
+
+    if (isCmdOrCtrl && key.isKeyCode('Z'))
+    {
+        if (mods.isShiftDown())
+            performRedo();
+        else
+            performUndo();
+        return true;
+    }
+
+    if (isCmdOrCtrl && key.isKeyCode('Y'))
+    {
+        performRedo();
+        return true;
+    }
+
+    if (isCmdOrCtrl && key.isKeyCode('S'))
+    {
+        saveProjectDialog();
+        return true;
+    }
+
+    if (isCmdOrCtrl && key.isKeyCode('O'))
+    {
+        openProjectDialog();
+        return true;
+    }
+
     if (currentMode_ == ViewMode::Pattern && patternView_ != nullptr)
         return patternView_->keyPressed(key);
     if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
         return arrangerView_->keyPressed(key);
+
     return false;
 }
 
@@ -76,13 +194,11 @@ void MainContainer::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
-    // Top switcher bar
     g.setColour(Palette::surface.darker(0.3f));
     g.fillRect(0, 0, getWidth(), 36);
     g.setColour(Palette::gridLine);
     g.drawHorizontalLine(36, 0.0f, static_cast<float>(getWidth()));
 
-    // Brand label
     g.setColour(Palette::accent);
     g.setFont(juce::FontOptions(15.0f).withStyle("Bold"));
     g.drawText("trami-loop", 12, 0, 100, 36, juce::Justification::centredLeft);
@@ -92,11 +208,21 @@ void MainContainer::resized()
 {
     constexpr int kTopBarHeight = 36;
     auto topArea = juce::Rectangle<int>(0, 0, getWidth(), kTopBarHeight).reduced(8, 4);
-    topArea.removeFromLeft(120); // space for brand
+    topArea.removeFromLeft(120);
 
-    patternModeButton_.setBounds(topArea.removeFromLeft(130));
-    topArea.removeFromLeft(6);
-    arrangerModeButton_.setBounds(topArea.removeFromLeft(130));
+    patternModeButton_.setBounds(topArea.removeFromLeft(120));
+    topArea.removeFromLeft(4);
+    arrangerModeButton_.setBounds(topArea.removeFromLeft(120));
+    topArea.removeFromLeft(16);
+
+    undoButton_.setBounds(topArea.removeFromLeft(50));
+    topArea.removeFromLeft(4);
+    redoButton_.setBounds(topArea.removeFromLeft(50));
+    topArea.removeFromLeft(16);
+
+    saveButton_.setBounds(topArea.removeFromLeft(54));
+    topArea.removeFromLeft(4);
+    openButton_.setBounds(topArea.removeFromLeft(54));
 
     const auto contentBounds = juce::Rectangle<int>(0, kTopBarHeight, getWidth(), getHeight() - kTopBarHeight);
     if (patternView_ != nullptr)

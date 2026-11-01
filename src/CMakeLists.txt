@@ -29,6 +29,7 @@ target_sources(TramiLoop PRIVATE
     app/MainWindow.cpp
     engine/AudioEngine.cpp
     io/SampleImporter.cpp
+    io/ProjectSerializer.cpp
     ui/TramiLookAndFeel.cpp
     ui/PatternGrid.cpp
     ui/TrackHeader.cpp

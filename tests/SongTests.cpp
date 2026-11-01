@@ -1,4 +1,5 @@
 #include "model/Song.h"
+#include "model/UndoManager.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -58,8 +59,8 @@ TEST_CASE("Clips are validated against pattern, track, sample and length")
 
     REQUIRE(song.placeClip(pattern, 0, sample, 0));
     REQUIRE(song.placeClip(pattern, 15, sample, 31));
-    REQUIRE_FALSE(song.placeClip(pattern, 16, sample, 0)); // track out of range
-    REQUIRE_FALSE(song.placeClip(pattern, 0, sample, 32)); // beyond 2 bars
+    REQUIRE_FALSE(song.placeClip(pattern, 16, sample, 0));
+    REQUIRE_FALSE(song.placeClip(pattern, 0, sample, 32));
     REQUIRE_FALSE(song.placeClip(pattern, 0, SampleId{99}, 0));
     REQUIRE_FALSE(song.placeClip(PatternId{99}, 0, sample, 0));
 }
@@ -126,9 +127,9 @@ TEST_CASE("Blocks on one arranger track must not overlap")
     const auto twoBars = song.addPattern("A", 2);
 
     REQUIRE(song.placeBlock(0, twoBars, 0));
-    REQUIRE_FALSE(song.placeBlock(0, twoBars, 1)); // overlaps bars 0-1
-    REQUIRE(song.placeBlock(0, twoBars, 2));       // directly after
-    REQUIRE(song.placeBlock(1, twoBars, 1));       // other track is fine
+    REQUIRE_FALSE(song.placeBlock(0, twoBars, 1));
+    REQUIRE(song.placeBlock(0, twoBars, 2));
+    REQUIRE(song.placeBlock(1, twoBars, 1));
     REQUIRE(song.lengthBars() == 4);
 }
 
@@ -151,11 +152,38 @@ TEST_CASE("Blocks can be moved, and removing a pattern removes its blocks")
     const auto blockA = *song.placeBlock(0, a, 0);
     song.placeBlock(0, b, 1);
 
-    REQUIRE_FALSE(song.moveBlock(blockA, 0, 1)); // occupied by B
+    REQUIRE_FALSE(song.moveBlock(blockA, 0, 1));
     REQUIRE(song.moveBlock(blockA, 2, 5));
     REQUIRE(song.lengthBars() == 6);
 
     REQUIRE(song.removePattern(a));
     REQUIRE(song.arrangement()[2].blocks.empty());
     REQUIRE(song.lengthBars() == 2);
+}
+
+TEST_CASE("SongHistory performs undo and redo on song snapshots")
+{
+    Song song;
+    SongHistory history;
+
+    song.setBpm(120.0);
+    history.pushState(song);
+
+    song.setBpm(140.0);
+    history.pushState(song);
+
+    song.setBpm(160.0);
+
+    REQUIRE(history.canUndo());
+    REQUIRE(history.undo(song));
+    REQUIRE(song.bpm() == 140.0);
+
+    REQUIRE(history.undo(song));
+    REQUIRE(song.bpm() == 120.0);
+
+    REQUIRE_FALSE(history.undo(song));
+
+    REQUIRE(history.canRedo());
+    REQUIRE(history.redo(song));
+    REQUIRE(song.bpm() == 140.0);
 }
