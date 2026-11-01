@@ -1,5 +1,9 @@
 #include "app/MainWindow.h"
 #include "engine/AudioEngine.h"
+#include "engine/StretchCache.h"
+#include "engine/Synth.h"
+#include "model/Song.h"
+#include "model/Timing.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -25,12 +29,14 @@ public:
             return;
         }
 
-        mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_);
+        initDefaultContent();
+        mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_, song_, stretchCache_);
     }
 
     void shutdown() override
     {
         mainWindow_.reset();
+        stretchCache_.clear();
         engine_.reset();
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     }
@@ -38,7 +44,39 @@ public:
     void systemRequestedQuit() override { quit(); }
 
 private:
+    void initDefaultContent()
+    {
+        const double rate = engine_->sampleRate();
+
+        auto addSample = [this, rate](const char* name, AudioData audio, SampleKind kind, int loopBars) {
+            Sample s;
+            s.name = name;
+            s.kind = kind;
+            s.loopBars = loopBars;
+            s.durationSeconds = static_cast<double>(audio.numFrames()) / rate;
+            const auto id = song_.addSample(s);
+            stretchCache_.setRawAudio(id, std::make_shared<const AudioData>(std::move(audio)));
+            return id;
+        };
+
+        const auto kick = addSample("Kick", synth::kick(rate), SampleKind::OneShot, 1);
+        const auto snare = addSample("Snare", synth::snare(rate), SampleKind::OneShot, 1);
+        const auto hihat = addSample("Hihat", synth::hihat(rate), SampleKind::OneShot, 1);
+        const auto bass = addSample("Bass Loop", synth::bassLoop(rate), SampleKind::Loop, 1);
+
+        const auto pattern = song_.addPattern("Pattern 1", 1);
+        for (int step : {0, 6, 8, 11})
+            song_.placeClip(pattern, 0, kick, step);
+        for (int step : {4, 12})
+            song_.placeClip(pattern, 1, snare, step);
+        for (int step = 0; step < kStepsPerBar; step += 2)
+            song_.placeClip(pattern, 2, hihat, step);
+        song_.placeClip(pattern, 3, bass, 0);
+    }
+
     TramiLookAndFeel lookAndFeel_;
+    Song song_;
+    StretchCache stretchCache_;
     std::unique_ptr<AudioEngine> engine_;
     std::unique_ptr<MainWindow> mainWindow_;
 };

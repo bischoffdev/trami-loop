@@ -29,7 +29,9 @@ target_sources(TramiLoop PRIVATE
     app/MainWindow.cpp
     engine/AudioEngine.cpp
     ui/TramiLookAndFeel.cpp
-    ui/DevTransportComponent.cpp
+    ui/PatternGrid.cpp
+    ui/TrackHeader.cpp
+    ui/PatternView.cpp
 )
 
 target_compile_definitions(TramiLoop PRIVATE

@@ -1,17 +1,20 @@
 #pragma once
 
+#include "engine/AudioEngine.h"
+#include "engine/StretchCache.h"
+#include "model/Song.h"
+#include "ui/PatternView.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace trami
 {
 
-class AudioEngine;
-
 /// Top-level application window.
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    MainWindow(const juce::String& name, AudioEngine& engine);
+    MainWindow(const juce::String& name, AudioEngine& engine, Song& song, StretchCache& stretchCache);
 
     void closeButtonPressed() override;
 
