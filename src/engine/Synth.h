@@ -13,4 +13,7 @@ AudioData kick(double sampleRate);
 AudioData snare(double sampleRate);
 AudioData hihat(double sampleRate);
 
+/// A 1-bar bassline loop at 120 BPM, used to test time-stretching.
+AudioData bassLoop(double sampleRate);
+
 } // namespace trami::synth

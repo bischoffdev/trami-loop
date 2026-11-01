@@ -7,8 +7,11 @@ add_library(trami_core STATIC
     engine/Sequencer.cpp
     engine/SnapshotBuilder.cpp
     engine/Synth.cpp
+    engine/TimeStretcher.cpp
+    engine/StretchCache.cpp
 )
 target_include_directories(trami_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(trami_core PUBLIC rubberband)
 target_compile_options(trami_core PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>

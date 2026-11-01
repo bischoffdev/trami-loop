@@ -2,6 +2,7 @@
 
 #include "engine/AudioEngine.h"
 #include "engine/SnapshotBuilder.h"
+#include "engine/StretchCache.h"
 #include "model/Song.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -9,8 +10,8 @@
 namespace trami
 {
 
-/// Temporary developer screen for milestone 2: plays a built-in demo beat so
-/// the engine can be heard. Replaced by the pattern view in milestone 4.
+/// Temporary developer screen for milestone 2 & 3: plays a built-in demo beat
+/// with drums and a time-stretched bass loop to verify the engine and time-stretcher.
 class DevTransportComponent : public juce::Component, private juce::Timer
 {
 public:
@@ -21,13 +22,15 @@ public:
 
 private:
     void buildDemoSong();
-    void republish();
+    void updateBankAndSnapshot();
     void timerCallback() override { repaint(); }
 
     AudioEngine& engine_;
     Song song_;
-    SampleBank bank_;
+    StretchCache stretchCache_;
+    SampleBank activeBank_;
     PatternId pattern_;
+    bool isStretching_ = false;
 };
 
 } // namespace trami
