@@ -243,7 +243,7 @@ TEST_CASE("Preview plays and can be replaced mid-playback without crash")
 
     std::vector<float> left(256, 0.0f), right(256, 0.0f);
     seq.process(left.data(), right.data(), 256);
-    REQUIRE(seq.isPreviewPlaying());
+    REQUIRE(seq.isPreviewActive());
     REQUIRE(left[0] > 0.0f);
 
     // Trigger second preview while first is still actively playing
@@ -252,14 +252,14 @@ TEST_CASE("Preview plays and can be replaced mid-playback without crash")
     std::fill(left.begin(), left.end(), 0.0f);
     std::fill(right.begin(), right.end(), 0.0f);
     seq.process(left.data(), right.data(), 256);
-    REQUIRE(seq.isPreviewPlaying());
+    REQUIRE(seq.isPreviewActive());
 
     // Stop preview
     seq.stopPreview();
     std::fill(left.begin(), left.end(), 0.0f);
     std::fill(right.begin(), right.end(), 0.0f);
     seq.process(left.data(), right.data(), 256);
-    REQUIRE_FALSE(seq.isPreviewPlaying());
+    REQUIRE_FALSE(seq.isPreviewActive());
 }
 
 TEST_CASE("Rapid preview triggers do not crash or leak")

@@ -55,7 +55,14 @@ void SampleBrowserPanel::selectionChanged()
 {
     const auto file = fileTree_->getSelectedFile();
     if (file.exists())
+    {
         pathLabel_.setText(file.getFullPathName(), juce::dontSendNotification);
+
+        if (engine_.sequencer().isPreviewActive() && currentPreviewPath_ == file.getFullPathName().toStdString())
+            previewButton_.setButtonText("Stop");
+        else
+            previewButton_.setButtonText("Preview");
+    }
 }
 
 void SampleBrowserPanel::fileClicked(const juce::File& file, const juce::MouseEvent& e)
@@ -92,7 +99,7 @@ void SampleBrowserPanel::previewCurrentSelection()
         return;
 
     // Toggle stop if already previewing this file
-    if (engine_.sequencer().isPreviewPlaying() && currentPreviewPath_ == filePath)
+    if (engine_.sequencer().isPreviewActive() && currentPreviewPath_ == filePath)
     {
         engine_.sequencer().stopPreview();
         currentPreviewPath_.clear();
@@ -111,7 +118,7 @@ void SampleBrowserPanel::previewCurrentSelection()
 
 void SampleBrowserPanel::timerCallback()
 {
-    if (!engine_.sequencer().isPreviewPlaying())
+    if (!engine_.sequencer().isPreviewActive())
     {
         if (!currentPreviewPath_.empty() || previewButton_.getButtonText() != "Preview")
         {

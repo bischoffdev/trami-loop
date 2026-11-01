@@ -42,8 +42,12 @@ public:
     /// Stops any currently playing audition preview.
     void stopPreview() noexcept { stopPreviewRequested_.store(true); }
 
-    /// Returns true if an audition preview is actively playing.
-    bool isPreviewPlaying() const noexcept { return previewPlaying_.load(); }
+    /// Returns true if an audition preview is currently queued or actively playing.
+    bool isPreviewActive() const noexcept
+    {
+        return pendingPreview_.load(std::memory_order_relaxed) != nullptr ||
+               previewPlaying_.load(std::memory_order_relaxed);
+    }
 
     /// Called on the message thread to safely delete retired preview buffers.
     void collectPreviewGarbage();
