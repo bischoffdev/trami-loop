@@ -5,11 +5,13 @@
 namespace trami
 {
 
+class AudioEngine;
+
 /// Top-level application window.
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    explicit MainWindow(const juce::String& name);
+    MainWindow(const juce::String& name, AudioEngine& engine);
 
     void closeButtonPressed() override;
 

@@ -1,4 +1,5 @@
 #include "app/MainWindow.h"
+#include "engine/AudioEngine.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -16,12 +17,21 @@ public:
     void initialise(const juce::String&) override
     {
         juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel_);
-        mainWindow_ = std::make_unique<MainWindow>(getApplicationName());
+
+        engine_ = std::make_unique<AudioEngine>();
+        if (const auto error = engine_->start(); error.isNotEmpty())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Audio device error", error);
+            return;
+        }
+
+        mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_);
     }
 
     void shutdown() override
     {
         mainWindow_.reset();
+        engine_.reset();
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     }
 
@@ -29,6 +39,7 @@ public:
 
 private:
     TramiLookAndFeel lookAndFeel_;
+    std::unique_ptr<AudioEngine> engine_;
     std::unique_ptr<MainWindow> mainWindow_;
 };
 

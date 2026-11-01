@@ -1,9 +1,12 @@
-# Core library: model + timing logic. Pure C++, no GUI, unit-testable.
+# Core library: model + real-time engine logic. Pure C++, no JUCE, unit-testable.
 add_library(trami_core STATIC
     model/Timing.cpp
     model/Sample.cpp
     model/Pattern.cpp
     model/Song.cpp
+    engine/Sequencer.cpp
+    engine/SnapshotBuilder.cpp
+    engine/Synth.cpp
 )
 target_include_directories(trami_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(trami_core PRIVATE
@@ -21,7 +24,9 @@ juce_add_gui_app(TramiLoop
 target_sources(TramiLoop PRIVATE
     app/Main.cpp
     app/MainWindow.cpp
+    engine/AudioEngine.cpp
     ui/TramiLookAndFeel.cpp
+    ui/DevTransportComponent.cpp
 )
 
 target_compile_definitions(TramiLoop PRIVATE

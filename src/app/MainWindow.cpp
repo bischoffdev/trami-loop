@@ -1,37 +1,20 @@
 #include "app/MainWindow.h"
 
+#include "ui/DevTransportComponent.h"
 #include "ui/TramiLookAndFeel.h"
 
 namespace trami
 {
-namespace
-{
 
-/// Placeholder content until the pattern and arranger views exist.
-class PlaceholderComponent : public juce::Component
-{
-public:
-    PlaceholderComponent() { setSize(1280, 800); }
-
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(Palette::background);
-        g.setColour(Palette::textDim);
-        g.setFont(juce::FontOptions(18.0f));
-        g.drawText("trami-loop", getLocalBounds(), juce::Justification::centred);
-    }
-};
-
-} // namespace
-
-MainWindow::MainWindow(const juce::String& name)
+MainWindow::MainWindow(const juce::String& name, AudioEngine& engine)
     : DocumentWindow(name, Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar(true);
-    setContentOwned(new PlaceholderComponent(), true);
+    setContentOwned(new DevTransportComponent(engine), true);
     setResizable(true, true);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
+    getContentComponent()->grabKeyboardFocus();
 }
 
 void MainWindow::closeButtonPressed()
