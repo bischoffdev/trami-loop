@@ -14,6 +14,12 @@ Sequencer::Sequencer(SnapshotExchange& exchange, double sampleRate)
 {
 }
 
+void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio)
+{
+    activePreview_ = std::move(audio);
+    pendingPreview_.store(activePreview_.get());
+}
+
 Sequencer::~Sequencer()
 {
     // Called after the audio device has stopped, so freeing here is safe.
@@ -26,6 +32,9 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 {
     adoptPendingSnapshot();
     handleTransportRequests();
+
+    if (const AudioData* prev = pendingPreview_.exchange(nullptr))
+        startVoice(prev, nullptr, 0, 0.85f, 0.85f);
 
     if (playing_.load() && current_ != nullptr && current_->lengthSamples > 0)
     {

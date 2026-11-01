@@ -8,7 +8,7 @@
 namespace trami
 {
 
-class PatternGrid : public juce::Component
+class PatternGrid : public juce::Component, public juce::FileDragAndDropTarget
 {
 public:
     class Listener
@@ -19,6 +19,7 @@ public:
         virtual void clipMoved(ClipId clipId, int newTrack, int newStep) = 0;
         virtual void clipDeleteRequested(ClipId clipId) = 0;
         virtual void gridCellClicked(int track, int step) = 0;
+        virtual void fileDroppedOnGrid(const juce::String& filePath, int track, int step) = 0;
     };
 
     PatternGrid(const Song& song, PatternId patternId, Listener& listener);
@@ -33,6 +34,10 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     static constexpr int kRulerHeight = 28;
     static constexpr int kTrackHeight = 36;

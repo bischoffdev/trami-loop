@@ -278,4 +278,29 @@ void PatternGrid::mouseUp(const juce::MouseEvent&)
     repaint();
 }
 
+bool PatternGrid::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+    {
+        if (f.endsWithIgnoreCase(".wav") || f.endsWithIgnoreCase(".mp3"))
+            return true;
+    }
+    return false;
+}
+
+void PatternGrid::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    if (files.isEmpty())
+        return;
+
+    const auto [track, step] = pointToTrackAndStep({x, y});
+    const Pattern* pattern = song_.findPattern(patternId_);
+    const int maxSteps = pattern != nullptr ? pattern->lengthSteps() : 16;
+
+    const int clampedTrack = std::clamp(track, 0, kTracksPerPattern - 1);
+    const int clampedStep = std::clamp(step, 0, maxSteps - 1);
+
+    listener_.fileDroppedOnGrid(files[0], clampedTrack, clampedStep);
+}
+
 } // namespace trami

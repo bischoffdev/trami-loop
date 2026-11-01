@@ -34,6 +34,9 @@ public:
     bool isMetronomeEnabled() const noexcept { return metronomeEnabled_.load(); }
     std::int64_t position() const noexcept { return publishedPosition_.load(); }
 
+    /// Plays an audio buffer once as a preview (e.g. from the sample browser).
+    void triggerPreview(std::shared_ptr<const AudioData> audio);
+
     // --- Audio thread --------------------------------------------------------
     /// Adds `numSamples` of output to the (pre-cleared) left/right buffers.
     void process(float* left, float* right, int numSamples) noexcept;
@@ -70,6 +73,9 @@ private:
 
     AudioData click_;
     AudioData accentClick_;
+
+    std::shared_ptr<const AudioData> activePreview_;
+    std::atomic<const AudioData*> pendingPreview_{nullptr};
 
     std::atomic<bool> playRequested_{false};
     std::atomic<bool> rewindRequested_{false};

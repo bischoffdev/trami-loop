@@ -22,6 +22,13 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         activeSample_ = song_.samples().front().id;
 
     // Toolbar setup
+    browserToggle_.onClick = [this]() {
+        showBrowser_ = !showBrowser_;
+        browserPanel_->setVisible(showBrowser_);
+        resized();
+    };
+    addAndMakeVisible(browserToggle_);
+
     patternTitle_.setFont(juce::FontOptions(14.0f).withStyle("Bold"));
     patternTitle_.setColour(juce::Label::textColourId, Palette::text);
     addAndMakeVisible(patternTitle_);
@@ -83,6 +90,14 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         republish();
     };
     addAndMakeVisible(tempoUp_);
+
+    // Browser Panel
+    browserPanel_ = std::make_unique<SampleBrowserPanel>(song_, engine_, stretchCache_, [this](SampleId id) {
+        activeSample_ = id;
+        updateSampleSelector();
+        republish();
+    });
+    addAndMakeVisible(browserPanel_.get());
 
     // Grid & Track headers
     trackHeaders_ = std::make_unique<TrackHeaderList>(song_, currentPattern_, [this](int, float, float) {
@@ -202,6 +217,33 @@ void PatternView::gridCellClicked(int track, int step)
     }
 }
 
+void PatternView::fileDroppedOnGrid(const juce::String& filePath, int track, int step)
+{
+    const std::filesystem::path p(filePath.toStdString());
+    if (!importer_.isSupportedFormat(p))
+        return;
+
+    const juce::String lowerName = filePath.toLowerCase();
+    SampleKind kind = lowerName.contains("loop") ? SampleKind::Loop : SampleKind::OneShot;
+    int bars = 1;
+    if (lowerName.contains("2bar") || lowerName.contains("2_bar") || lowerName.contains("2 bar"))
+        bars = 2;
+    else if (lowerName.contains("4bar") || lowerName.contains("4_bar") || lowerName.contains("4 bar"))
+        bars = 4;
+
+    auto res = importer_.importFile(p, engine_.sampleRate(), kind, bars);
+    if (!res.has_value())
+        return;
+
+    const auto sampleId = song_.addSample(std::move(res->sample));
+    stretchCache_.setRawAudio(sampleId, std::make_shared<const AudioData>(std::move(res->audio)));
+    activeSample_ = sampleId;
+
+    song_.placeClip(currentPattern_, track, sampleId, step);
+    updateSampleSelector();
+    republish();
+}
+
 bool PatternView::keyPressed(const juce::KeyPress& key)
 {
     auto& seq = engine_.sequencer();
@@ -244,7 +286,6 @@ void PatternView::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
-    // Toolbar background
     g.setColour(Palette::surface);
     g.fillRect(0, 0, getWidth(), 40);
     g.setColour(Palette::gridLine);
@@ -256,7 +297,10 @@ void PatternView::resized()
     constexpr int kToolbarHeight = 40;
     auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 6);
 
-    patternTitle_.setBounds(toolbar.removeFromLeft(100));
+    browserToggle_.setBounds(toolbar.removeFromLeft(70));
+    toolbar.removeFromLeft(8);
+
+    patternTitle_.setBounds(toolbar.removeFromLeft(90));
     toolbar.removeFromLeft(8);
     lengthCombo_.setBounds(toolbar.removeFromLeft(80));
     toolbar.removeFromLeft(12);
@@ -282,11 +326,24 @@ void PatternView::resized()
     const int contentY = kToolbarHeight;
     const int contentH = getHeight() - contentY;
 
-    trackHeaders_->setBounds(0, contentY, TrackHeaderList::kHeaderWidth, contentH);
+    int currentX = 0;
+    if (showBrowser_ && browserPanel_ != nullptr)
+    {
+        constexpr int kBrowserWidth = 240;
+        browserPanel_->setVisible(true);
+        browserPanel_->setBounds(0, contentY, kBrowserWidth, contentH);
+        currentX += kBrowserWidth;
+    }
+    else if (browserPanel_ != nullptr)
+    {
+        browserPanel_->setVisible(false);
+    }
 
-    const int gridX = TrackHeaderList::kHeaderWidth;
-    const int gridW = getWidth() - gridX;
-    gridViewport_->setBounds(gridX, contentY, gridW, contentH);
+    trackHeaders_->setBounds(currentX, contentY, TrackHeaderList::kHeaderWidth, contentH);
+    currentX += TrackHeaderList::kHeaderWidth;
+
+    const int gridW = getWidth() - currentX;
+    gridViewport_->setBounds(currentX, contentY, gridW, contentH);
 
     const Pattern* p = song_.findPattern(currentPattern_);
     const int steps = p != nullptr ? p->lengthSteps() : 16;
