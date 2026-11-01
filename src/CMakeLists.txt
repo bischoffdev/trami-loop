@@ -1,6 +1,9 @@
 # Core library: model + timing logic. Pure C++, no GUI, unit-testable.
 add_library(trami_core STATIC
     model/Timing.cpp
+    model/Sample.cpp
+    model/Pattern.cpp
+    model/Song.cpp
 )
 target_include_directories(trami_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(trami_core PRIVATE

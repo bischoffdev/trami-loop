@@ -1,5 +1,6 @@
 add_executable(trami_tests
     TimingTests.cpp
+    SongTests.cpp
 )
 target_link_libraries(trami_tests PRIVATE trami_core Catch2::Catch2WithMain)
 
