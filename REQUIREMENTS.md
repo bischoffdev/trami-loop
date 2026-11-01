@@ -9,7 +9,7 @@ A very straightforward tool to make beats and arrangements. It combines the loop
 - Native standalone desktop app for **macOS and Windows**
 - **C++ with JUCE** for performance and sample-accurate timing (all sequencing runs in the audio callback)
 - **Rubber Band** library for time stretching
-- **Open source, AGPLv3** (compatible with JUCE and Rubber Band)
+- **Private repository.** Licensed AGPLv3 (compatible with free JUCE and Rubber Band); the repo stays private
 - Code must be **very clean and maintainable**: clear module boundaries (engine / model / UI), no shortcuts on the audio thread
 - MIDI is out of scope for v1, but the architecture should allow adding it later
 
