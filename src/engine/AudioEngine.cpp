@@ -10,21 +10,22 @@ AudioEngine::~AudioEngine()
     stopTimer();
     deviceManager_.removeAudioCallback(this);
     deviceManager_.closeAudioDevice();
-    sequencer_.reset(); // Audio has stopped, so its snapshots can be freed.
+    sequencer_.reset();
 }
 
 juce::String AudioEngine::start()
 {
-    const auto error = deviceManager_.initialiseWithDefaultDevices(0, 2);
+    // Try to open with 2 inputs and 2 outputs; fall back to 0 inputs if no mic available
+    auto error = deviceManager_.initialiseWithDefaultDevices(2, 2);
+    if (error.isNotEmpty())
+        error = deviceManager_.initialiseWithDefaultDevices(0, 2);
     if (error.isNotEmpty())
         return error;
 
     auto* device = deviceManager_.getCurrentAudioDevice();
     if (device == nullptr)
-        return "No audio output device available.";
+        return "No audio device available.";
 
-    // The sequencer is created before the callback is attached, so the audio
-    // thread never sees it half-constructed.
     sampleRate_ = device->getCurrentSampleRate();
     sequencer_ = std::make_unique<Sequencer>(exchange_, sampleRate_);
     deviceManager_.addAudioCallback(this);
@@ -32,15 +33,27 @@ juce::String AudioEngine::start()
     return {};
 }
 
+int AudioEngine::inputLatencySamples() const noexcept
+{
+    if (auto* device = deviceManager_.getCurrentAudioDevice())
+        return device->getInputLatencyInSamples();
+    return 0;
+}
+
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
-    // Sample-rate changes while running are handled in a later milestone.
     jassert(sampleRate_ == 0.0 || juce::approximatelyEqual(device->getCurrentSampleRate(), sampleRate_));
 }
 
-void AudioEngine::audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs,
-                                                   int numSamples, const juce::AudioIODeviceCallbackContext&)
+void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs, float* const* outputs,
+                                                   int numOutputs, int numSamples,
+                                                   const juce::AudioIODeviceCallbackContext&)
 {
+    // Advance recorder count-in and process incoming inputs
+    recorder_.advanceSamples(numSamples);
+    if (numInputs > 0 && inputs != nullptr)
+        recorder_.processInput(inputs, numInputs, numSamples);
+
     for (int ch = 0; ch < numOutputs; ++ch)
         if (outputs[ch] != nullptr)
             juce::FloatVectorOperations::clear(outputs[ch], numSamples);

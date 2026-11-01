@@ -9,6 +9,7 @@ add_library(trami_core STATIC
     engine/Synth.cpp
     engine/TimeStretcher.cpp
     engine/StretchCache.cpp
+    engine/AudioRecorder.cpp
 )
 target_include_directories(trami_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(trami_core PUBLIC rubberband)
@@ -30,6 +31,7 @@ target_sources(TramiLoop PRIVATE
     engine/AudioEngine.cpp
     io/SampleImporter.cpp
     io/ProjectSerializer.cpp
+    io/WavExporter.cpp
     ui/TramiLookAndFeel.cpp
     ui/PatternGrid.cpp
     ui/TrackHeader.cpp

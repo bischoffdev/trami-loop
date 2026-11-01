@@ -35,6 +35,8 @@ public:
     void updateSampleSelector();
     void updateLengthSelector();
     void republish();
+    void toggleRecording();
+    void onRecordFinished(AudioData recorded);
 
 private:
     void timerCallback() override;
@@ -53,6 +55,7 @@ private:
     juce::ComboBox lengthCombo_;
     juce::ComboBox sampleCombo_;
     juce::TextButton playButton_{"Play"};
+    juce::TextButton recordButton_{"Rec"};
     juce::TextButton rewindButton_{"|<<"};
     juce::ToggleButton metroToggle_{"Click"};
     juce::ToggleButton swingToggle_{"Swing"};

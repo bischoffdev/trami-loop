@@ -4,6 +4,7 @@
 #include "engine/StretchCache.h"
 #include "io/ProjectSerializer.h"
 #include "io/SampleImporter.h"
+#include "io/WavExporter.h"
 #include "model/Song.h"
 #include "model/UndoManager.h"
 #include "ui/ArrangerView.h"
@@ -34,6 +35,9 @@ public:
 
     void saveProjectDialog();
     void openProjectDialog();
+    void showExportDialog();
+    void showSettingsDialog();
+
     void performUndo();
     void performRedo();
 
@@ -56,10 +60,12 @@ private:
     juce::TextButton patternModeButton_{"Pattern Editor"};
     juce::TextButton arrangerModeButton_{"Arranger / Song"};
 
-    juce::TextButton saveButton_{"Save"};
-    juce::TextButton openButton_{"Open"};
     juce::TextButton undoButton_{"Undo"};
     juce::TextButton redoButton_{"Redo"};
+    juce::TextButton saveButton_{"Save"};
+    juce::TextButton openButton_{"Open"};
+    juce::TextButton exportButton_{"Export WAV"};
+    juce::TextButton settingsButton_{"Audio"};
 
     std::unique_ptr<PatternView> patternView_;
     std::unique_ptr<ArrangerView> arrangerView_;

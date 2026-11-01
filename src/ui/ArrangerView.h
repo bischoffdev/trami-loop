@@ -25,6 +25,8 @@ public:
 
     void updatePatternList();
     void republish();
+    void toggleRecording();
+    void onRecordFinished(AudioData recorded);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -56,6 +58,7 @@ private:
     juce::TextButton editPatternButton_{"Edit in Pattern View"};
 
     juce::TextButton playButton_{"Play Song"};
+    juce::TextButton recordButton_{"Rec"};
     juce::TextButton rewindButton_{"|<<"};
     juce::ToggleButton metroToggle_{"Click"};
     juce::Label tempoLabel_;

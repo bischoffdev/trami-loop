@@ -5,8 +5,10 @@ add_executable(trami_tests
     StretchTests.cpp
     ImportTests.cpp
     ProjectSerializerTests.cpp
+    ExportTests.cpp
     ../src/io/SampleImporter.cpp
     ../src/io/ProjectSerializer.cpp
+    ../src/io/WavExporter.cpp
 )
 target_link_libraries(trami_tests PRIVATE trami_core juce::juce_audio_formats Catch2::Catch2WithMain)
 

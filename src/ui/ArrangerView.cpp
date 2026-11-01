@@ -68,6 +68,10 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(playButton_);
 
+    recordButton_.setColour(juce::TextButton::textColourOffId, juce::Colours::red.brighter(0.5f));
+    recordButton_.onClick = [this]() { toggleRecording(); };
+    addAndMakeVisible(recordButton_);
+
     rewindButton_.onClick = [this]() { engine_.sequencer().requestRewind(); };
     addAndMakeVisible(rewindButton_);
 
@@ -145,6 +149,64 @@ void ArrangerView::republish()
             resized();
         });
     });
+}
+
+void ArrangerView::toggleRecording()
+{
+    auto& rec = engine_.recorder();
+    auto& seq = engine_.sequencer();
+
+    if (rec.state() == RecordState::Idle)
+    {
+        const Timing timing(song_.bpm(), engine_.sampleRate());
+        const int countInSamples = static_cast<int>(timing.samplesPerBar());
+
+        seq.setMetronomeEnabled(true);
+        recordButton_.setButtonText("Stop");
+        recordButton_.setColour(juce::TextButton::buttonColourId, juce::Colours::red.withAlpha(0.6f));
+
+        rec.start(countInSamples, engine_.inputLatencySamples(), [this](AudioData recorded) {
+            juce::MessageManager::callAsync([this, audio = std::move(recorded)]() mutable {
+                onRecordFinished(std::move(audio));
+            });
+        });
+        seq.requestPlaying(true);
+    }
+    else
+    {
+        rec.stop();
+        seq.requestPlaying(false);
+        recordButton_.setButtonText("Rec");
+        recordButton_.setColour(juce::TextButton::buttonColourId, Palette::surface);
+    }
+}
+
+void ArrangerView::onRecordFinished(AudioData recorded)
+{
+    recordButton_.setButtonText("Rec");
+    recordButton_.setColour(juce::TextButton::buttonColourId, Palette::surface);
+
+    const double rate = engine_.sampleRate();
+    const double durationSec = static_cast<double>(recorded.numFrames()) / rate;
+    const double secondsPerBar = (60.0 / song_.bpm()) * kBeatsPerBar;
+    const int recordedBars = std::max(1, static_cast<int>(std::round(durationSec / secondsPerBar)));
+
+    Sample s;
+    s.name = ("Take " + juce::String(song_.samples().size() + 1)).toStdString();
+    s.durationSeconds = durationSec;
+    s.kind = SampleKind::OneShot;
+
+    const auto sampleId = song_.addSample(s);
+    stretchCache_.setRawAudio(sampleId, std::make_shared<const AudioData>(std::move(recorded)));
+
+    const auto patId = song_.addPattern(s.name, recordedBars);
+    song_.placeClip(patId, 0, sampleId, 0);
+
+    song_.placeBlock(0, patId, song_.lengthBars());
+    activePattern_ = patId;
+
+    updatePatternList();
+    republish();
 }
 
 void ArrangerView::blockClicked(BlockId)
@@ -254,6 +316,8 @@ void ArrangerView::resized()
     rewindButton_.setBounds(toolbar.removeFromLeft(36));
     toolbar.removeFromLeft(4);
     playButton_.setBounds(toolbar.removeFromLeft(80));
+    toolbar.removeFromLeft(4);
+    recordButton_.setBounds(toolbar.removeFromLeft(50));
     toolbar.removeFromLeft(12);
 
     metroToggle_.setBounds(toolbar.removeFromLeft(60));

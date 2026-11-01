@@ -2,6 +2,8 @@
 
 #include "ui/TramiLookAndFeel.h"
 
+#include <juce_audio_utils/juce_audio_utils.h>
+
 namespace trami
 {
 
@@ -27,6 +29,12 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
 
     openButton_.onClick = [this]() { openProjectDialog(); };
     addAndMakeVisible(openButton_);
+
+    exportButton_.onClick = [this]() { showExportDialog(); };
+    addAndMakeVisible(exportButton_);
+
+    settingsButton_.onClick = [this]() { showSettingsDialog(); };
+    addAndMakeVisible(settingsButton_);
 
     patternView_ = std::make_unique<PatternView>(song_, engine_, stretchCache_);
     addAndMakeVisible(patternView_.get());
@@ -115,6 +123,49 @@ void MainContainer::openProjectDialog()
                     currentProjectDir_ = dir;
                     history_.clear();
                     updateAllViews();
+                }
+            }
+        });
+}
+
+void MainContainer::showSettingsDialog()
+{
+    auto* comp =
+        new juce::AudioDeviceSelectorComponent(engine_.deviceManager(), 0, 2, 0, 2, false, false, true, false);
+    comp->setSize(500, 380);
+
+    juce::DialogWindow::LaunchOptions opt;
+    opt.dialogTitle = "Audio Settings";
+    opt.content.setOwned(comp);
+    opt.dialogBackgroundColour = Palette::surface;
+    opt.escapeKeyTriggersCloseButton = true;
+    opt.useNativeTitleBar = true;
+    opt.resizable = false;
+    opt.launchAsync();
+}
+
+void MainContainer::showExportDialog()
+{
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Export Mixdown WAV",
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile("mixdown.wav"), "*.wav", true);
+
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this](const juce::FileChooser& fc) {
+            const auto result = fc.getResult();
+            if (result != juce::File{})
+            {
+                ExportOptions opt;
+                opt.sampleRate = engine_.sampleRate();
+                opt.bitsPerSample = 24;
+
+                const std::filesystem::path dest(result.getFullPathName().toStdString());
+                if (WavExporter::exportMixdown(song_, stretchCache_, opt, dest))
+                {
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::MessageBoxIconType::InfoIcon, "Export Complete",
+                        "Successfully exported WAV mixdown to:\n" + result.getFullPathName());
                 }
             }
         });
@@ -223,6 +274,11 @@ void MainContainer::resized()
     saveButton_.setBounds(topArea.removeFromLeft(54));
     topArea.removeFromLeft(4);
     openButton_.setBounds(topArea.removeFromLeft(54));
+    topArea.removeFromLeft(16);
+
+    exportButton_.setBounds(topArea.removeFromLeft(88));
+    topArea.removeFromLeft(8);
+    settingsButton_.setBounds(topArea.removeFromLeft(60));
 
     const auto contentBounds = juce::Rectangle<int>(0, kTopBarHeight, getWidth(), getHeight() - kTopBarHeight);
     if (patternView_ != nullptr)
