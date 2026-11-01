@@ -227,3 +227,59 @@ TEST_CASE("Muted arranger tracks are excluded from playback")
     auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate);
     REQUIRE(snap->events.empty());
 }
+
+TEST_CASE("Preview plays and can be replaced mid-playback without crash")
+{
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, kRate);
+
+    auto audio1 = std::make_shared<AudioData>();
+    audio1->channels.push_back(std::vector<float>(10000, 1.0f));
+
+    auto audio2 = std::make_shared<AudioData>();
+    audio2->channels.push_back(std::vector<float>(10000, 0.5f));
+
+    seq.triggerPreview(audio1);
+
+    std::vector<float> left(256, 0.0f), right(256, 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(seq.isPreviewPlaying());
+    REQUIRE(left[0] > 0.0f);
+
+    // Trigger second preview while first is still actively playing
+    seq.triggerPreview(audio2);
+
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(seq.isPreviewPlaying());
+
+    // Stop preview
+    seq.stopPreview();
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE_FALSE(seq.isPreviewPlaying());
+}
+
+TEST_CASE("Rapid preview triggers do not crash or leak")
+{
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, kRate);
+
+    std::vector<float> left(128, 0.0f), right(128, 0.0f);
+
+    for (int i = 0; i < 50; ++i)
+    {
+        auto audio = std::make_shared<AudioData>();
+        audio->channels.push_back(std::vector<float>(500, 0.7f));
+        seq.triggerPreview(std::move(audio));
+
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        seq.process(left.data(), right.data(), 128);
+    }
+
+    seq.collectPreviewGarbage();
+    REQUIRE(true);
+}

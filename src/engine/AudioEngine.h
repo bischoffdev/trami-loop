@@ -35,7 +35,12 @@ private:
                                           const juce::AudioIODeviceCallbackContext& context) override;
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override {}
-    void timerCallback() override { exchange_.collectGarbage(); }
+    void timerCallback() override
+    {
+        exchange_.collectGarbage();
+        if (sequencer_ != nullptr)
+            sequencer_->collectPreviewGarbage();
+    }
 
     juce::AudioDeviceManager deviceManager_;
     SnapshotExchange exchange_;

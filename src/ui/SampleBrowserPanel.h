@@ -14,7 +14,8 @@ namespace trami
 
 class SampleBrowserPanel : public juce::Component,
                            public juce::FileBrowserListener,
-                           public juce::DragAndDropContainer
+                           public juce::DragAndDropContainer,
+                           private juce::Timer
 {
 public:
     using SampleImportedCallback = std::function<void(SampleId newSampleId)>;
@@ -54,6 +55,9 @@ private:
     juce::TextButton importLoop4Button_{"+ Loop 4 Bars"};
 
     juce::Label pathLabel_;
+    std::string currentPreviewPath_;
+
+    void timerCallback() override;
 };
 
 } // namespace trami

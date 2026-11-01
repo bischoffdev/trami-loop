@@ -14,27 +14,115 @@ Sequencer::Sequencer(SnapshotExchange& exchange, double sampleRate)
 {
 }
 
-void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio)
-{
-    activePreview_ = std::move(audio);
-    pendingPreview_.store(activePreview_.get());
-}
-
 Sequencer::~Sequencer()
 {
-    // Called after the audio device has stopped, so freeing here is safe.
+    delete pendingPreview_.exchange(nullptr);
+    delete currentPreview_;
+    currentPreview_ = nullptr;
+    collectPreviewGarbage();
+
     if (previous_ != current_)
         delete previous_;
     delete current_;
+}
+
+void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio)
+{
+    collectPreviewGarbage();
+    if (audio == nullptr || audio->numFrames() == 0)
+        return;
+
+    auto* item = new PreviewItem{std::move(audio)};
+    if (PreviewItem* prev = pendingPreview_.exchange(item, std::memory_order_acq_rel))
+        delete prev;
+}
+
+void Sequencer::collectPreviewGarbage()
+{
+    while (true)
+    {
+        const auto read = retiredRead_.load(std::memory_order_relaxed);
+        if (read == retiredWrite_.load(std::memory_order_acquire))
+            break;
+
+        PreviewItem* item = retiredPreviews_[read];
+        retiredRead_.store((read + 1) % kRetiredQueueCapacity, std::memory_order_release);
+        delete item;
+    }
+}
+
+void Sequencer::retirePreview(PreviewItem* item) noexcept
+{
+    if (item == nullptr)
+        return;
+
+    const auto write = retiredWrite_.load(std::memory_order_relaxed);
+    const auto nextWrite = (write + 1) % kRetiredQueueCapacity;
+    if (nextWrite != retiredRead_.load(std::memory_order_acquire))
+    {
+        retiredPreviews_[write] = item;
+        retiredWrite_.store(nextWrite, std::memory_order_release);
+    }
+}
+
+void Sequencer::handlePreviewRequests() noexcept
+{
+    if (stopPreviewRequested_.exchange(false, std::memory_order_acq_rel))
+    {
+        previewVoice_.active = false;
+        if (currentPreview_ != nullptr)
+        {
+            retirePreview(currentPreview_);
+            currentPreview_ = nullptr;
+        }
+        previewPlaying_.store(false, std::memory_order_release);
+    }
+
+    if (PreviewItem* next = pendingPreview_.exchange(nullptr, std::memory_order_acq_rel))
+    {
+        if (currentPreview_ != nullptr)
+            retirePreview(currentPreview_);
+
+        currentPreview_ = next;
+        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, 0.85f, 0.85f, true};
+        previewPlaying_.store(true, std::memory_order_release);
+    }
+}
+
+void Sequencer::renderPreview(float* left, float* right, int numSamples) noexcept
+{
+    if (!previewVoice_.active || previewVoice_.audio == nullptr)
+        return;
+
+    const float* srcL = previewVoice_.audio->left();
+    const float* srcR = previewVoice_.audio->right();
+    const std::int64_t frames = previewVoice_.audio->numFrames();
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        if (previewVoice_.readPosition >= frames)
+        {
+            previewVoice_.active = false;
+            if (currentPreview_ != nullptr)
+            {
+                retirePreview(currentPreview_);
+                currentPreview_ = nullptr;
+            }
+            previewPlaying_.store(false, std::memory_order_release);
+            break;
+        }
+
+        left[i] += srcL[previewVoice_.readPosition] * previewVoice_.gainLeft;
+        right[i] += srcR[previewVoice_.readPosition] * previewVoice_.gainRight;
+        ++previewVoice_.readPosition;
+    }
 }
 
 void Sequencer::process(float* left, float* right, int numSamples) noexcept
 {
     adoptPendingSnapshot();
     handleTransportRequests();
-
-    if (const AudioData* prev = pendingPreview_.exchange(nullptr))
-        startVoice(prev, nullptr, 0, 0.85f, 0.85f);
+    handlePreviewRequests();
 
     if (playing_.load() && current_ != nullptr && current_->lengthSamples > 0)
     {
@@ -61,6 +149,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
     }
 
     renderVoices(left, right, numSamples);
+    renderPreview(left, right, numSamples);
     publishedPosition_.store(position_);
 }
 
@@ -70,7 +159,7 @@ void Sequencer::adoptPendingSnapshot() noexcept
         previous_ = nullptr;
 
     if (previous_ != nullptr)
-        return; // Can only hold two snapshots at once; try again next block.
+        return;
 
     if (PlaybackSnapshot* next = exchange_.takePending())
     {
@@ -134,7 +223,6 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
     if (audio == nullptr || audio->numFrames() == 0)
         return;
 
-    // Use a free voice, otherwise steal the one that has played longest.
     Voice* target = &voices_.front();
     for (auto& voice : voices_)
     {

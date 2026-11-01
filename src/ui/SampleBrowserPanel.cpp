@@ -40,10 +40,13 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
 
     importLoop4Button_.onClick = [this]() { importCurrentSelection(SampleKind::Loop, 4); };
     addAndMakeVisible(importLoop4Button_);
+
+    startTimerHz(15);
 }
 
 SampleBrowserPanel::~SampleBrowserPanel()
 {
+    stopTimer();
     fileTree_->removeListener(this);
     formatThread_.stopThread(1000);
 }
@@ -88,9 +91,34 @@ void SampleBrowserPanel::previewCurrentSelection()
     if (!importer_.isSupportedFormat(filePath))
         return;
 
+    // Toggle stop if already previewing this file
+    if (engine_.sequencer().isPreviewPlaying() && currentPreviewPath_ == filePath)
+    {
+        engine_.sequencer().stopPreview();
+        currentPreviewPath_.clear();
+        previewButton_.setButtonText("Preview");
+        return;
+    }
+
     auto audioOpt = importer_.loadAudioData(filePath, engine_.sampleRate());
     if (audioOpt.has_value())
+    {
+        currentPreviewPath_ = filePath;
+        previewButton_.setButtonText("Stop");
         engine_.sequencer().triggerPreview(std::make_shared<const AudioData>(std::move(*audioOpt)));
+    }
+}
+
+void SampleBrowserPanel::timerCallback()
+{
+    if (!engine_.sequencer().isPreviewPlaying())
+    {
+        if (!currentPreviewPath_.empty() || previewButton_.getButtonText() != "Preview")
+        {
+            currentPreviewPath_.clear();
+            previewButton_.setButtonText("Preview");
+        }
+    }
 }
 
 void SampleBrowserPanel::importCurrentSelection(SampleKind kind, int loopBars)
