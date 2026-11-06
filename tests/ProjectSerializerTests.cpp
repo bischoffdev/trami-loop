@@ -37,7 +37,7 @@ TEST_CASE("ProjectSerializer saves and loads a self-contained project")
     originalCache.setRawAudio(bassId, std::make_shared<const AudioData>(synth::bassLoop(rate)));
 
     const auto pat1 = originalSong.addPattern("Verse", 2);
-    originalSong.placeClip(pat1, 0, kickId, 0);
+    originalSong.placeClip(pat1, 0, kickId, 0, 4, 1);
     originalSong.placeClip(pat1, 0, kickId, 8);
     originalSong.placeClip(pat1, 1, bassId, 4);
 
@@ -67,6 +67,8 @@ TEST_CASE("ProjectSerializer saves and loads a self-contained project")
     REQUIRE(loadedSong.patterns().front().name == "Verse");
     REQUIRE(loadedSong.patterns().front().lengthBars == 2);
     REQUIRE(loadedSong.patterns().front().tracks[0].clips.size() == 2);
+    REQUIRE(loadedSong.patterns().front().tracks[0].clips[0].lengthSteps == 4);
+    REQUIRE(loadedSong.patterns().front().tracks[0].clips[0].offsetSteps == 1);
     REQUIRE(loadedSong.patterns().front().tracks[1].clips.size() == 1);
 
     REQUIRE(loadedSong.arrangement()[0].blocks.size() == 2);

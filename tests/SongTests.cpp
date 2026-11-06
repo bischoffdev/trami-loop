@@ -83,6 +83,50 @@ TEST_CASE("Tracks can hold multiple clips; clips move between tracks")
     REQUIRE_FALSE(song.removeClip(pattern, c1));
 }
 
+TEST_CASE("Clips can be resized with custom length and offset")
+{
+    Song song;
+    const auto sample = song.addSample(makeLoop(2.0, 1));
+    const auto pattern = song.addPattern("A", 1);
+
+    const auto clipId = *song.placeClip(pattern, 0, sample, 0);
+    REQUIRE(song.resizeClip(pattern, clipId, 2, 6, 2));
+
+    const auto* p = song.findPattern(pattern);
+    REQUIRE(p != nullptr);
+    const auto& clip = p->tracks[0].clips.front();
+    REQUIRE(clip.startStep == 2);
+    REQUIRE(clip.lengthSteps == 6);
+    REQUIRE(clip.offsetSteps == 2);
+
+    // Invalid parameters rejected
+    REQUIRE_FALSE(song.resizeClip(pattern, clipId, -1, 4, 0));
+    REQUIRE_FALSE(song.resizeClip(pattern, clipId, 0, 0, 0));
+    REQUIRE_FALSE(song.resizeClip(pattern, clipId, 0, 4, -1));
+    REQUIRE_FALSE(song.resizeClip(PatternId{99}, clipId, 0, 4, 0));
+}
+
+TEST_CASE("Replacing track sample updates track and existing clips")
+{
+    Song song;
+    const auto s1 = song.addSample(makeLoop(2.0, 1));
+    const auto s2 = song.addSample(makeLoop(4.0, 2));
+    const auto pattern = song.addPattern("A", 1);
+
+    song.placeClip(pattern, 2, s1, 0);
+    song.placeClip(pattern, 2, s1, 8);
+
+    REQUIRE(song.replaceTrackSample(pattern, 2, s2));
+
+    const auto* p = song.findPattern(pattern);
+    REQUIRE(p != nullptr);
+    const auto& trk = p->tracks[2];
+    REQUIRE(trk.sampleId == s2);
+    REQUIRE(trk.clips.size() == 2);
+    REQUIRE(trk.clips[0].sampleId == s2);
+    REQUIRE(trk.clips[1].sampleId == s2);
+}
+
 TEST_CASE("Removing a sample removes its clips")
 {
     Song song;

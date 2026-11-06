@@ -25,6 +25,15 @@ void ArrangerGrid::setPlayheadBar(double bar)
     repaint();
 }
 
+void ArrangerGrid::setZoom(float zoomX, float zoomY)
+{
+    zoomX_ = zoomX;
+    zoomY_ = zoomY;
+    barWidth_ = std::max(16, juce::roundToInt(static_cast<float>(kDefaultBarWidth) * zoomX_));
+    trackHeight_ = std::max(22, juce::roundToInt(static_cast<float>(kDefaultTrackHeight) * zoomY_));
+    repaint();
+}
+
 void ArrangerGrid::resized()
 {
 }
@@ -39,13 +48,13 @@ juce::Colour ArrangerGrid::patternColour(PatternId id) const
 
 juce::Rectangle<int> ArrangerGrid::blockBounds(int track, int bar, int lengthBars) const
 {
-    return {bar * kBarWidth, kRulerHeight + track * kTrackHeight, std::max(1, lengthBars) * kBarWidth, kTrackHeight};
+    return {bar * barWidth_, kRulerHeight + track * trackHeight_, std::max(1, lengthBars) * barWidth_, trackHeight_};
 }
 
 std::pair<int, int> ArrangerGrid::pointToTrackAndBar(juce::Point<int> pt) const
 {
-    const int track = (pt.y - kRulerHeight) / kTrackHeight;
-    const int bar = pt.x / kBarWidth;
+    const int track = (pt.y - kRulerHeight) / trackHeight_;
+    const int bar = pt.x / barWidth_;
     return {track, bar};
 }
 
@@ -75,21 +84,26 @@ void ArrangerGrid::paint(juce::Graphics& g)
     g.fillAll(Palette::background);
 
     const int totalBars = std::max(16, song_.lengthBars() + 4);
-    const int gridWidth = totalBars * kBarWidth;
-    const int totalHeight = kRulerHeight + kArrangerTracks * kTrackHeight;
+    const int gridWidth = totalBars * barWidth_;
+    const int renderWidth = std::max(getWidth(), gridWidth);
+    const int totalHeight = kRulerHeight + kArrangerTracks * trackHeight_;
 
     // 1. Ruler
     g.setColour(Palette::surface);
-    g.fillRect(0, 0, gridWidth, kRulerHeight);
+    g.fillRect(0, 0, renderWidth, kRulerHeight);
     g.setColour(Palette::textDim);
-    g.setFont(juce::FontOptions(11.0f));
+    g.setFont(Typography::bold(12.0f));
 
+    const int labelInterval = (barWidth_ < 22) ? 4 : ((barWidth_ < 36) ? 2 : 1);
     for (int bar = 0; bar < totalBars; ++bar)
     {
-        const int x = bar * kBarWidth;
-        g.setColour(Palette::text);
-        g.drawText(juce::String(bar + 1), x + 4, 2, kBarWidth - 4, kRulerHeight - 4,
-                   juce::Justification::centredLeft);
+        const int x = bar * barWidth_;
+        if (bar % labelInterval == 0)
+        {
+            g.setColour(Palette::text);
+            g.drawText(juce::String(bar + 1), x + 4, 2, barWidth_ * labelInterval - 4, kRulerHeight - 4,
+                       juce::Justification::centredLeft);
+        }
         g.setColour(Palette::gridLine.brighter(0.4f));
         g.drawVerticalLine(x, 0.0f, static_cast<float>(kRulerHeight));
     }
@@ -97,17 +111,20 @@ void ArrangerGrid::paint(juce::Graphics& g)
     // 2. Tracks & Grid lines
     for (int t = 0; t < kArrangerTracks; ++t)
     {
-        const int y = kRulerHeight + t * kTrackHeight;
+        const int y = kRulerHeight + t * trackHeight_;
         g.setColour(t % 2 == 0 ? Palette::background : Palette::surface.withAlpha(0.35f));
-        g.fillRect(0, y, gridWidth, kTrackHeight);
+        g.fillRect(0, y, renderWidth, trackHeight_);
 
         g.setColour(Palette::gridLine.withAlpha(0.6f));
-        g.drawHorizontalLine(y + kTrackHeight, 0.0f, static_cast<float>(gridWidth));
+        g.drawHorizontalLine(y + trackHeight_, 0.0f, static_cast<float>(renderWidth));
     }
 
     for (int bar = 0; bar <= totalBars; ++bar)
     {
-        const int x = bar * kBarWidth;
+        const int x = bar * barWidth_;
+        if (barWidth_ < 18 && bar % 4 != 0)
+            continue;
+
         g.setColour(bar % 4 == 0 ? Palette::gridLine.brighter(0.4f) : Palette::gridLine.withAlpha(0.4f));
         g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     }
@@ -141,18 +158,22 @@ void ArrangerGrid::paint(juce::Graphics& g)
             g.setColour(isSelected ? juce::Colours::white : col.brighter(0.35f));
             g.drawRoundedRectangle(bounds.toFloat(), 5.0f, isSelected ? 2.0f : 1.0f);
 
-            auto textArea = bounds.reduced(6, 2);
-            g.setColour(Palette::background);
-            g.setFont(juce::FontOptions(12.0f).withStyle("Bold"));
-            g.drawText(name + " (" + juce::String(lengthBars) + "b)", textArea, juce::Justification::centredLeft,
-                       true);
+            if (bounds.getWidth() > 16 && trackHeight_ >= 18)
+            {
+                auto textArea = bounds.reduced(6, 2);
+                g.setColour(Palette::background);
+                const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.3f, 9.0f, 12.0f);
+                g.setFont(juce::FontOptions(fontSize).withStyle("Bold"));
+                g.drawText(name + " (" + juce::String(lengthBars) + "b)", textArea, juce::Justification::centredLeft,
+                           true);
+            }
         }
     }
 
     // 4. Playhead
     if (playheadBar_ >= 0.0 && playheadBar_ <= static_cast<double>(totalBars))
     {
-        const float px = static_cast<float>(playheadBar_ * kBarWidth);
+        const float px = static_cast<float>(playheadBar_ * barWidth_);
         g.setColour(Palette::accent);
         g.drawVerticalLine(static_cast<int>(px), 0.0f, static_cast<float>(totalHeight));
     }
@@ -219,6 +240,33 @@ void ArrangerGrid::mouseDoubleClick(const juce::MouseEvent& e)
 {
     if (const auto* block = findBlockAt(e.getPosition()))
         listener_.blockDoubleClicked(block->patternId);
+}
+
+void ArrangerGrid::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+    {
+        const float delta = (wheel.deltaY != 0.0f) ? wheel.deltaY : wheel.deltaX;
+        if (std::abs(delta) > 0.0001f)
+        {
+            const float factor = (delta > 0.0f) ? 1.15f : 0.87f;
+            if (e.mods.isShiftDown() || e.mods.isAltDown())
+                listener_.zoomRequested(1.0f, factor, e.getPosition());
+            else
+                listener_.zoomRequested(factor, 1.0f, e.getPosition());
+            return;
+        }
+    }
+
+    juce::Component::mouseWheelMove(e, wheel);
+}
+
+void ArrangerGrid::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
+{
+    if (std::abs(scaleFactor - 1.0f) > 0.001f)
+    {
+        listener_.zoomRequested(scaleFactor, 1.0f, e.getPosition());
+    }
 }
 
 } // namespace trami

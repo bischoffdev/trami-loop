@@ -72,6 +72,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
             juce::DynamicObject::Ptr trackObj = new juce::DynamicObject();
             trackObj->setProperty("volume", t.mix.volume);
             trackObj->setProperty("pan", t.mix.pan);
+            trackObj->setProperty("muted", t.muted);
+            trackObj->setProperty("solo", t.solo);
+            if (t.sampleId.isValid())
+                trackObj->setProperty("sampleId", static_cast<juce::int64>(t.sampleId.value));
 
             juce::Array<juce::var> clipList;
             for (const auto& c : t.clips)
@@ -80,6 +84,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                 clipObj->setProperty("id", static_cast<juce::int64>(c.id.value));
                 clipObj->setProperty("sampleId", static_cast<juce::int64>(c.sampleId.value));
                 clipObj->setProperty("startStep", c.startStep);
+                if (c.lengthSteps > 0)
+                    clipObj->setProperty("lengthSteps", c.lengthSteps);
+                if (c.offsetSteps > 0)
+                    clipObj->setProperty("offsetSteps", c.offsetSteps);
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
@@ -99,6 +107,7 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
         arrTrackObj->setProperty("volume", at.mix.volume);
         arrTrackObj->setProperty("pan", at.mix.pan);
         arrTrackObj->setProperty("muted", at.muted);
+        arrTrackObj->setProperty("solo", at.solo);
 
         juce::Array<juce::var> blockList;
         for (const auto& b : at.blocks)
@@ -186,10 +195,17 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
 
                     if (Pattern* pat = song.findPattern(newPatId))
                     {
-                        pat->tracks[static_cast<std::size_t>(trackIdx)].mix.volume =
-                            static_cast<float>(tVar.getProperty("volume", 1.0f));
-                        pat->tracks[static_cast<std::size_t>(trackIdx)].mix.pan =
-                            static_cast<float>(tVar.getProperty("pan", 0.0f));
+                        auto& trk = pat->tracks[static_cast<std::size_t>(trackIdx)];
+                        trk.mix.volume = static_cast<float>(tVar.getProperty("volume", 1.0f));
+                        trk.mix.pan = static_cast<float>(tVar.getProperty("pan", 0.0f));
+                        trk.muted = tVar.getProperty("muted", false);
+                        trk.solo = tVar.getProperty("solo", false);
+                        if (tVar.hasProperty("sampleId"))
+                        {
+                            const auto oldSid = static_cast<std::uint32_t>(static_cast<juce::int64>(tVar["sampleId"]));
+                            if (sampleIdMap.contains(oldSid))
+                                trk.sampleId = sampleIdMap[oldSid];
+                        }
                     }
 
                     if (const auto* clipsVar = tVar["clips"].getArray())
@@ -199,10 +215,12 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                             const auto oldSampleId =
                                 static_cast<std::uint32_t>(static_cast<juce::int64>(cVar["sampleId"]));
                             const int startStep = cVar["startStep"];
+                            const int lengthSteps = static_cast<int>(cVar.getProperty("lengthSteps", 0));
+                            const int offsetSteps = static_cast<int>(cVar.getProperty("offsetSteps", 0));
 
                             if (sampleIdMap.contains(oldSampleId))
                             {
-                                song.placeClip(newPatId, trackIdx, sampleIdMap[oldSampleId], startStep);
+                                song.placeClip(newPatId, trackIdx, sampleIdMap[oldSampleId], startStep, lengthSteps, offsetSteps);
                             }
                         }
                     }
@@ -226,6 +244,7 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                 track->mix.volume = static_cast<float>(atVar.getProperty("volume", 1.0f));
                 track->mix.pan = static_cast<float>(atVar.getProperty("pan", 0.0f));
                 track->muted = atVar.getProperty("muted", false);
+                track->solo = atVar.getProperty("solo", false);
             }
 
             if (const auto* blocksVar = atVar["blocks"].getArray())

@@ -49,6 +49,16 @@ public:
                previewPlaying_.load(std::memory_order_relaxed);
     }
 
+    /// Real-time track mixer controls (effective immediately on active and upcoming voices).
+    static constexpr int kMaxTracks = 16;
+    void setTrackMix(int track, float volume, float pan, bool muted, bool solo) noexcept;
+    void setTrackVolume(int track, float volume) noexcept;
+    void setTrackPan(int track, float pan) noexcept;
+    void setTrackMuted(int track, bool muted) noexcept;
+    void setTrackSolo(int track, bool solo) noexcept;
+    void syncTrackMixFromSnapshot() noexcept;
+    void resetTrackMix() noexcept;
+
     /// Called on the message thread to safely delete retired preview buffers.
     void collectPreviewGarbage();
 
@@ -59,16 +69,29 @@ public:
 private:
     static constexpr int kMaxVoices = 64;
     static constexpr std::size_t kRetiredQueueCapacity = 32;
+    static constexpr std::size_t kMaxRetiring = 8;
 
     struct Voice
     {
         const AudioData* audio = nullptr;
         const PlaybackSnapshot* owner = nullptr;
         std::int64_t readPosition = 0;
+        std::int64_t endPosition = 0;
         int startDelay = 0;
+        float baseGainLeft = 1.0f;
+        float baseGainRight = 1.0f;
         float gainLeft = 1.0f;
         float gainRight = 1.0f;
         bool active = false;
+        int track = -1;
+    };
+
+    struct TrackMixState
+    {
+        std::atomic<float> volume{1.0f};
+        std::atomic<float> pan{0.0f};
+        std::atomic<bool> muted{false};
+        std::atomic<bool> solo{false};
     };
 
     struct PreviewItem
@@ -81,18 +104,23 @@ private:
     void handlePreviewRequests() noexcept;
     void scheduleRange(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
-    void startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL, float gainR) noexcept;
+    void startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL, float gainR,
+                    std::int64_t audioOffset = 0, std::int64_t maxFrames = -1, int track = -1) noexcept;
     void renderVoices(float* left, float* right, int numSamples) noexcept;
     void renderPreview(float* left, float* right, int numSamples) noexcept;
     void stopAllVoices() noexcept;
     bool hasVoicesFrom(const PlaybackSnapshot* snapshot) const noexcept;
     void retirePreview(PreviewItem* item) noexcept;
+    void updateVoiceGainsForTrack(int track) noexcept;
+    void updateAllVoiceGains() noexcept;
 
     SnapshotExchange& exchange_;
     PlaybackSnapshot* current_ = nullptr;
-    PlaybackSnapshot* previous_ = nullptr;
+    std::array<PlaybackSnapshot*, kMaxRetiring> retiringSnapshots_{};
 
     std::array<Voice, kMaxVoices> voices_{};
+    std::array<TrackMixState, kMaxTracks> trackMix_{};
+    std::atomic<bool> anySolo_{false};
     std::int64_t position_ = 0;
 
     AudioData click_;

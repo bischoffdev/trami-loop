@@ -217,6 +217,30 @@ TEST_CASE("Arrangement plays pattern blocks across multiple tracks and stops at 
     REQUIRE(onsets == std::vector<std::int64_t>{0, 120000, 192000});
 }
 
+TEST_CASE("Muted and soloed pattern tracks in playback")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+    f.song.placeClip(f.pattern, 1, f.sample, 4);
+
+    // Both play normally
+    auto snapNormal = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    REQUIRE(snapNormal->events.size() == 2);
+
+    // Mute track 0
+    f.song.findPattern(f.pattern)->tracks[0].muted = true;
+    auto snapMuted = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    REQUIRE(snapMuted->events.size() == 1);
+    REQUIRE(snapMuted->events[0].startSample == 24000);
+
+    // Solo track 0 while unmuted
+    f.song.findPattern(f.pattern)->tracks[0].muted = false;
+    f.song.findPattern(f.pattern)->tracks[0].solo = true;
+    auto snapSolo = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    REQUIRE(snapSolo->events.size() == 1);
+    REQUIRE(snapSolo->events[0].startSample == 0);
+}
+
 TEST_CASE("Muted arranger tracks are excluded from playback")
 {
     Fixture f;
@@ -226,6 +250,22 @@ TEST_CASE("Muted arranger tracks are excluded from playback")
 
     auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate);
     REQUIRE(snap->events.empty());
+}
+
+TEST_CASE("Soloed arranger tracks silence other tracks")
+{
+    Fixture f;
+    auto pat2 = f.song.addPattern("Pattern 2", 1);
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+    f.song.placeClip(pat2, 0, f.sample, 0);
+
+    f.song.placeBlock(0, f.pattern, 0);
+    f.song.placeBlock(1, pat2, 0);
+
+    // Solo track 1
+    f.song.arrangerTrack(1)->solo = true;
+    auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate);
+    REQUIRE(snap->events.size() == 1);
 }
 
 TEST_CASE("Preview plays and can be replaced mid-playback without crash")
@@ -282,4 +322,73 @@ TEST_CASE("Rapid preview triggers do not crash or leak")
 
     seq.collectPreviewGarbage();
     REQUIRE(true);
+}
+
+TEST_CASE("Real-time track mix changes take effect immediately during playback")
+{
+    Fixture f;
+    // Sustained audio buffer with amplitude 1.0f
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(96000, 1.0f));
+    sustained->channels.push_back(std::vector<float>(96000, 1.0f));
+    f.bank[f.sample] = sustained;
+
+    f.song.placeClip(f.pattern, 0, f.sample, 0); // track 0
+    f.song.placeClip(f.pattern, 1, f.sample, 0); // track 1
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f), right(256, 0.0f);
+
+    // 1. Initial playback: both tracks play at volume 1.0 (left should be ~2.0)
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(2.0f));
+
+    // 2. Mute track 0: voices on track 0 should silence immediately
+    seq.setTrackMuted(0, true);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(1.0f)); // Only track 1 is sounding
+
+    // 3. Mute track 1: both tracks muted -> silence immediately
+    seq.setTrackMuted(1, true);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.0f));
+
+    // 4. Unmute track 0: track 0 sounds immediately
+    seq.setTrackMuted(0, false);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(1.0f));
+
+    // 5. Volume adjustment on track 0 from 1.0 to 0.5: gain changes immediately
+    seq.setTrackVolume(0, 0.5f);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.5f));
+
+    // 6. Pan adjustment on track 0 to full right (+1.0): left channel becomes 0 immediately
+    seq.setTrackPan(0, 1.0f);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(right[10] > 0.0f);
+
+    // 7. Unmute track 1 and solo track 0: track 1 is silenced, only soloed track 0 sounds
+    seq.setTrackMuted(1, false);
+    seq.setTrackSolo(0, true);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(right[10] > 0.0f);
 }

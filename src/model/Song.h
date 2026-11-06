@@ -44,9 +44,14 @@ public:
     const std::vector<Pattern>& patterns() const noexcept { return patterns_; }
 
     // --- Clips ---------------------------------------------------------------
-    std::optional<ClipId> placeClip(PatternId pattern, int track, SampleId sample, int startStep);
+    std::optional<ClipId> placeClip(PatternId pattern, int track, SampleId sample, int startStep,
+                                    int lengthSteps = 0, int offsetSteps = 0);
+    bool resizeClip(PatternId pattern, ClipId clip, int newStartStep, int newLengthSteps, int newOffsetSteps);
     bool moveClip(PatternId pattern, ClipId clip, int newTrack, int newStartStep);
     bool removeClip(PatternId pattern, ClipId clip);
+    bool setPatternTrackSample(PatternId pattern, int track, SampleId sample);
+    bool replaceTrackSample(PatternId pattern, int track, SampleId newSampleId);
+    SampleId patternTrackSample(PatternId pattern, int track) const noexcept;
 
     // --- Arrangement ---------------------------------------------------------
     std::optional<BlockId> placeBlock(int arrangerTrack, PatternId pattern, int startBar);

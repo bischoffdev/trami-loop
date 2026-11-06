@@ -16,6 +16,17 @@ struct PlaybackEvent
     const AudioData* audio = nullptr;
     float gainLeft = 1.0f;
     float gainRight = 1.0f;
+    std::int64_t audioOffset = 0;
+    std::int64_t maxFrames = -1;
+    int track = -1;
+};
+
+struct TrackMixSnapshot
+{
+    float volume = 1.0f;
+    float pan = 0.0f;
+    bool muted = false;
+    bool solo = false;
 };
 
 /// Immutable, fully resolved description of what the audio thread plays.
@@ -26,6 +37,8 @@ struct PlaybackSnapshot
     std::int64_t lengthSamples = 0;
     bool looping = true;
     double samplesPerBeat = 0.0;
+    std::array<TrackMixSnapshot, 16> trackMixes{};
+    bool hasTrackMixes = false;
 
     /// Owns the audio referenced by events, so it outlives the snapshot's use.
     std::vector<std::shared_ptr<const AudioData>> keepAlive;

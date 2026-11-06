@@ -1,5 +1,6 @@
 #include "engine/Sequencer.h"
 
+#include "engine/SnapshotBuilder.h"
 #include "engine/Synth.h"
 #include "model/Timing.h"
 
@@ -12,6 +13,7 @@ namespace trami
 Sequencer::Sequencer(SnapshotExchange& exchange, double sampleRate)
     : exchange_(exchange), click_(synth::click(sampleRate, 1000.0)), accentClick_(synth::click(sampleRate, 1600.0))
 {
+    resetTrackMix();
 }
 
 Sequencer::~Sequencer()
@@ -21,9 +23,166 @@ Sequencer::~Sequencer()
     currentPreview_ = nullptr;
     collectPreviewGarbage();
 
-    if (previous_ != current_)
-        delete previous_;
     delete current_;
+    for (auto* s : retiringSnapshots_)
+        delete s;
+}
+
+void Sequencer::setTrackMix(int track, float volume, float pan, bool muted, bool solo) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].volume.store(volume, std::memory_order_relaxed);
+    trackMix_[static_cast<std::size_t>(track)].pan.store(pan, std::memory_order_relaxed);
+    trackMix_[static_cast<std::size_t>(track)].muted.store(muted, std::memory_order_relaxed);
+    trackMix_[static_cast<std::size_t>(track)].solo.store(solo, std::memory_order_relaxed);
+
+    bool any = false;
+    for (int t = 0; t < kMaxTracks; ++t)
+    {
+        if (trackMix_[static_cast<std::size_t>(t)].solo.load(std::memory_order_relaxed))
+        {
+            any = true;
+            break;
+        }
+    }
+    anySolo_.store(any, std::memory_order_relaxed);
+    updateAllVoiceGains();
+}
+
+void Sequencer::setTrackVolume(int track, float volume) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].volume.store(volume, std::memory_order_relaxed);
+    updateVoiceGainsForTrack(track);
+}
+
+void Sequencer::setTrackPan(int track, float pan) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].pan.store(pan, std::memory_order_relaxed);
+    updateVoiceGainsForTrack(track);
+}
+
+void Sequencer::setTrackMuted(int track, bool muted) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].muted.store(muted, std::memory_order_relaxed);
+    if (muted && trackMix_[static_cast<std::size_t>(track)].solo.load(std::memory_order_relaxed))
+    {
+        trackMix_[static_cast<std::size_t>(track)].solo.store(false, std::memory_order_relaxed);
+        bool any = false;
+        for (int t = 0; t < kMaxTracks; ++t)
+        {
+            if (trackMix_[static_cast<std::size_t>(t)].solo.load(std::memory_order_relaxed))
+            {
+                any = true;
+                break;
+            }
+        }
+        anySolo_.store(any, std::memory_order_relaxed);
+    }
+    updateAllVoiceGains();
+}
+
+void Sequencer::setTrackSolo(int track, bool solo) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].solo.store(solo, std::memory_order_relaxed);
+    if (solo)
+        trackMix_[static_cast<std::size_t>(track)].muted.store(false, std::memory_order_relaxed);
+
+    bool any = false;
+    for (int t = 0; t < kMaxTracks; ++t)
+    {
+        if (trackMix_[static_cast<std::size_t>(t)].solo.load(std::memory_order_relaxed))
+        {
+            any = true;
+            break;
+        }
+    }
+    anySolo_.store(any, std::memory_order_relaxed);
+    updateAllVoiceGains();
+}
+
+void Sequencer::resetTrackMix() noexcept
+{
+    for (int t = 0; t < kMaxTracks; ++t)
+    {
+        trackMix_[static_cast<std::size_t>(t)].volume.store(1.0f, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].pan.store(0.0f, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].muted.store(false, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].solo.store(false, std::memory_order_relaxed);
+    }
+    anySolo_.store(false, std::memory_order_relaxed);
+    updateAllVoiceGains();
+}
+
+void Sequencer::syncTrackMixFromSnapshot() noexcept
+{
+    if (current_ == nullptr || !current_->hasTrackMixes)
+        return;
+
+    for (std::size_t t = 0; t < current_->trackMixes.size() && t < static_cast<std::size_t>(kMaxTracks); ++t)
+    {
+        const auto& m = current_->trackMixes[t];
+        trackMix_[t].volume.store(m.volume, std::memory_order_relaxed);
+        trackMix_[t].pan.store(m.pan, std::memory_order_relaxed);
+        trackMix_[t].muted.store(m.muted, std::memory_order_relaxed);
+        trackMix_[t].solo.store(m.solo, std::memory_order_relaxed);
+    }
+
+    bool any = false;
+    for (int t = 0; t < kMaxTracks; ++t)
+    {
+        if (trackMix_[static_cast<std::size_t>(t)].solo.load(std::memory_order_relaxed))
+        {
+            any = true;
+            break;
+        }
+    }
+    anySolo_.store(any, std::memory_order_relaxed);
+    updateAllVoiceGains();
+}
+
+void Sequencer::updateVoiceGainsForTrack(int track) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+
+    const bool muted = trackMix_[static_cast<std::size_t>(track)].muted.load(std::memory_order_relaxed);
+    const bool solo = trackMix_[static_cast<std::size_t>(track)].solo.load(std::memory_order_relaxed);
+    const bool anySolo = anySolo_.load(std::memory_order_relaxed);
+    const float vol = trackMix_[static_cast<std::size_t>(track)].volume.load(std::memory_order_relaxed);
+    const float pan = trackMix_[static_cast<std::size_t>(track)].pan.load(std::memory_order_relaxed);
+    const auto [pL, pR] = SnapshotBuilder::panGains(pan);
+
+    for (auto& v : voices_)
+    {
+        if (v.active && v.track == track)
+        {
+            if (muted || (anySolo && !solo))
+            {
+                v.gainLeft = 0.0f;
+                v.gainRight = 0.0f;
+            }
+            else
+            {
+                v.gainLeft = v.baseGainLeft * vol * pL;
+                v.gainRight = v.baseGainRight * vol * pR;
+            }
+        }
+    }
+}
+
+void Sequencer::updateAllVoiceGains() noexcept
+{
+    for (int t = 0; t < kMaxTracks; ++t)
+        updateVoiceGainsForTrack(t);
 }
 
 void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio)
@@ -84,7 +243,8 @@ void Sequencer::handlePreviewRequests() noexcept
             retirePreview(currentPreview_);
 
         currentPreview_ = next;
-        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, 0.85f, 0.85f, true};
+        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, currentPreview_->audio->numFrames(),
+                               0, 0.85f, 0.85f, 0.85f, 0.85f, true, -1};
         previewPlaying_.store(true, std::memory_order_release);
     }
 }
@@ -155,18 +315,45 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
 void Sequencer::adoptPendingSnapshot() noexcept
 {
-    if (previous_ != nullptr && !hasVoicesFrom(previous_) && exchange_.tryRetire(previous_))
-        previous_ = nullptr;
+    for (auto& s : retiringSnapshots_)
+    {
+        if (s != nullptr && !hasVoicesFrom(s))
+        {
+            if (exchange_.tryRetire(s))
+                s = nullptr;
+        }
+    }
 
-    if (previous_ != nullptr)
+    bool hasRoom = false;
+    for (auto* s : retiringSnapshots_)
+    {
+        if (s == nullptr)
+        {
+            hasRoom = true;
+            break;
+        }
+    }
+
+    if (!hasRoom)
         return;
 
     if (PlaybackSnapshot* next = exchange_.takePending())
     {
-        previous_ = current_;
+        if (current_ != nullptr)
+        {
+            for (auto& s : retiringSnapshots_)
+            {
+                if (s == nullptr)
+                {
+                    s = current_;
+                    break;
+                }
+            }
+        }
         current_ = next;
         if (current_->lengthSamples > 0)
             position_ %= current_->lengthSamples;
+        syncTrackMixFromSnapshot();
     }
 }
 
@@ -195,7 +382,7 @@ void Sequencer::scheduleRange(std::int64_t from, std::int64_t to, int blockOffse
 
     for (; it != events.end() && it->startSample < to; ++it)
         startVoice(it->audio, current_, blockOffset + static_cast<int>(it->startSample - from), it->gainLeft,
-                   it->gainRight);
+                   it->gainRight, it->audioOffset, it->maxFrames, it->track);
 }
 
 void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept
@@ -218,10 +405,16 @@ void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockO
 }
 
 void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL,
-                           float gainR) noexcept
+                           float gainR, std::int64_t audioOffset, std::int64_t maxFrames, int track) noexcept
 {
     if (audio == nullptr || audio->numFrames() == 0)
         return;
+
+    const std::int64_t totalFrames = audio->numFrames();
+    const std::int64_t startFrame = std::clamp<std::int64_t>(audioOffset, 0, totalFrames);
+    const std::int64_t endFrame = (maxFrames >= 0)
+        ? std::clamp<std::int64_t>(startFrame + maxFrames, startFrame, totalFrames)
+        : totalFrames;
 
     Voice* target = &voices_.front();
     for (auto& voice : voices_)
@@ -235,7 +428,31 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
             target = &voice;
     }
 
-    *target = Voice{audio, owner, 0, delay, gainL, gainR, true};
+    float effL = gainL;
+    float effR = gainR;
+
+    if (track >= 0 && track < kMaxTracks)
+    {
+        const bool muted = trackMix_[static_cast<std::size_t>(track)].muted.load(std::memory_order_relaxed);
+        const bool solo = trackMix_[static_cast<std::size_t>(track)].solo.load(std::memory_order_relaxed);
+        const bool anySolo = anySolo_.load(std::memory_order_relaxed);
+
+        if (muted || (anySolo && !solo))
+        {
+            effL = 0.0f;
+            effR = 0.0f;
+        }
+        else
+        {
+            const float vol = trackMix_[static_cast<std::size_t>(track)].volume.load(std::memory_order_relaxed);
+            const float pan = trackMix_[static_cast<std::size_t>(track)].pan.load(std::memory_order_relaxed);
+            const auto [pL, pR] = SnapshotBuilder::panGains(pan);
+            effL = gainL * vol * pL;
+            effR = gainR * vol * pR;
+        }
+    }
+
+    *target = Voice{audio, owner, startFrame, endFrame, delay, gainL, gainR, effL, effR, true, track};
 }
 
 void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
@@ -245,15 +462,30 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         if (!voice.active)
             continue;
 
+        if (voice.gainLeft == 0.0f && voice.gainRight == 0.0f)
+        {
+            const int advance = std::min<int>(numSamples - voice.startDelay,
+                                              static_cast<int>(voice.endPosition - voice.readPosition));
+            if (advance > 0)
+                voice.readPosition += advance;
+            if (voice.readPosition >= voice.endPosition)
+            {
+                voice.active = false;
+                voice.owner = nullptr;
+            }
+            voice.startDelay = 0;
+            continue;
+        }
+
         const float* srcL = voice.audio->left();
         const float* srcR = voice.audio->right();
-        const std::int64_t frames = voice.audio->numFrames();
 
         for (int i = voice.startDelay; i < numSamples; ++i)
         {
-            if (voice.readPosition >= frames)
+            if (voice.readPosition >= voice.endPosition)
             {
                 voice.active = false;
+                voice.owner = nullptr;
                 break;
             }
             left[i] += srcL[voice.readPosition] * voice.gainLeft;
@@ -267,7 +499,10 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 void Sequencer::stopAllVoices() noexcept
 {
     for (auto& voice : voices_)
+    {
         voice.active = false;
+        voice.owner = nullptr;
+    }
 }
 
 bool Sequencer::hasVoicesFrom(const PlaybackSnapshot* snapshot) const noexcept

@@ -8,6 +8,7 @@
 #include "model/Song.h"
 #include "model/UndoManager.h"
 #include "ui/ArrangerView.h"
+#include "ui/IconButton.h"
 #include "ui/PatternView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -57,15 +58,15 @@ private:
     std::optional<std::filesystem::path> currentProjectDir_;
     ViewMode currentMode_ = ViewMode::Pattern;
 
-    juce::TextButton patternModeButton_{"Pattern Editor"};
-    juce::TextButton arrangerModeButton_{"Arranger / Song"};
+    IconButton patternModeButton_{"Pattern", IconButton::Icon::PatternMode, "Pattern"};
+    IconButton arrangerModeButton_{"Arranger", IconButton::Icon::ArrangerMode, "Arranger"};
 
-    juce::TextButton undoButton_{"Undo"};
-    juce::TextButton redoButton_{"Redo"};
-    juce::TextButton saveButton_{"Save"};
-    juce::TextButton openButton_{"Open"};
-    juce::TextButton exportButton_{"Export WAV"};
-    juce::TextButton settingsButton_{"Audio"};
+    IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo"};
+    IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo"};
+    IconButton saveButton_{"Save", IconButton::Icon::Save, "Save"};
+    IconButton openButton_{"Open", IconButton::Icon::Open, "Open"};
+    IconButton exportButton_{"Export", IconButton::Icon::Export, "Export"};
+    IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Audio"};
 
     std::unique_ptr<PatternView> patternView_;
     std::unique_ptr<ArrangerView> arrangerView_;

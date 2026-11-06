@@ -59,6 +59,11 @@ Combining tempo-synced time-stretching for audio loops and natural one-shots wit
 | `M` | Metronome Click Toggle |
 | `S` | Swing Toggle (Straight / 50% Swing) |
 | `Up` / `Down` | Tempo +/- 5 BPM |
+| `Cmd + +` / `Cmd + =` | Zoom In (Time / Horizontal) |
+| `Cmd + -` | Zoom Out (Time / Horizontal) |
+| `Cmd + 0` | Reset Zoom to 100% |
+| `Cmd + Shift + +` / `Cmd + Shift + =` | Increase Track Height (Vertical) |
+| `Cmd + Shift + -` | Decrease Track Height (Vertical) |
 
 ---
 

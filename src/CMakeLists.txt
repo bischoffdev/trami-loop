@@ -33,6 +33,7 @@ target_sources(TramiLoop PRIVATE
     io/ProjectSerializer.cpp
     io/WavExporter.cpp
     ui/TramiLookAndFeel.cpp
+    ui/IconButton.cpp
     ui/PatternGrid.cpp
     ui/TrackHeader.cpp
     ui/SampleBrowserPanel.cpp
