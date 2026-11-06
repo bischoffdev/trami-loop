@@ -59,8 +59,14 @@ bool Song::removeSample(SampleId id)
         return false;
 
     for (auto& pattern : patterns_)
+    {
         for (auto& track : pattern.tracks)
+        {
+            if (track.sampleId == id)
+                track.sampleId = {};
             std::erase_if(track.clips, [id](const Clip& c) { return c.sampleId == id; });
+        }
+    }
     return true;
 }
 
@@ -154,16 +160,42 @@ Pattern* Song::findPattern(PatternId id) noexcept
 
 // --- Clips -------------------------------------------------------------------
 
-std::optional<ClipId> Song::placeClip(PatternId patternId, int track, SampleId sample, int startStep)
+std::optional<ClipId> Song::placeClip(PatternId patternId, int track, SampleId sample, int startStep,
+                                      int lengthSteps, int offsetSteps)
 {
     Pattern* pattern = findPattern(patternId);
     if (pattern == nullptr || findSample(sample) == nullptr || !isValidTrack(track, kTracksPerPattern) ||
-        startStep < 0 || startStep >= pattern->lengthSteps())
+        startStep < 0 || startStep >= pattern->lengthSteps() || lengthSteps < 0 || offsetSteps < 0)
         return std::nullopt;
 
-    const Clip clip{clipIds_.next(), sample, startStep};
-    pattern->tracks[static_cast<std::size_t>(track)].clips.push_back(clip);
+    const Clip clip{clipIds_.next(), sample, startStep, lengthSteps, offsetSteps};
+    auto& trackObj = pattern->tracks[static_cast<std::size_t>(track)];
+    trackObj.clips.push_back(clip);
+    trackObj.sampleId = sample;
     return clip.id;
+}
+
+bool Song::resizeClip(PatternId patternId, ClipId clipId, int newStartStep, int newLengthSteps, int newOffsetSteps)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || newStartStep < 0 || newStartStep >= pattern->lengthSteps() ||
+        newLengthSteps <= 0 || newOffsetSteps < 0)
+        return false;
+
+    for (auto& track : pattern->tracks)
+    {
+        for (auto& clip : track.clips)
+        {
+            if (clip.id == clipId)
+            {
+                clip.startStep = newStartStep;
+                clip.lengthSteps = newLengthSteps;
+                clip.offsetSteps = newOffsetSteps;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool Song::moveClip(PatternId patternId, ClipId clipId, int newTrack, int newStartStep)
@@ -198,6 +230,40 @@ bool Song::removeClip(PatternId patternId, ClipId clipId)
         if (std::erase_if(track.clips, [clipId](const Clip& c) { return c.id == clipId; }) > 0)
             return true;
     return false;
+}
+
+bool Song::setPatternTrackSample(PatternId patternId, int track, SampleId sample)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern))
+        return false;
+    pattern->tracks[static_cast<std::size_t>(track)].sampleId = sample;
+    return true;
+}
+
+bool Song::replaceTrackSample(PatternId patternId, int track, SampleId newSampleId)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern) || findSample(newSampleId) == nullptr)
+        return false;
+    auto& t = pattern->tracks[static_cast<std::size_t>(track)];
+    t.sampleId = newSampleId;
+    for (auto& clip : t.clips)
+        clip.sampleId = newSampleId;
+    return true;
+}
+
+SampleId Song::patternTrackSample(PatternId patternId, int track) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern))
+        return {};
+    const auto& t = pattern->tracks[static_cast<std::size_t>(track)];
+    if (t.sampleId.isValid())
+        return t.sampleId;
+    if (!t.clips.empty())
+        return t.clips.front().sampleId;
+    return {};
 }
 
 // --- Arrangement -------------------------------------------------------------

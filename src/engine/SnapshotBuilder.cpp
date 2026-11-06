@@ -22,11 +22,24 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * pattern->lengthBars);
     snapshot->looping = true;
+    snapshot->hasTrackMixes = true;
 
-    for (const auto& track : pattern->tracks)
+    for (std::size_t t = 0; t < pattern->tracks.size() && t < 16; ++t)
     {
-        const auto [panL, panR] = panGains(track.mix.pan);
-        const float gain = track.mix.volume * song.masterVolume();
+        const auto& trk = pattern->tracks[t];
+        snapshot->trackMixes[t] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo};
+    }
+
+    const bool anySolo = std::any_of(pattern->tracks.begin(), pattern->tracks.end(),
+                                     [](const PatternTrack& t) { return t.solo; });
+
+    for (int t = 0; t < static_cast<int>(pattern->tracks.size()); ++t)
+    {
+        const auto& track = pattern->tracks[static_cast<std::size_t>(t)];
+        if (anySolo ? (!track.solo || track.muted) : track.muted)
+            continue;
+
+        const float master = song.masterVolume();
 
         for (const auto& clip : track.clips)
         {
@@ -34,8 +47,14 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             if (found == bank.end() || found->second == nullptr)
                 continue;
 
-            snapshot->events.push_back({timing.stepToSample(clip.startStep), found->second.get(), gain * panL,
-                                        gain * panR});
+            const double stepDurationSamples = timing.samplesPerStep();
+            const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
+            const std::int64_t maxFrames = (clip.lengthSteps > 0)
+                ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
+                : -1;
+
+            snapshot->events.push_back({timing.stepToSample(clip.startStep), found->second.get(), master,
+                                        master, audioOffset, maxFrames, t});
             snapshot->keepAlive.push_back(found->second);
         }
     }
@@ -58,16 +77,23 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * songBars);
     snapshot->looping = false;
+    snapshot->hasTrackMixes = true;
 
     const auto& arrangement = song.arrangement();
+    for (std::size_t at = 0; at < arrangement.size() && at < 16; ++at)
+    {
+        const auto& trk = arrangement[at];
+        snapshot->trackMixes[at] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo};
+    }
+
+    const bool anyArrSolo = std::any_of(arrangement.begin(), arrangement.end(),
+                                        [](const ArrangerTrack& at) { return at.solo; });
+
     for (int at = 0; at < kArrangerTracks; ++at)
     {
         const auto& arrangerTrack = arrangement[static_cast<std::size_t>(at)];
-        if (arrangerTrack.muted)
+        if (anyArrSolo ? (!arrangerTrack.solo || arrangerTrack.muted) : arrangerTrack.muted)
             continue;
-
-        const auto [arrPanL, arrPanR] = panGains(arrangerTrack.mix.pan);
-        const float arrGain = arrangerTrack.mix.volume * song.masterVolume();
 
         for (const auto& block : arrangerTrack.blocks)
         {
@@ -77,11 +103,18 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
             const std::int64_t blockBaseStep = static_cast<std::int64_t>(block.startBar) * kStepsPerBar;
 
+            const bool anyPatSolo = std::any_of(pattern->tracks.begin(), pattern->tracks.end(),
+                                                [](const PatternTrack& pt) { return pt.solo; });
+
             for (const auto& patTrack : pattern->tracks)
             {
+                if (anyPatSolo ? (!patTrack.solo || patTrack.muted) : patTrack.muted)
+                    continue;
+
                 const auto [patPanL, patPanR] = panGains(patTrack.mix.pan);
-                const float combinedGainL = arrGain * patTrack.mix.volume * arrPanL * patPanL;
-                const float combinedGainR = arrGain * patTrack.mix.volume * arrPanR * patPanR;
+                const float innerGain = song.masterVolume() * patTrack.mix.volume;
+                const float combinedGainL = innerGain * patPanL;
+                const float combinedGainR = innerGain * patPanR;
 
                 for (const auto& clip : patTrack.clips)
                 {
@@ -91,8 +124,14 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
                     const std::int64_t globalStep = blockBaseStep + clip.startStep;
                     const std::int64_t startSample = timing.stepToSample(globalStep);
+                    const double stepDurationSamples = timing.samplesPerStep();
+                    const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
+                    const std::int64_t maxFrames = (clip.lengthSteps > 0)
+                        ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
+                        : -1;
 
-                    snapshot->events.push_back({startSample, found->second.get(), combinedGainL, combinedGainR});
+                    snapshot->events.push_back({startSample, found->second.get(), combinedGainL, combinedGainR,
+                                                audioOffset, maxFrames, at});
                     snapshot->keepAlive.push_back(found->second);
                 }
             }

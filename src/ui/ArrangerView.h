@@ -6,6 +6,7 @@
 #include "model/Song.h"
 #include "ui/ArrangerGrid.h"
 #include "ui/ArrangerTrackHeader.h"
+#include "ui/IconButton.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -25,6 +26,8 @@ public:
 
     void updatePatternList();
     void republish();
+    void publishSnapshotQuick();
+    void syncAllTrackMixes();
     void toggleRecording();
     void onRecordFinished(AudioData recorded);
 
@@ -38,8 +41,17 @@ public:
     void blockMoved(BlockId blockId, int newTrack, int newBar) override;
     void blockDeleteRequested(BlockId blockId) override;
     void gridCellClicked(int track, int bar) override;
+    void zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid) override;
+
+    void applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid);
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
+    void trackHeightIn();
+    void trackHeightOut();
 
 private:
+    class SyncViewport;
     void timerCallback() override;
 
     Song& song_;
@@ -50,24 +62,35 @@ private:
     PatternId activePattern_;
     SampleBank activeBank_;
 
+    float zoomX_ = 1.0f;
+    float zoomY_ = 1.0f;
+
     // Toolbar controls
     juce::ComboBox patternCombo_;
-    juce::TextButton addPatternButton_{"+ Pattern"};
-    juce::TextButton duplicatePatternButton_{"Duplicate"};
-    juce::TextButton deletePatternButton_{"Delete"};
-    juce::TextButton editPatternButton_{"Edit in Pattern View"};
+    IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "New"};
+    IconButton duplicatePatternButton_{"Duplicate", IconButton::Icon::Duplicate, "Duplicate"};
+    IconButton deletePatternButton_{"Delete", IconButton::Icon::Delete, "Delete"};
+    IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Pattern"};
 
-    juce::TextButton playButton_{"Play Song"};
-    juce::TextButton recordButton_{"Rec"};
-    juce::TextButton rewindButton_{"|<<"};
-    juce::ToggleButton metroToggle_{"Click"};
+    IconButton rewindButton_{"Rewind", IconButton::Icon::Rewind, "Rewind"};
+    IconButton playButton_{"Play", IconButton::Icon::Play, "Play Song"};
+    IconButton recordButton_{"Rec", IconButton::Icon::Record, "Rec"};
+    IconButton metroToggle_{"Click", IconButton::Icon::Metronome, "Click"};
     juce::Label tempoLabel_;
     juce::TextButton tempoDown_{"-"};
     juce::TextButton tempoUp_{"+"};
 
+    // Zoom controls
+    IconButton zoomOutButton_{"ZoomOut", IconButton::Icon::ZoomOut, "Out"};
+    IconButton zoomResetButton_{"ZoomReset", IconButton::Icon::ZoomReset, "100%"};
+    IconButton zoomInButton_{"ZoomIn", IconButton::Icon::ZoomIn, "In"};
+    IconButton vZoomOutButton_{"VZoomOut", IconButton::Icon::ZoomOut, "Tracks-"};
+    IconButton vZoomInButton_{"VZoomIn", IconButton::Icon::ZoomIn, "Tracks+"};
+
     std::unique_ptr<ArrangerTrackHeaderList> trackHeaders_;
+    std::unique_ptr<juce::Viewport> trackHeadersViewport_;
     std::unique_ptr<ArrangerGrid> grid_;
-    std::unique_ptr<juce::Viewport> gridViewport_;
+    std::unique_ptr<SyncViewport> gridViewport_;
 };
 
 } // namespace trami

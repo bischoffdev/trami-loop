@@ -23,6 +23,7 @@ struct ArrangerTrack
 {
     TrackMix mix;
     bool muted = false;
+    bool solo = false;
     std::vector<PatternBlock> blocks;
 };
 

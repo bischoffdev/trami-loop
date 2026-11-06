@@ -17,6 +17,8 @@ struct Clip
     ClipId id;
     SampleId sampleId;
     int startStep = 0;
+    int lengthSteps = 0; ///< Custom length in steps. 0 = default/natural duration.
+    int offsetSteps = 0; ///< Start offset in steps into the audio.
 };
 
 /// Mixer settings shared by pattern and arranger tracks.
@@ -29,6 +31,9 @@ struct TrackMix
 struct PatternTrack
 {
     TrackMix mix;
+    bool muted = false;
+    bool solo = false;
+    SampleId sampleId;
     std::vector<Clip> clips;
 };
 

@@ -8,6 +8,17 @@
 namespace trami
 {
 
+class ArrangerView::SyncViewport : public juce::Viewport
+{
+public:
+    std::function<void(const juce::Rectangle<int>&)> onAreaChanged;
+    void visibleAreaChanged(const juce::Rectangle<int>& newVisibleArea) override
+    {
+        if (onAreaChanged)
+            onAreaChanged(newVisibleArea);
+    }
+};
+
 ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretchCache,
                            EditPatternCallback onEditPattern)
     : song_(song), engine_(engine), stretchCache_(stretchCache), onEditPattern_(std::move(onEditPattern))
@@ -68,18 +79,18 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(playButton_);
 
-    recordButton_.setColour(juce::TextButton::textColourOffId, juce::Colours::red.brighter(0.5f));
+    recordButton_.setActiveColour(juce::Colour(0xffe53935));
     recordButton_.onClick = [this]() { toggleRecording(); };
     addAndMakeVisible(recordButton_);
 
     rewindButton_.onClick = [this]() { engine_.sequencer().requestRewind(); };
     addAndMakeVisible(rewindButton_);
 
-    metroToggle_.setColour(juce::ToggleButton::textColourId, Palette::textDim);
+    metroToggle_.setClickingTogglesState(true);
     metroToggle_.onClick = [this]() { engine_.sequencer().setMetronomeEnabled(metroToggle_.getToggleState()); };
     addAndMakeVisible(metroToggle_);
 
-    tempoLabel_.setFont(juce::FontOptions(13.0f));
+    tempoLabel_.setFont(Typography::bold(13.5f));
     tempoLabel_.setColour(juce::Label::textColourId, Palette::text);
     tempoLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(tempoLabel_);
@@ -96,15 +107,54 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(tempoUp_);
 
+    // Zoom controls
+    zoomOutButton_.setTooltip("Zoom Out Time (Cmd -)");
+    zoomOutButton_.onClick = [this]() { zoomOut(); };
+    addAndMakeVisible(zoomOutButton_);
+
+    zoomResetButton_.setTooltip("Reset Zoom to 100% (Cmd 0)");
+    zoomResetButton_.onClick = [this]() { resetZoom(); };
+    addAndMakeVisible(zoomResetButton_);
+
+    zoomInButton_.setTooltip("Zoom In Time (Cmd +)");
+    zoomInButton_.onClick = [this]() { zoomIn(); };
+    addAndMakeVisible(zoomInButton_);
+
+    vZoomOutButton_.setTooltip("Decrease Track Height (Cmd Shift -)");
+    vZoomOutButton_.onClick = [this]() { trackHeightOut(); };
+    addAndMakeVisible(vZoomOutButton_);
+
+    vZoomInButton_.setTooltip("Increase Track Height (Cmd Shift +)");
+    vZoomInButton_.onClick = [this]() { trackHeightIn(); };
+    addAndMakeVisible(vZoomInButton_);
+
     // Track headers & Grid
-    trackHeaders_ = std::make_unique<ArrangerTrackHeaderList>(song_, [this]() { republish(); });
-    addAndMakeVisible(trackHeaders_.get());
+    trackHeaders_ = std::make_unique<ArrangerTrackHeaderList>(song_, [this](int track) {
+        if (const auto* trk = song_.arrangerTrack(track))
+        {
+            engine_.sequencer().setTrackMix(track, trk->mix.volume, trk->mix.pan, trk->muted, trk->solo);
+        }
+        publishSnapshotQuick();
+    });
+    trackHeaders_->onMouseWheel = [this](const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
+        if (gridViewport_ != nullptr)
+            gridViewport_->mouseWheelMove(e, wheel);
+    };
+
+    trackHeadersViewport_ = std::make_unique<juce::Viewport>();
+    trackHeadersViewport_->setViewedComponent(trackHeaders_.get(), false);
+    trackHeadersViewport_->setScrollBarsShown(false, false);
+    addAndMakeVisible(trackHeadersViewport_.get());
 
     grid_ = std::make_unique<ArrangerGrid>(song_, *this);
 
-    gridViewport_ = std::make_unique<juce::Viewport>();
+    gridViewport_ = std::make_unique<SyncViewport>();
     gridViewport_->setViewedComponent(grid_.get(), false);
     gridViewport_->setScrollBarsShown(true, true);
+    gridViewport_->onAreaChanged = [this](const juce::Rectangle<int>& area) {
+        if (trackHeadersViewport_ != nullptr)
+            trackHeadersViewport_->setViewPosition(0, area.getY());
+    };
     addAndMakeVisible(gridViewport_.get());
 
     updatePatternList();
@@ -135,6 +185,22 @@ void ArrangerView::updatePatternList()
         patternCombo_.setSelectedId(selectedId, juce::dontSendNotification);
 }
 
+void ArrangerView::syncAllTrackMixes()
+{
+    for (int t = 0; t < kArrangerTracks; ++t)
+    {
+        if (const auto* trk = song_.arrangerTrack(t))
+            engine_.sequencer().setTrackMix(t, trk->mix.volume, trk->mix.pan, trk->muted, trk->solo);
+    }
+}
+
+void ArrangerView::publishSnapshotQuick()
+{
+    if (activeBank_.empty() && !song_.samples().empty())
+        return;
+    engine_.publish(SnapshotBuilder::buildArrangement(song_, activeBank_, engine_.sampleRate()));
+}
+
 void ArrangerView::republish()
 {
     tempoLabel_.setText(juce::String(song_.bpm(), 0) + " BPM", juce::dontSendNotification);
@@ -143,7 +209,10 @@ void ArrangerView::republish()
     stretchCache_.requestUpdateAsync(song_, engine_.sampleRate(), [this](SampleBank newBank) {
         juce::MessageManager::callAsync([this, bank = std::move(newBank)]() mutable {
             activeBank_ = std::move(bank);
+            syncAllTrackMixes();
             engine_.publish(SnapshotBuilder::buildArrangement(song_, activeBank_, engine_.sampleRate()));
+            if (trackHeaders_ != nullptr)
+                trackHeaders_->updateFromModel();
             if (grid_ != nullptr)
                 grid_->repaint();
             resized();
@@ -162,8 +231,8 @@ void ArrangerView::toggleRecording()
         const int countInSamples = static_cast<int>(timing.samplesPerBar());
 
         seq.setMetronomeEnabled(true);
-        recordButton_.setButtonText("Stop");
-        recordButton_.setColour(juce::TextButton::buttonColourId, juce::Colours::red.withAlpha(0.6f));
+        recordButton_.setLabel("Stop");
+        recordButton_.setToggleState(true, juce::dontSendNotification);
 
         rec.start(countInSamples, engine_.inputLatencySamples(), [this](AudioData recorded) {
             juce::MessageManager::callAsync([this, audio = std::move(recorded)]() mutable {
@@ -176,15 +245,15 @@ void ArrangerView::toggleRecording()
     {
         rec.stop();
         seq.requestPlaying(false);
-        recordButton_.setButtonText("Rec");
-        recordButton_.setColour(juce::TextButton::buttonColourId, Palette::surface);
+        recordButton_.setLabel("Rec");
+        recordButton_.setToggleState(false, juce::dontSendNotification);
     }
 }
 
 void ArrangerView::onRecordFinished(AudioData recorded)
 {
-    recordButton_.setButtonText("Rec");
-    recordButton_.setColour(juce::TextButton::buttonColourId, Palette::surface);
+    recordButton_.setLabel("Rec");
+    recordButton_.setToggleState(false, juce::dontSendNotification);
 
     const double rate = engine_.sampleRate();
     const double durationSec = static_cast<double>(recorded.numFrames()) / rate;
@@ -254,6 +323,81 @@ void ArrangerView::gridCellClicked(int track, int bar)
     }
 }
 
+void ArrangerView::zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid)
+{
+    applyZoom(zoomX_ * deltaX, zoomY_ * deltaY, anchorInGrid);
+}
+
+void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
+{
+    const float newZoomX = std::clamp(targetZoomX, 0.2f, 4.0f);
+    const float newZoomY = std::clamp(targetZoomY, 0.6f, 2.5f);
+
+    if (std::abs(newZoomX - zoomX_) < 0.001f && std::abs(newZoomY - zoomY_) < 0.001f)
+        return;
+
+    const float oldZoomX = zoomX_;
+    const float oldZoomY = zoomY_;
+
+    const int screenAnchorX = anchorInGrid.x - gridViewport_->getViewPositionX();
+    const int screenAnchorY = anchorInGrid.y - gridViewport_->getViewPositionY();
+
+    zoomX_ = newZoomX;
+    zoomY_ = newZoomY;
+
+    grid_->setZoom(zoomX_, zoomY_);
+    trackHeaders_->setTrackHeight(grid_->trackHeight());
+
+    zoomResetButton_.setButtonText(juce::String(juce::roundToInt(zoomX_ * 100.0f)) + "%");
+
+    resized();
+
+    const int newGridX = juce::roundToInt(static_cast<float>(anchorInGrid.x) * (newZoomX / oldZoomX));
+    const int newGridY = juce::roundToInt(static_cast<float>(anchorInGrid.y) * (newZoomY / oldZoomY));
+
+    const int newViewX = std::max(0, newGridX - screenAnchorX);
+    const int newViewY = std::max(0, newGridY - screenAnchorY);
+
+    gridViewport_->setViewPosition(newViewX, newViewY);
+    if (trackHeadersViewport_ != nullptr)
+        trackHeadersViewport_->setViewPosition(0, newViewY);
+}
+
+void ArrangerView::zoomIn()
+{
+    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
+    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
+    applyZoom(zoomX_ * 1.25f, zoomY_, {centerX, centerY});
+}
+
+void ArrangerView::zoomOut()
+{
+    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
+    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
+    applyZoom(zoomX_ / 1.25f, zoomY_, {centerX, centerY});
+}
+
+void ArrangerView::resetZoom()
+{
+    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
+    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
+    applyZoom(1.0f, 1.0f, {centerX, centerY});
+}
+
+void ArrangerView::trackHeightIn()
+{
+    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
+    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
+    applyZoom(zoomX_, zoomY_ * 1.2f, {centerX, centerY});
+}
+
+void ArrangerView::trackHeightOut()
+{
+    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
+    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
+    applyZoom(zoomX_, zoomY_ / 1.2f, {centerX, centerY});
+}
+
 bool ArrangerView::keyPressed(const juce::KeyPress& key)
 {
     auto& seq = engine_.sequencer();
@@ -268,13 +412,47 @@ bool ArrangerView::keyPressed(const juce::KeyPress& key)
         seq.requestRewind();
         return true;
     }
+
+    const auto mods = key.getModifiers();
+    const bool isCmdOrCtrl = mods.isCommandDown() || mods.isCtrlDown();
+    if (isCmdOrCtrl)
+    {
+        const auto ch = key.getTextCharacter();
+        const auto code = key.getKeyCode();
+
+        if (ch == '+' || ch == '=' || code == '+' || code == '=' || key.isKeyCode(juce::KeyPress::numberPadAdd))
+        {
+            if (mods.isShiftDown())
+                trackHeightIn();
+            else
+                zoomIn();
+            return true;
+        }
+        if (ch == '-' || code == '-' || key.isKeyCode(juce::KeyPress::numberPadSubtract))
+        {
+            if (mods.isShiftDown())
+                trackHeightOut();
+            else
+                zoomOut();
+            return true;
+        }
+        if (ch == '0' || code == '0' || key.isKeyCode(juce::KeyPress::numberPad0))
+        {
+            resetZoom();
+            return true;
+        }
+    }
+
     return false;
 }
 
 void ArrangerView::timerCallback()
 {
     auto& seq = engine_.sequencer();
-    playButton_.setButtonText(seq.isPlaying() ? "Stop" : "Play Song");
+    const bool isPlaying = seq.isPlaying();
+    playButton_.setIcon(isPlaying ? IconButton::Icon::Stop : IconButton::Icon::Play);
+    playButton_.setLabel(isPlaying ? "Stop" : "Play Song");
+    playButton_.setToggleState(isPlaying, juce::dontSendNotification);
 
     const Timing timing(song_.bpm(), engine_.sampleRate());
     const double samplesPerBar = timing.samplesPerBar();
@@ -290,58 +468,76 @@ void ArrangerView::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
+    constexpr int kToolbarHeight = 52;
     g.setColour(Palette::surface);
-    g.fillRect(0, 0, getWidth(), 40);
+    g.fillRect(0, 0, getWidth(), kToolbarHeight);
     g.setColour(Palette::gridLine);
-    g.drawHorizontalLine(40, 0.0f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(kToolbarHeight, 0.0f, static_cast<float>(getWidth()));
 }
 
 void ArrangerView::resized()
 {
-    constexpr int kToolbarHeight = 40;
-    auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 6);
+    constexpr int kToolbarHeight = 52;
+    auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 4);
 
-    patternCombo_.setBounds(toolbar.removeFromLeft(150));
+    // Zoom controls on the right
+    auto rightCluster = toolbar.removeFromRight(236);
+    vZoomInButton_.setBounds(rightCluster.removeFromRight(46));
+    rightCluster.removeFromRight(3);
+    vZoomOutButton_.setBounds(rightCluster.removeFromRight(46));
+    rightCluster.removeFromRight(6);
+
+    zoomInButton_.setBounds(rightCluster.removeFromRight(44));
+    rightCluster.removeFromRight(2);
+    zoomResetButton_.setBounds(rightCluster.removeFromRight(48));
+    rightCluster.removeFromRight(2);
+    zoomOutButton_.setBounds(rightCluster.removeFromRight(44));
+
+    toolbar.removeFromRight(12);
+
+    patternCombo_.setBounds(toolbar.removeFromLeft(140));
     toolbar.removeFromLeft(6);
-    addPatternButton_.setBounds(toolbar.removeFromLeft(76));
-    toolbar.removeFromLeft(4);
-    duplicatePatternButton_.setBounds(toolbar.removeFromLeft(76));
-    toolbar.removeFromLeft(4);
-    deletePatternButton_.setBounds(toolbar.removeFromLeft(60));
-    toolbar.removeFromLeft(10);
+    addPatternButton_.setBounds(toolbar.removeFromLeft(48));
+    toolbar.removeFromLeft(3);
+    duplicatePatternButton_.setBounds(toolbar.removeFromLeft(66));
+    toolbar.removeFromLeft(3);
+    deletePatternButton_.setBounds(toolbar.removeFromLeft(48));
+    toolbar.removeFromLeft(6);
 
-    editPatternButton_.setBounds(toolbar.removeFromLeft(140));
-    toolbar.removeFromLeft(16);
-
-    rewindButton_.setBounds(toolbar.removeFromLeft(36));
-    toolbar.removeFromLeft(4);
-    playButton_.setBounds(toolbar.removeFromLeft(80));
-    toolbar.removeFromLeft(4);
-    recordButton_.setBounds(toolbar.removeFromLeft(50));
+    editPatternButton_.setBounds(toolbar.removeFromLeft(82));
     toolbar.removeFromLeft(12);
 
-    metroToggle_.setBounds(toolbar.removeFromLeft(60));
-    toolbar.removeFromLeft(16);
+    rewindButton_.setBounds(toolbar.removeFromLeft(48));
+    toolbar.removeFromLeft(3);
+    playButton_.setBounds(toolbar.removeFromLeft(66));
+    toolbar.removeFromLeft(3);
+    recordButton_.setBounds(toolbar.removeFromLeft(48));
+    toolbar.removeFromLeft(10);
+
+    metroToggle_.setBounds(toolbar.removeFromLeft(48));
+    toolbar.removeFromLeft(12);
 
     tempoDown_.setBounds(toolbar.removeFromLeft(28));
-    tempoLabel_.setBounds(toolbar.removeFromLeft(64));
+    tempoLabel_.setBounds(toolbar.removeFromLeft(68));
     tempoUp_.setBounds(toolbar.removeFromLeft(28));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
     const int contentH = getHeight() - contentY;
 
-    trackHeaders_->setBounds(0, contentY, ArrangerTrackHeaderList::kHeaderWidth, contentH);
+    const int headerW = ArrangerTrackHeaderList::kHeaderWidth;
+    trackHeadersViewport_->setBounds(0, contentY, headerW, contentH);
 
-    const int gridX = ArrangerTrackHeaderList::kHeaderWidth;
+    const int gridX = headerW;
     const int gridW = getWidth() - gridX;
     gridViewport_->setBounds(gridX, contentY, gridW, contentH);
 
     const int totalBars = std::max(16, song_.lengthBars() + 6);
-    const int neededGridWidth = totalBars * ArrangerGrid::kBarWidth;
-    const int neededGridHeight = ArrangerGrid::kRulerHeight + kArrangerTracks * ArrangerGrid::kTrackHeight;
+    const int neededGridWidth = totalBars * grid_->barWidth();
+    const int neededGridHeight = ArrangerGrid::kRulerHeight + kArrangerTracks * grid_->trackHeight();
 
     grid_->setSize(std::max(gridW, neededGridWidth), std::max(contentH, neededGridHeight));
+    trackHeaders_->setSize(headerW, std::max(contentH, neededGridHeight));
 }
 
 } // namespace trami

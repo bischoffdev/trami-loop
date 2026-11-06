@@ -13,28 +13,35 @@ namespace trami
 class ArrangerTrackHeaderList : public juce::Component
 {
 public:
-    using MixChangedCallback = std::function<void()>;
+    using MixChangedCallback = std::function<void(int track)>;
 
     ArrangerTrackHeaderList(Song& song, MixChangedCallback onMixChanged);
 
     void updateFromModel();
+    void setTrackHeight(int height);
+    int trackHeight() const noexcept { return trackHeight_; }
+
+    std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
-    static constexpr int kHeaderWidth = 170;
+    static constexpr int kHeaderWidth = 220;
 
 private:
     struct TrackControls
     {
         std::unique_ptr<juce::Label> label;
-        std::unique_ptr<juce::ToggleButton> muteToggle;
+        std::unique_ptr<juce::TextButton> muteButton;
+        std::unique_ptr<juce::TextButton> soloButton;
         std::unique_ptr<juce::Slider> volumeSlider;
         std::unique_ptr<juce::Slider> panSlider;
     };
 
     Song& song_;
     MixChangedCallback onMixChanged_;
+    int trackHeight_ = 44;
 
     std::array<TrackControls, kArrangerTracks> controls_;
 };

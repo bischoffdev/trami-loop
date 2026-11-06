@@ -53,10 +53,8 @@ void MainContainer::setViewMode(ViewMode mode)
 {
     currentMode_ = mode;
 
-    patternModeButton_.setColour(juce::TextButton::buttonColourId,
-                                 mode == ViewMode::Pattern ? Palette::accent.withAlpha(0.6f) : Palette::surface);
-    arrangerModeButton_.setColour(juce::TextButton::buttonColourId,
-                                  mode == ViewMode::Arranger ? Palette::accent.withAlpha(0.6f) : Palette::surface);
+    patternModeButton_.setToggleState(mode == ViewMode::Pattern, juce::dontSendNotification);
+    arrangerModeButton_.setToggleState(mode == ViewMode::Arranger, juce::dontSendNotification);
 
     if (mode == ViewMode::Pattern)
     {
@@ -245,40 +243,41 @@ void MainContainer::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
+    constexpr int kTopBarHeight = 50;
     g.setColour(Palette::surface.darker(0.3f));
-    g.fillRect(0, 0, getWidth(), 36);
+    g.fillRect(0, 0, getWidth(), kTopBarHeight);
     g.setColour(Palette::gridLine);
-    g.drawHorizontalLine(36, 0.0f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(kTopBarHeight, 0.0f, static_cast<float>(getWidth()));
 
     g.setColour(Palette::accent);
-    g.setFont(juce::FontOptions(15.0f).withStyle("Bold"));
-    g.drawText("trami-loop", 12, 0, 100, 36, juce::Justification::centredLeft);
+    g.setFont(Typography::bold(17.0f));
+    g.drawText("trami-loop", 14, 0, 110, kTopBarHeight, juce::Justification::centredLeft);
 }
 
 void MainContainer::resized()
 {
-    constexpr int kTopBarHeight = 36;
+    constexpr int kTopBarHeight = 50;
     auto topArea = juce::Rectangle<int>(0, 0, getWidth(), kTopBarHeight).reduced(8, 4);
-    topArea.removeFromLeft(120);
+    topArea.removeFromLeft(125);
 
-    patternModeButton_.setBounds(topArea.removeFromLeft(120));
+    patternModeButton_.setBounds(topArea.removeFromLeft(64));
     topArea.removeFromLeft(4);
-    arrangerModeButton_.setBounds(topArea.removeFromLeft(120));
+    arrangerModeButton_.setBounds(topArea.removeFromLeft(64));
     topArea.removeFromLeft(16);
 
-    undoButton_.setBounds(topArea.removeFromLeft(50));
+    undoButton_.setBounds(topArea.removeFromLeft(48));
     topArea.removeFromLeft(4);
-    redoButton_.setBounds(topArea.removeFromLeft(50));
+    redoButton_.setBounds(topArea.removeFromLeft(48));
     topArea.removeFromLeft(16);
 
-    saveButton_.setBounds(topArea.removeFromLeft(54));
+    saveButton_.setBounds(topArea.removeFromLeft(48));
     topArea.removeFromLeft(4);
-    openButton_.setBounds(topArea.removeFromLeft(54));
+    openButton_.setBounds(topArea.removeFromLeft(48));
     topArea.removeFromLeft(16);
 
-    exportButton_.setBounds(topArea.removeFromLeft(88));
-    topArea.removeFromLeft(8);
-    settingsButton_.setBounds(topArea.removeFromLeft(60));
+    exportButton_.setBounds(topArea.removeFromLeft(54));
+    topArea.removeFromLeft(6);
+    settingsButton_.setBounds(topArea.removeFromLeft(48));
 
     const auto contentBounds = juce::Rectangle<int>(0, kTopBarHeight, getWidth(), getHeight() - kTopBarHeight);
     if (patternView_ != nullptr)

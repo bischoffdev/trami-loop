@@ -48,9 +48,10 @@ private:
     {
         const double rate = engine_->sampleRate();
 
-        auto addSample = [this, rate](const char* name, AudioData audio, SampleKind kind, int loopBars) {
+        auto addSample = [this, rate](const char* name, const char* fileName, AudioData audio, SampleKind kind, int loopBars) {
             Sample s;
             s.name = name;
+            s.fileName = fileName;
             s.kind = kind;
             s.loopBars = loopBars;
             s.durationSeconds = static_cast<double>(audio.numFrames()) / rate;
@@ -59,12 +60,17 @@ private:
             return id;
         };
 
-        const auto kick = addSample("Kick", synth::kick(rate), SampleKind::OneShot, 1);
-        const auto snare = addSample("Snare", synth::snare(rate), SampleKind::OneShot, 1);
-        const auto hihat = addSample("Hihat", synth::hihat(rate), SampleKind::OneShot, 1);
-        const auto bass = addSample("Bass Loop", synth::bassLoop(rate), SampleKind::Loop, 1);
+        const auto kick = addSample("Kick", "Kick.wav", synth::kick(rate), SampleKind::OneShot, 1);
+        const auto snare = addSample("Snare", "Snare.wav", synth::snare(rate), SampleKind::OneShot, 1);
+        const auto hihat = addSample("Hihat", "Hihat.wav", synth::hihat(rate), SampleKind::OneShot, 1);
+        const auto bass = addSample("Bass Loop", "Bass_Loop.wav", synth::bassLoop(rate), SampleKind::Loop, 1);
 
         const auto pattern = song_.addPattern("Pattern 1", 1);
+        song_.setPatternTrackSample(pattern, 0, kick);
+        song_.setPatternTrackSample(pattern, 1, snare);
+        song_.setPatternTrackSample(pattern, 2, hihat);
+        song_.setPatternTrackSample(pattern, 3, bass);
+
         for (int step : {0, 6, 8, 11})
             song_.placeClip(pattern, 0, kick, step);
         for (int step : {4, 12})

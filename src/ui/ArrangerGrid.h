@@ -20,12 +20,19 @@ public:
         virtual void blockMoved(BlockId blockId, int newTrack, int newBar) = 0;
         virtual void blockDeleteRequested(BlockId blockId) = 0;
         virtual void gridCellClicked(int track, int bar) = 0;
+        virtual void zoomRequested(float /*deltaX*/, float /*deltaY*/, juce::Point<int> /*anchorInGrid*/) {}
     };
 
     ArrangerGrid(const Song& song, Listener& listener);
 
     void setSelectedBlock(BlockId blockId);
     void setPlayheadBar(double bar);
+
+    void setZoom(float zoomX, float zoomY);
+    float zoomX() const noexcept { return zoomX_; }
+    float zoomY() const noexcept { return zoomY_; }
+    int barWidth() const noexcept { return barWidth_; }
+    int trackHeight() const noexcept { return trackHeight_; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -34,10 +41,14 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    void mouseMagnify(const juce::MouseEvent& e, float scaleFactor) override;
 
     static constexpr int kRulerHeight = 28;
-    static constexpr int kTrackHeight = 44;
-    static constexpr int kBarWidth = 64;
+    static constexpr int kDefaultTrackHeight = 44;
+    static constexpr int kDefaultBarWidth = 64;
+    static constexpr int kTrackHeight = kDefaultTrackHeight;
+    static constexpr int kBarWidth = kDefaultBarWidth;
 
 private:
     struct DragState
@@ -61,6 +72,11 @@ private:
     BlockId selectedBlock_;
     double playheadBar_ = -1.0;
     DragState drag_;
+
+    float zoomX_ = 1.0f;
+    float zoomY_ = 1.0f;
+    int barWidth_ = kDefaultBarWidth;
+    int trackHeight_ = kDefaultTrackHeight;
 };
 
 } // namespace trami

@@ -4,6 +4,7 @@
 #include "engine/StretchCache.h"
 #include "io/SampleImporter.h"
 #include "model/Song.h"
+#include "ui/IconButton.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -48,14 +49,19 @@ private:
     std::unique_ptr<juce::DirectoryContentsList> directoryList_;
     std::unique_ptr<juce::FileTreeComponent> fileTree_;
 
-    juce::TextButton previewButton_{"Preview"};
-    juce::TextButton importOneShotButton_{"+ One-Shot"};
-    juce::TextButton importLoop1Button_{"+ Loop 1 Bar"};
-    juce::TextButton importLoop2Button_{"+ Loop 2 Bars"};
-    juce::TextButton importLoop4Button_{"+ Loop 4 Bars"};
+    IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
+    juce::ToggleButton autoPreviewToggle_{"Auto Preview"};
 
+    juce::Label titleLabel_;
     juce::Label pathLabel_;
+    juce::Label fileNameLabel_;
+    juce::Label fileDetailsLabel_;
+
+    std::shared_ptr<const AudioData> selectedAudio_;
     std::string currentPreviewPath_;
+    double previewDuration_ = 0.0;
+    double previewProgress_ = 0.0;
+    juce::Rectangle<int> waveformRect_;
 
     void timerCallback() override;
 };
