@@ -1,8 +1,10 @@
 #pragma once
 
 #include "model/Ids.h"
+#include "model/Sample.h"
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,22 +32,26 @@ struct TrackMix
 
 struct PatternTrack
 {
+    std::string name;
     TrackMix mix;
     bool muted = false;
     bool solo = false;
     SampleId sampleId;
+    std::optional<SampleKind> kindOverride;
     std::vector<Clip> clips;
 };
 
-/// A fixed-length block of up to 16 tracks of clips.
+/// A pattern representing a track with its mixer settings and clips.
 struct Pattern
 {
     PatternId id;
     std::string name;
     int lengthBars = 1;
-    std::array<PatternTrack, kTracksPerPattern> tracks;
+    std::vector<PatternTrack> tracks{1};
 
     int lengthSteps() const noexcept;
+    PatternTrack& track() noexcept { return tracks.front(); }
+    const PatternTrack& track() const noexcept { return tracks.front(); }
 };
 
 } // namespace trami

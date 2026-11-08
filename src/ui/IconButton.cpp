@@ -73,6 +73,36 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
         textCol = Palette::textDim.brighter(0.35f);
     }
 
+    // Standard DAW colors for key transport icons
+    if (icon_ == Icon::Record)
+    {
+        if (isOn)
+        {
+            bg = juce::Colour(0xffe53935).withAlpha(0.30f);
+            border = juce::Colour(0xffe53935);
+            iconCol = juce::Colour(0xffff5252);
+            textCol = juce::Colours::white;
+        }
+        else
+        {
+            iconCol = juce::Colour(0xffe53935);
+        }
+    }
+    else if (icon_ == Icon::Play && isOn)
+    {
+        bg = juce::Colour(0xff43a047).withAlpha(0.30f);
+        border = juce::Colour(0xff43a047);
+        iconCol = juce::Colour(0xff66bb6a);
+        textCol = juce::Colours::white;
+    }
+    else if (icon_ == Icon::Loop && isOn)
+    {
+        bg = juce::Colour(0xffffb300).withAlpha(0.25f);
+        border = juce::Colour(0xffffb300);
+        iconCol = juce::Colour(0xffffca28);
+        textCol = juce::Colours::white;
+    }
+
     g.setColour(bg);
     g.fillRoundedRectangle(bounds, 5.0f);
 
@@ -94,7 +124,8 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     drawIcon(g, iconArea, iconCol);
 
     g.setColour(textCol);
-    g.setFont(Typography::bold(10.5f));
+    const float fontSz = totalH >= 38.0f ? 11.5f : 10.5f;
+    g.setFont(Typography::bold(fontSz));
     g.drawText(label_, labelArea.reduced(2.0f, 0.0f), juce::Justification::centred, true);
 }
 
@@ -130,6 +161,29 @@ void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::
         p.addTriangle(cx + 6.0f, cy - 5.5f, cx, cy, cx + 6.0f, cy + 5.5f);
         g.fillPath(p);
         g.fillRect(cx - 7.5f, cy - 5.5f, 2.0f, 11.0f);
+        break;
+    }
+    case Icon::Loop:
+    {
+        juce::Path p;
+        p.startNewSubPath(cx - 6.5f, cy + 1.5f);
+        p.lineTo(cx - 6.5f, cy - 2.5f);
+        p.cubicTo(cx - 6.5f, cy - 5.5f, cx + 6.5f, cy - 5.5f, cx + 6.5f, cy - 2.5f);
+        p.lineTo(cx + 6.5f, cy - 0.5f);
+
+        p.startNewSubPath(cx + 6.5f, cy - 1.5f);
+        p.lineTo(cx + 6.5f, cy + 2.5f);
+        p.cubicTo(cx + 6.5f, cy + 5.5f, cx - 6.5f, cy + 5.5f, cx - 6.5f, cy + 2.5f);
+        p.lineTo(cx - 6.5f, cy + 0.5f);
+        g.strokePath(p, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        juce::Path a1;
+        a1.addTriangle(cx + 6.5f, cy + 1.5f, cx + 3.5f, cy - 2.0f, cx + 9.5f, cy - 2.0f);
+        g.fillPath(a1);
+
+        juce::Path a2;
+        a2.addTriangle(cx - 6.5f, cy - 1.5f, cx - 3.5f, cy + 2.0f, cx - 9.5f, cy + 2.0f);
+        g.fillPath(a2);
         break;
     }
     case Icon::Metronome:

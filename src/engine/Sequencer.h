@@ -30,9 +30,11 @@ public:
     void requestPlaying(bool shouldPlay) noexcept { playRequested_.store(shouldPlay); }
     void requestRewind() noexcept { rewindRequested_.store(true); }
     void setMetronomeEnabled(bool enabled) noexcept { metronomeEnabled_.store(enabled); }
+    void setLoopingEnabled(bool enabled) noexcept { loopingEnabled_.store(enabled); }
 
     bool isPlaying() const noexcept { return playing_.load(); }
     bool isMetronomeEnabled() const noexcept { return metronomeEnabled_.load(); }
+    bool isLoopingEnabled() const noexcept { return loopingEnabled_.load(); }
     std::int64_t position() const noexcept { return publishedPosition_.load(); }
 
     /// Plays an audio buffer once as an audition/preview. Safely replaces any
@@ -50,7 +52,7 @@ public:
     }
 
     /// Real-time track mixer controls (effective immediately on active and upcoming voices).
-    static constexpr int kMaxTracks = 16;
+    static constexpr int kMaxTracks = 64;
     void setTrackMix(int track, float volume, float pan, bool muted, bool solo) noexcept;
     void setTrackVolume(int track, float volume) noexcept;
     void setTrackPan(int track, float pan) noexcept;
@@ -141,6 +143,7 @@ private:
     std::atomic<bool> playRequested_{false};
     std::atomic<bool> rewindRequested_{false};
     std::atomic<bool> metronomeEnabled_{false};
+    std::atomic<bool> loopingEnabled_{true};
     std::atomic<bool> playing_{false};
     std::atomic<std::int64_t> publishedPosition_{0};
 };

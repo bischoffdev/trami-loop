@@ -25,6 +25,13 @@ void ArrangerGrid::setPlayheadBar(double bar)
     repaint();
 }
 
+void ArrangerGrid::setLoopRegion(int startBar, int endBar)
+{
+    loopStartBar_ = std::max(0, startBar);
+    loopEndBar_ = std::max(loopStartBar_ + 1, endBar);
+    repaint();
+}
+
 void ArrangerGrid::setZoom(float zoomX, float zoomY)
 {
     zoomX_ = zoomX;
@@ -38,7 +45,7 @@ void ArrangerGrid::resized()
 {
 }
 
-juce::Colour ArrangerGrid::patternColour(PatternId id) const
+juce::Colour ArrangerGrid::patternColour(PatternId id)
 {
     constexpr double kGoldenRatio = 0.6180339887498949;
     double integral = 0.0;
@@ -89,8 +96,10 @@ void ArrangerGrid::paint(juce::Graphics& g)
     const int totalHeight = kRulerHeight + kArrangerTracks * trackHeight_;
 
     // 1. Ruler
-    g.setColour(Palette::surface);
+    g.setColour(Palette::panelHeader);
     g.fillRect(0, 0, renderWidth, kRulerHeight);
+    g.setColour(Palette::gridLine);
+    g.drawHorizontalLine(kRulerHeight - 1, 0.0f, static_cast<float>(renderWidth));
     g.setColour(Palette::textDim);
     g.setFont(Typography::bold(12.0f));
 
@@ -104,15 +113,37 @@ void ArrangerGrid::paint(juce::Graphics& g)
             g.drawText(juce::String(bar + 1), x + 4, 2, barWidth_ * labelInterval - 4, kRulerHeight - 4,
                        juce::Justification::centredLeft);
         }
-        g.setColour(Palette::gridLine.brighter(0.4f));
+        g.setColour(bar % 4 == 0 ? Palette::gridBarLine : Palette::gridLine);
         g.drawVerticalLine(x, 0.0f, static_cast<float>(kRulerHeight));
     }
 
-    // 2. Tracks & Grid lines
+    // 2. Loop region highlight (down arranger tracks and banner in ruler)
+    const int loopStartX = loopStartBar_ * barWidth_;
+    const int loopEndX = loopEndBar_ * barWidth_;
+    const int loopW = std::max(4, loopEndX - loopStartX);
+
+    // Shaded loop region down arranger tracks
+    g.setColour(Palette::loopRegion.withAlpha(0.07f));
+    g.fillRect(loopStartX, kRulerHeight, loopW, totalHeight - kRulerHeight);
+    g.setColour(Palette::loopRegion.withAlpha(0.45f));
+    g.drawVerticalLine(loopStartX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+    g.drawVerticalLine(loopEndX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+
+    // Loop banner in ruler
+    const auto loopBanner = juce::Rectangle<float>(static_cast<float>(loopStartX), 1.0f,
+                                                   static_cast<float>(loopW), static_cast<float>(kRulerHeight - 3));
+    g.setColour(Palette::loopRegion.withAlpha(0.28f));
+    g.fillRoundedRectangle(loopBanner, 3.0f);
+    g.setColour(Palette::loopRegion);
+    g.drawRoundedRectangle(loopBanner, 3.0f, 1.5f);
+    g.fillRect(static_cast<float>(loopStartX), 1.0f, 3.0f, static_cast<float>(kRulerHeight - 3));
+    g.fillRect(static_cast<float>(loopEndX - 3), 1.0f, 3.0f, static_cast<float>(kRulerHeight - 3));
+
+    // 3. Tracks & Grid lines
     for (int t = 0; t < kArrangerTracks; ++t)
     {
         const int y = kRulerHeight + t * trackHeight_;
-        g.setColour(t % 2 == 0 ? Palette::background : Palette::surface.withAlpha(0.35f));
+        g.setColour(t % 2 == 0 ? Palette::gridFloor : Palette::gridLaneAlt);
         g.fillRect(0, y, renderWidth, trackHeight_);
 
         g.setColour(Palette::gridLine.withAlpha(0.6f));
@@ -125,7 +156,7 @@ void ArrangerGrid::paint(juce::Graphics& g)
         if (barWidth_ < 18 && bar % 4 != 0)
             continue;
 
-        g.setColour(bar % 4 == 0 ? Palette::gridLine.brighter(0.4f) : Palette::gridLine.withAlpha(0.4f));
+        g.setColour(bar % 4 == 0 ? Palette::gridBarLine : Palette::gridLine);
         g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     }
 
@@ -170,7 +201,29 @@ void ArrangerGrid::paint(juce::Graphics& g)
         }
     }
 
-    // 4. Playhead
+    // 4. Drag hover preview
+    if (dragHoverTrack_ >= 0 && dragHoverBar_ >= 0 && dragHoverPatternId_.isValid())
+    {
+        const int lengthBars = song_.findPattern(dragHoverPatternId_) != nullptr
+                                   ? song_.findPattern(dragHoverPatternId_)->lengthBars
+                                   : 1;
+        const auto b = blockBounds(dragHoverTrack_, dragHoverBar_, lengthBars).reduced(2, 3);
+        const auto col = patternColour(dragHoverPatternId_);
+
+        g.setColour(col.withAlpha(0.28f));
+        g.fillRoundedRectangle(b.toFloat(), 5.0f);
+        g.setColour(col);
+        g.drawRoundedRectangle(b.toFloat(), 5.0f, 2.0f);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(Typography::bold(12.0f));
+        juce::String name = "Pattern";
+        if (const auto* p = song_.findPattern(dragHoverPatternId_))
+            name = p->name;
+        g.drawText("+ " + name, b.reduced(6, 2), juce::Justification::centredLeft, true);
+    }
+
+    // 5. Playhead
     if (playheadBar_ >= 0.0 && playheadBar_ <= static_cast<double>(totalBars))
     {
         const float px = static_cast<float>(playheadBar_ * barWidth_);
@@ -179,12 +232,66 @@ void ArrangerGrid::paint(juce::Graphics& g)
     }
 }
 
+void ArrangerGrid::mouseMove(const juce::MouseEvent& e)
+{
+    if (drag_.active)
+        return;
+
+    if (e.getPosition().y < kRulerHeight)
+    {
+        const int startX = loopStartBar_ * barWidth_;
+        const int endX = loopEndBar_ * barWidth_;
+        if (std::abs(e.getPosition().x - startX) <= 6 || std::abs(e.getPosition().x - endX) <= 6)
+            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+        else if (e.getPosition().x > startX && e.getPosition().x < endX)
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        else
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
 void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
 {
     if (e.mods.isRightButtonDown())
     {
         if (const auto* block = findBlockAt(e.getPosition()))
             listener_.blockDeleteRequested(block->id);
+        return;
+    }
+
+    if (e.getPosition().y < kRulerHeight)
+    {
+        const int totalBars = std::max(16, song_.lengthBars() + 4);
+        const int clickBar = std::clamp(e.getPosition().x / barWidth_, 0, totalBars);
+
+        const int startX = loopStartBar_ * barWidth_;
+        const int endX = loopEndBar_ * barWidth_;
+
+        if (std::abs(e.getPosition().x - startX) <= 8)
+        {
+            rulerDragMode_ = RulerDragMode::ResizeStart;
+        }
+        else if (std::abs(e.getPosition().x - endX) <= 8)
+        {
+            rulerDragMode_ = RulerDragMode::ResizeEnd;
+        }
+        else if (e.getPosition().x >= startX && e.getPosition().x <= endX)
+        {
+            rulerDragMode_ = RulerDragMode::MoveRegion;
+            rulerDragAnchorBar_ = clickBar;
+            rulerDragOriginalStart_ = loopStartBar_;
+            rulerDragOriginalEnd_ = loopEndBar_;
+        }
+        else
+        {
+            rulerDragMode_ = RulerDragMode::SetRegion;
+            rulerDragAnchorBar_ = clickBar;
+            loopStartBar_ = clickBar;
+            loopEndBar_ = std::min(totalBars, clickBar + 2);
+        }
+        repaint();
         return;
     }
 
@@ -209,16 +316,49 @@ void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
 
 void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
 {
+    if (rulerDragMode_ != RulerDragMode::None)
+    {
+        const int totalBars = std::max(16, song_.lengthBars() + 4);
+        const int currentBar = std::clamp(e.getPosition().x / barWidth_, 0, totalBars);
+
+        if (rulerDragMode_ == RulerDragMode::SetRegion)
+        {
+            loopStartBar_ = std::min(rulerDragAnchorBar_, currentBar);
+            loopEndBar_ = std::max(rulerDragAnchorBar_, currentBar);
+            if (loopEndBar_ <= loopStartBar_)
+                loopEndBar_ = std::min(totalBars, loopStartBar_ + 1);
+        }
+        else if (rulerDragMode_ == RulerDragMode::ResizeStart)
+        {
+            loopStartBar_ = std::clamp(currentBar, 0, loopEndBar_ - 1);
+        }
+        else if (rulerDragMode_ == RulerDragMode::ResizeEnd)
+        {
+            loopEndBar_ = std::clamp(currentBar, loopStartBar_ + 1, totalBars);
+        }
+        else if (rulerDragMode_ == RulerDragMode::MoveRegion)
+        {
+            const int delta = currentBar - rulerDragAnchorBar_;
+            const int len = rulerDragOriginalEnd_ - rulerDragOriginalStart_;
+            const int newStart = std::clamp(rulerDragOriginalStart_ + delta, 0, totalBars - len);
+            loopStartBar_ = newStart;
+            loopEndBar_ = newStart + len;
+        }
+        repaint();
+        return;
+    }
+
     if (!drag_.active)
         return;
 
     const auto [track, bar] = pointToTrackAndBar(e.getPosition());
-    const int clampedTrack = std::clamp(track, 0, kArrangerTracks - 1);
     const int clampedBar = std::max(0, bar);
 
-    if (clampedTrack != drag_.currentTrack || clampedBar != drag_.currentBar)
+    // Arranger blocks are constrained horizontally to their dedicated pattern track
+    drag_.currentTrack = drag_.originalTrack;
+
+    if (clampedBar != drag_.currentBar)
     {
-        drag_.currentTrack = clampedTrack;
         drag_.currentBar = clampedBar;
         repaint();
     }
@@ -226,6 +366,14 @@ void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
 
 void ArrangerGrid::mouseUp(const juce::MouseEvent&)
 {
+    if (rulerDragMode_ != RulerDragMode::None)
+    {
+        rulerDragMode_ = RulerDragMode::None;
+        listener_.loopRegionChanged(loopStartBar_, loopEndBar_);
+        repaint();
+        return;
+    }
+
     if (!drag_.active)
         return;
 
@@ -266,6 +414,88 @@ void ArrangerGrid::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
     if (std::abs(scaleFactor - 1.0f) > 0.001f)
     {
         listener_.zoomRequested(scaleFactor, 1.0f, e.getPosition());
+    }
+}
+
+bool ArrangerGrid::isInterestedInDragSource(const SourceDetails& dragSourceDetails)
+{
+    if (dragSourceDetails.description.isString())
+    {
+        return dragSourceDetails.description.toString().startsWith("pattern:");
+    }
+    return false;
+}
+
+void ArrangerGrid::itemDragEnter(const SourceDetails& dragSourceDetails)
+{
+    itemDragMove(dragSourceDetails);
+}
+
+void ArrangerGrid::itemDragMove(const SourceDetails& dragSourceDetails)
+{
+    if (dragSourceDetails.description.isString())
+    {
+        const juce::String s = dragSourceDetails.description.toString();
+        const int patVal = s.fromFirstOccurrenceOf("pattern:", false, false).getIntValue();
+        dragHoverPatternId_ = PatternId{static_cast<std::uint32_t>(patVal)};
+
+        const auto [track, bar] = pointToTrackAndBar(dragSourceDetails.localPosition);
+        const int clampedTrack = std::clamp(track, 0, kArrangerTracks - 1);
+        const int clampedBar = std::max(0, bar);
+
+        int targetTrack = song_.findTrackForPattern(dragHoverPatternId_);
+        if (targetTrack < 0)
+        {
+            if (!song_.arrangerTrackPattern(clampedTrack).isValid())
+            {
+                targetTrack = clampedTrack;
+            }
+            else
+            {
+                for (int t = 0; t < kArrangerTracks; ++t)
+                {
+                    if (!song_.arrangerTrackPattern(t).isValid())
+                    {
+                        targetTrack = t;
+                        break;
+                    }
+                }
+                if (targetTrack < 0)
+                    targetTrack = clampedTrack;
+            }
+        }
+
+        if (targetTrack != dragHoverTrack_ || clampedBar != dragHoverBar_)
+        {
+            dragHoverTrack_ = targetTrack;
+            dragHoverBar_ = clampedBar;
+            repaint();
+        }
+    }
+}
+
+void ArrangerGrid::itemDragExit(const SourceDetails& /*dragSourceDetails*/)
+{
+    dragHoverTrack_ = -1;
+    dragHoverBar_ = -1;
+    dragHoverPatternId_ = {};
+    repaint();
+}
+
+void ArrangerGrid::itemDropped(const SourceDetails& /*dragSourceDetails*/)
+{
+    const int track = dragHoverTrack_;
+    const int bar = dragHoverBar_;
+    const auto patId = dragHoverPatternId_;
+
+    dragHoverTrack_ = -1;
+    dragHoverBar_ = -1;
+    dragHoverPatternId_ = {};
+    repaint();
+
+    if (track >= 0 && track < kArrangerTracks && bar >= 0 && patId.isValid())
+    {
+        listener_.patternDropped(patId, track, bar);
     }
 }
 

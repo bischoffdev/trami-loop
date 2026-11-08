@@ -10,51 +10,83 @@ namespace trami
 {
 
 std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song, PatternId patternId,
-                                                                const SampleBank& bank, double sampleRate)
+                                                                const SampleBank& bank, double sampleRate,
+                                                                int loopStartStep, int loopEndStep,
+                                                                const SampleBank* rawBank)
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
     const Timing timing(song.bpm(), sampleRate, song.swing());
     snapshot->samplesPerBeat = timing.samplesPerStep() * kStepsPerBeat;
 
-    const Pattern* pattern = song.findPattern(patternId);
-    if (pattern == nullptr)
+    if (song.patterns().empty())
         return snapshot;
 
-    snapshot->lengthSamples = std::llround(timing.samplesPerBar() * pattern->lengthBars);
+    const Pattern* p = song.findPattern(patternId);
+    if (p == nullptr)
+        p = &song.patterns().front();
+
+    const int maxBars = std::max(1, p->lengthBars);
+    snapshot->lengthSamples = std::llround(timing.samplesPerBar() * maxBars);
     snapshot->looping = true;
     snapshot->hasTrackMixes = true;
 
-    for (std::size_t t = 0; t < pattern->tracks.size() && t < 16; ++t)
+    if (loopEndStep > loopStartStep && loopStartStep >= 0)
     {
-        const auto& trk = pattern->tracks[t];
-        snapshot->trackMixes[t] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo};
+        snapshot->loopStartSample = timing.stepToSample(loopStartStep);
+        snapshot->loopEndSample = std::min(timing.stepToSample(loopEndStep), snapshot->lengthSamples);
+    }
+    else
+    {
+        snapshot->loopStartSample = 0;
+        snapshot->loopEndSample = snapshot->lengthSamples;
     }
 
-    const bool anySolo = std::any_of(pattern->tracks.begin(), pattern->tracks.end(),
-                                     [](const PatternTrack& t) { return t.solo; });
-
-    for (int t = 0; t < static_cast<int>(pattern->tracks.size()); ++t)
+    bool anySolo = false;
+    for (const auto& trk : p->tracks)
     {
-        const auto& track = pattern->tracks[static_cast<std::size_t>(t)];
-        if (anySolo ? (!track.solo || track.muted) : track.muted)
+        if (trk.solo)
+            anySolo = true;
+    }
+
+    const float master = song.masterVolume();
+    const double stepDurationSamples = timing.samplesPerStep();
+    const std::int64_t patternEndSample = timing.stepToSample(p->lengthSteps());
+
+    for (std::size_t t = 0; t < p->tracks.size() && t < PlaybackSnapshot::kMaxTrackMixes; ++t)
+    {
+        const auto& trk = p->tracks[t];
+        snapshot->trackMixes[t] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo};
+
+        if (anySolo ? (!trk.solo || trk.muted) : trk.muted)
             continue;
 
-        const float master = song.masterVolume();
+        const SampleKind trackKind = song.patternTrackKind(patternId, static_cast<int>(t));
+        const SampleBank& sourceBank = (trackKind == SampleKind::OneShot && rawBank != nullptr) ? *rawBank : bank;
 
-        for (const auto& clip : track.clips)
+        for (const auto& clip : trk.clips)
         {
-            auto found = bank.find(clip.sampleId);
-            if (found == bank.end() || found->second == nullptr)
+            auto found = sourceBank.find(clip.sampleId);
+            if (found == sourceBank.end() || found->second == nullptr)
+            {
+                found = bank.find(clip.sampleId);
+                if (found == bank.end() || found->second == nullptr)
+                    continue;
+            }
+
+            const std::int64_t globalStep = clip.startStep;
+            const std::int64_t eventStartSample = timing.stepToSample(globalStep);
+            if (eventStartSample >= patternEndSample)
                 continue;
 
-            const double stepDurationSamples = timing.samplesPerStep();
+            const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, patternEndSample - eventStartSample);
             const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
-            const std::int64_t maxFrames = (clip.lengthSteps > 0)
+            std::int64_t maxFrames = (clip.lengthSteps > 0)
                 ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
-                : -1;
+                : framesUntilLoop;
+            maxFrames = std::min(maxFrames, framesUntilLoop);
 
-            snapshot->events.push_back({timing.stepToSample(clip.startStep), found->second.get(), master,
-                                        master, audioOffset, maxFrames, t});
+            snapshot->events.push_back({eventStartSample, found->second.get(), master,
+                                        master, audioOffset, maxFrames, static_cast<int>(t)});
             snapshot->keepAlive.push_back(found->second);
         }
     }
@@ -65,7 +97,9 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 }
 
 std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& song, const SampleBank& bank,
-                                                                    double sampleRate)
+                                                                    double sampleRate,
+                                                                    int loopStartBar, int loopEndBar,
+                                                                    const SampleBank* rawBank)
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
     const Timing timing(song.bpm(), sampleRate, song.swing());
@@ -76,8 +110,19 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
         return snapshot;
 
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * songBars);
-    snapshot->looping = false;
+    snapshot->looping = (loopEndBar > loopStartBar);
     snapshot->hasTrackMixes = true;
+
+    if (loopEndBar > loopStartBar && loopStartBar >= 0)
+    {
+        snapshot->loopStartSample = timing.stepToSample(static_cast<std::int64_t>(loopStartBar) * kStepsPerBar);
+        snapshot->loopEndSample = std::min(timing.stepToSample(static_cast<std::int64_t>(loopEndBar) * kStepsPerBar), snapshot->lengthSamples);
+    }
+    else
+    {
+        snapshot->loopStartSample = 0;
+        snapshot->loopEndSample = snapshot->lengthSamples;
+    }
 
     const auto& arrangement = song.arrangement();
     for (std::size_t at = 0; at < arrangement.size() && at < 16; ++at)
@@ -106,8 +151,9 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
             const bool anyPatSolo = std::any_of(pattern->tracks.begin(), pattern->tracks.end(),
                                                 [](const PatternTrack& pt) { return pt.solo; });
 
-            for (const auto& patTrack : pattern->tracks)
+            for (std::size_t ptIdx = 0; ptIdx < pattern->tracks.size(); ++ptIdx)
             {
+                const auto& patTrack = pattern->tracks[ptIdx];
                 if (anyPatSolo ? (!patTrack.solo || patTrack.muted) : patTrack.muted)
                     continue;
 
@@ -116,19 +162,32 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
                 const float combinedGainL = innerGain * patPanL;
                 const float combinedGainR = innerGain * patPanR;
 
+                const SampleKind trackKind = song.patternTrackKind(block.patternId, static_cast<int>(ptIdx));
+                const SampleBank& sourceBank = (trackKind == SampleKind::OneShot && rawBank != nullptr) ? *rawBank : bank;
+
                 for (const auto& clip : patTrack.clips)
                 {
-                    auto found = bank.find(clip.sampleId);
-                    if (found == bank.end() || found->second == nullptr)
-                        continue;
+                    auto found = sourceBank.find(clip.sampleId);
+                    if (found == sourceBank.end() || found->second == nullptr)
+                    {
+                        found = bank.find(clip.sampleId);
+                        if (found == bank.end() || found->second == nullptr)
+                            continue;
+                    }
 
                     const std::int64_t globalStep = blockBaseStep + clip.startStep;
                     const std::int64_t startSample = timing.stepToSample(globalStep);
+                    const std::int64_t blockEndSample = timing.stepToSample(blockBaseStep + pattern->lengthSteps());
+                    if (startSample >= blockEndSample)
+                        continue;
+
+                    const std::int64_t framesUntilEnd = std::max<std::int64_t>(0, blockEndSample - startSample);
                     const double stepDurationSamples = timing.samplesPerStep();
                     const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
-                    const std::int64_t maxFrames = (clip.lengthSteps > 0)
+                    std::int64_t maxFrames = (clip.lengthSteps > 0)
                         ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
-                        : -1;
+                        : framesUntilEnd;
+                    maxFrames = std::min(maxFrames, framesUntilEnd);
 
                     snapshot->events.push_back({startSample, found->second.get(), combinedGainL, combinedGainR,
                                                 audioOffset, maxFrames, at});

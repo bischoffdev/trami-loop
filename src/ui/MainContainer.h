@@ -9,7 +9,9 @@
 #include "model/UndoManager.h"
 #include "ui/ArrangerView.h"
 #include "ui/IconButton.h"
+#include "ui/PatternListPanel.h"
 #include "ui/PatternView.h"
+#include "ui/TransportBar.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -25,7 +27,7 @@ enum class ViewMode
     Arranger
 };
 
-class MainContainer : public juce::Component
+class MainContainer : public juce::Component, public juce::DragAndDropContainer
 {
 public:
     MainContainer(Song& song, AudioEngine& engine, StretchCache& stretchCache);
@@ -41,6 +43,7 @@ public:
 
     void performUndo();
     void performRedo();
+    void pushUndoState();
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -68,8 +71,10 @@ private:
     IconButton exportButton_{"Export", IconButton::Icon::Export, "Export"};
     IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Audio"};
 
+    std::unique_ptr<PatternListPanel> patternListPanel_;
     std::unique_ptr<PatternView> patternView_;
     std::unique_ptr<ArrangerView> arrangerView_;
+    std::unique_ptr<TransportBar> transportBar_;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
 };

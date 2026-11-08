@@ -8,16 +8,20 @@ Combining tempo-synced time-stretching for audio loops and natural one-shots wit
 
 ## Key Features
 
-- **Pattern View (16 Tracks)**:
-  - 16 horizontal audio tracks per pattern with individual volume and pan sliders.
-  - 1/16 musical grid with global swing adjustment.
+- **Pattern View (Dynamic Tracks & 1-to-1 Track Patterns)**:
+  - Each track is its own pattern (e.g., Track 1 = Kick, Track 2 = Snare), edited together in horizontal lanes and sequenced across the Arranger.
+  - Starts with 1 track; add more tracks dynamically with "+ Add Track" or by dropping files.
+  - Individual track volume, pan, mute, and solo controls.
+  - Selectable raster size: **1 Bar, 1/2, 1/4, 1/8, 1/16, and 1/32** with high-resolution 32-step/bar grid snapping.
+  - Adjustable swing slider (0% to 100%) with instant audio preview and `S` shortcut toggle.
   - Color-coded clips with sample identifiers and loop/one-shot badge indicators (`[L]` / `[1]`).
   - Interactive grid editing: click to place, drag to move across tracks and steps, right-click to delete.
-  - Synchronized playhead tracking the audio playback.
+  - Synchronized playhead tracking audio playback.
 
-- **Arranger View (8 Tracks)**:
-  - 8 arranger lanes for layering and sequencing patterns into complete songs.
-  - Mute, volume, and pan per arranger track.
+- **Arranger View (Multi-Track Song Sequencer)**:
+  - Sequence and layer patterns across arranger tracks to structure complete songs.
+  - Mute, solo, volume, and pan per arranger track.
+  - Global swing adjustment (0% to 100%) matching the groove of the patterns.
   - Pattern management: add, duplicate, rename, and delete patterns.
   - Double-click any pattern block to jump directly into the Pattern Editor.
 
@@ -26,13 +30,13 @@ Combining tempo-synced time-stretching for audio loops and natural one-shots wit
   - One-shots play at their natural pitch and speed without stretching.
   - Background rendering via `StretchCache` ensures the real-time audio thread and UI never block.
 
-- **Built-in Sample Browser & Import**:
+- **Built-in Sample Browser & Drag-and-Drop**:
   - Direct import for WAV and MP3 files with automatic resampling to the project sample rate.
   - Built-in directory browser with instant audition/preview button.
-  - Drag-and-drop audio files directly from Finder / Explorer onto grid lanes.
+  - Drag-and-drop audio files directly from the browser or OS Finder/Explorer onto existing tracks to assign them, or drop onto empty space / "+ Add Track" to automatically create new tracks.
 
 - **In-Place Audio Recording**:
-  - Record directly into the Pattern View (creates a new sample and clip) or the Arranger View (creates a pattern take).
+  - Record directly into the Pattern View (creates a new sample and track pattern) or the Arranger View (creates a pattern take).
   - 1-bar metronome count-in.
   - Automatic audio device input latency compensation.
 
@@ -84,7 +88,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 # Build application and unit tests
 cmake --build build --config Release --parallel
 
-# Run test suite (37 unit tests)
+# Run test suite (44 unit tests)
 ctest --test-dir build -C Release --output-on-failure
 ```
 

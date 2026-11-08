@@ -25,6 +25,12 @@ std::shared_ptr<const AudioData> StretchCache::getRawAudio(SampleId id) const
     return it != rawBank_.end() ? it->second : nullptr;
 }
 
+SampleBank StretchCache::getRawBank() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return rawBank_;
+}
+
 void StretchCache::removeSample(SampleId id)
 {
     std::lock_guard<std::mutex> lock(mutex_);

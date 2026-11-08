@@ -286,23 +286,68 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
     if (playing_.load() && current_ != nullptr && current_->lengthSamples > 0)
     {
+        const bool isLooping = loopingEnabled_.load() && current_->looping;
+        const std::int64_t loopStart = (current_->loopEndSample > current_->loopStartSample && current_->loopStartSample >= 0)
+                                          ? current_->loopStartSample : 0;
+        const std::int64_t loopEnd = (current_->loopEndSample > current_->loopStartSample && current_->loopEndSample <= current_->lengthSamples)
+                                        ? current_->loopEndSample : current_->lengthSamples;
+
         int offset = 0;
         while (offset < numSamples)
         {
-            const auto chunk = std::min<std::int64_t>(numSamples - offset, current_->lengthSamples - position_);
+            const std::int64_t segEnd = (isLooping && loopEnd > loopStart) ? loopEnd : current_->lengthSamples;
+            if (position_ >= segEnd)
+            {
+                if (isLooping && loopEnd > loopStart)
+                {
+                    position_ = loopStart;
+                }
+                else
+                {
+                    position_ = 0;
+                    playing_.store(false);
+                    playRequested_.store(false);
+                    break;
+                }
+            }
+
+            const auto chunk = std::min<std::int64_t>(numSamples - offset, segEnd - position_);
+            if (chunk <= 0)
+            {
+                if (isLooping && loopEnd > loopStart)
+                {
+                    position_ = loopStart;
+                    continue;
+                }
+                else
+                {
+                    position_ = 0;
+                    playing_.store(false);
+                    playRequested_.store(false);
+                    break;
+                }
+            }
+
             scheduleRange(position_, position_ + chunk, offset);
             scheduleMetronome(position_, position_ + chunk, offset);
             offset += static_cast<int>(chunk);
             position_ += chunk;
 
-            if (position_ >= current_->lengthSamples)
+            if (position_ >= segEnd)
             {
-                position_ = 0;
-                if (!current_->looping)
+                if (isLooping && loopEnd > loopStart)
                 {
-                    playing_.store(false);
-                    playRequested_.store(false);
-                    break;
+                    position_ = loopStart;
+                }
+                else
+                {
+                    position_ = 0;
+                    if (!isLooping)
+                    {
+                        playing_.store(false);
+                        playRequested_.store(false);
+                        break;
+                    }
                 }
             }
         }

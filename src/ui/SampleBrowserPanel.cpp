@@ -20,6 +20,7 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
 
     fileTree_ = std::make_unique<juce::FileTreeComponent>(*directoryList_);
     fileTree_->addListener(this);
+    fileTree_->addMouseListener(this, true);
     fileTree_->setColour(juce::FileTreeComponent::backgroundColourId, Palette::background);
     fileTree_->setColour(juce::DirectoryContentsDisplayComponent::textColourId, Palette::text);
     addAndMakeVisible(fileTree_.get());
@@ -50,12 +51,37 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     previewButton_.onClick = [this]() { previewCurrentSelection(); };
     addAndMakeVisible(previewButton_);
 
+    addLoopButton_.onClick = [this]() {
+        const auto file = fileTree_->getSelectedFile();
+        if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
+        {
+            if (onAddToNewTrack_)
+                onAddToNewTrack_(file.getFullPathName(), SampleKind::Loop);
+            else
+                importCurrentSelection(SampleKind::Loop);
+        }
+    };
+    addAndMakeVisible(addLoopButton_);
+
+    addOneShotButton_.onClick = [this]() {
+        const auto file = fileTree_->getSelectedFile();
+        if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
+        {
+            if (onAddToNewTrack_)
+                onAddToNewTrack_(file.getFullPathName(), SampleKind::OneShot);
+            else
+                importCurrentSelection(SampleKind::OneShot);
+        }
+    };
+    addAndMakeVisible(addOneShotButton_);
+
     startTimerHz(20);
 }
 
 SampleBrowserPanel::~SampleBrowserPanel()
 {
     stopTimer();
+    fileTree_->removeMouseListener(this);
     fileTree_->removeListener(this);
     formatThread_.stopThread(1000);
 }
@@ -125,13 +151,54 @@ void SampleBrowserPanel::selectionChanged()
 
 void SampleBrowserPanel::fileClicked(const juce::File& file, const juce::MouseEvent& e)
 {
-    if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
+    juce::ignoreUnused(file, e);
+    // Do not initiate drag on simple clicks; selectionChanged handles file selection.
+}
+
+void SampleBrowserPanel::mouseDown(const juce::MouseEvent& e)
+{
+    juce::ignoreUnused(e);
+}
+
+void SampleBrowserPanel::mouseDrag(const juce::MouseEvent& e)
+{
+    if (e.getDistanceFromDragStart() > 6)
     {
-        if (e.mods.isLeftButtonDown())
+        const auto file = fileTree_->getSelectedFile();
+        if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
         {
-            startDragging(file.getFullPathName(), this);
+            startSampleDrag(file);
         }
     }
+}
+
+void SampleBrowserPanel::startSampleDrag(const juce::File& file)
+{
+    auto* ddc = juce::DragAndDropContainer::findParentDragContainerFor(this);
+    if (ddc == nullptr || ddc->isDragAndDropActive())
+        return;
+
+    constexpr int imgW = 160;
+    constexpr int imgH = 26;
+    juce::Image dragImg(juce::Image::ARGB, imgW, imgH, true);
+    {
+        juce::Graphics g(dragImg);
+        g.setColour(juce::Colour(0xee161a22));
+        g.fillRoundedRectangle(0.5f, 0.5f, imgW - 1.0f, imgH - 1.0f, 4.0f);
+        g.setColour(Palette::accent);
+        g.drawRoundedRectangle(0.5f, 0.5f, imgW - 1.0f, imgH - 1.0f, 4.0f, 1.5f);
+
+        // Music note glyph
+        g.setFont(Typography::bold(12.0f));
+        g.drawText(juce::CharPointer_UTF8("\xe2\x99\xab"), 6, 0, 16, imgH, juce::Justification::centred);
+
+        g.setColour(Palette::text);
+        g.setFont(Typography::regular(11.5f));
+        g.drawText(file.getFileName(), 24, 0, imgW - 30, imgH, juce::Justification::centredLeft, true);
+    }
+
+    const juce::Point<int> offset(-15, -13);
+    ddc->startDragging(file.getFullPathName(), this, juce::ScaledImage(dragImg, 1.0), true, &offset);
 }
 
 void SampleBrowserPanel::fileDoubleClicked(const juce::File& file)
@@ -353,8 +420,12 @@ void SampleBrowserPanel::resized()
 
     auto controlBar = rightArea.removeFromBottom(46);
     previewButton_.setBounds(controlBar.removeFromLeft(80).reduced(0, 2));
-    controlBar.removeFromLeft(12);
-    autoPreviewToggle_.setBounds(controlBar.removeFromLeft(120).reduced(0, 8));
+    controlBar.removeFromLeft(10);
+    autoPreviewToggle_.setBounds(controlBar.removeFromLeft(110).reduced(0, 8));
+    controlBar.removeFromLeft(16);
+    addLoopButton_.setBounds(controlBar.removeFromLeft(115).reduced(0, 2));
+    controlBar.removeFromLeft(8);
+    addOneShotButton_.setBounds(controlBar.removeFromLeft(115).reduced(0, 2));
 
     waveformRect_ = rightArea.reduced(0, 2);
 }

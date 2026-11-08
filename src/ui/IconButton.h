@@ -17,6 +17,7 @@ public:
         Stop,
         Record,
         Rewind,
+        Loop,
         Metronome,
         Swing,
         Browser,

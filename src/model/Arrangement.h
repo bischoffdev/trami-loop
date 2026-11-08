@@ -21,6 +21,8 @@ struct PatternBlock
 
 struct ArrangerTrack
 {
+    std::string name;
+    PatternId patternId;
     TrackMix mix;
     bool muted = false;
     bool solo = false;

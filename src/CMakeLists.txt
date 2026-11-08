@@ -41,6 +41,8 @@ target_sources(TramiLoop PRIVATE
     ui/ArrangerGrid.cpp
     ui/ArrangerTrackHeader.cpp
     ui/ArrangerView.cpp
+    ui/PatternListPanel.cpp
+    ui/TransportBar.cpp
     ui/MainContainer.cpp
 )
 

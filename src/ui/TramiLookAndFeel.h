@@ -8,23 +8,33 @@ namespace trami
 /// Central colour palette. All UI colours come from here.
 namespace Palette
 {
-inline const juce::Colour background{0xff121417};
-inline const juce::Colour surface{0xff1b1e23};
-inline const juce::Colour gridLine{0xff2a2e35};
-inline const juce::Colour text{0xffe6e8eb};
-inline const juce::Colour textDim{0xff8a9099};
+inline const juce::Colour background{0xff0e1116};
+inline const juce::Colour surface{0xff181d24};
+inline const juce::Colour panelBackground{0xff13171e};
+inline const juce::Colour panelHeader{0xff1c222c};
+inline const juce::Colour trackHeaderSurface{0xff1a1f28};
+inline const juce::Colour topBarBackground{0xff0c0e13};
+inline const juce::Colour transportBackground{0xff14171e};
+inline const juce::Colour gridFloor{0xff0b0d11};
+inline const juce::Colour gridLaneAlt{0xff101318};
+inline const juce::Colour gridLine{0xff28313d};
+inline const juce::Colour gridBeatLine{0xff3e4c5e};
+inline const juce::Colour gridBarLine{0xff647792};
+inline const juce::Colour text{0xffe6eaf0};
+inline const juce::Colour textDim{0xff8c96a5};
 inline const juce::Colour accent{0xff4fc3f7};
+inline const juce::Colour loopRegion{0xfff59e0b};
 } // namespace Palette
 
 /// Consistent, modern, readable typography.
 namespace Typography
 {
-inline juce::FontOptions regular(float size = 13.0f)
+inline juce::FontOptions regular(float size = 13.5f)
 {
     return juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), size, juce::Font::plain);
 }
 
-inline juce::FontOptions bold(float size = 13.0f)
+inline juce::FontOptions bold(float size = 13.5f)
 {
     return juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), size, juce::Font::bold);
 }

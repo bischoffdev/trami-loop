@@ -104,6 +104,9 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     {
         const auto& at = song.arrangement()[static_cast<std::size_t>(t)];
         juce::DynamicObject::Ptr arrTrackObj = new juce::DynamicObject();
+        arrTrackObj->setProperty("name", juce::String(at.name));
+        if (at.patternId.isValid())
+            arrTrackObj->setProperty("patternId", static_cast<juce::int64>(at.patternId.value));
         arrTrackObj->setProperty("volume", at.mix.volume);
         arrTrackObj->setProperty("pan", at.mix.pan);
         arrTrackObj->setProperty("muted", at.muted);
@@ -241,6 +244,9 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
 
             if (auto* track = song.arrangerTrack(arrTrackIdx))
             {
+                track->name = atVar.getProperty("name", "").toString().toStdString();
+                if (atVar.hasProperty("patternId"))
+                    track->patternId = PatternId{static_cast<std::uint32_t>(static_cast<juce::int64>(atVar.getProperty("patternId", 0)))};
                 track->mix.volume = static_cast<float>(atVar.getProperty("volume", 1.0f));
                 track->mix.pan = static_cast<float>(atVar.getProperty("pan", 0.0f));
                 track->muted = atVar.getProperty("muted", false);

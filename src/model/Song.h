@@ -42,21 +42,35 @@ public:
     const Pattern* findPattern(PatternId id) const noexcept;
     Pattern* findPattern(PatternId id) noexcept;
     const std::vector<Pattern>& patterns() const noexcept { return patterns_; }
+    std::vector<Pattern>& patterns() noexcept { return patterns_; }
 
     // --- Clips ---------------------------------------------------------------
     std::optional<ClipId> placeClip(PatternId pattern, int track, SampleId sample, int startStep,
                                     int lengthSteps = 0, int offsetSteps = 0);
     bool resizeClip(PatternId pattern, ClipId clip, int newStartStep, int newLengthSteps, int newOffsetSteps);
     bool moveClip(PatternId pattern, ClipId clip, int newTrack, int newStartStep);
+    bool moveClipBetweenPatterns(PatternId fromPattern, PatternId toPattern, ClipId clip, int newStartStep);
     bool removeClip(PatternId pattern, ClipId clip);
     bool setPatternTrackSample(PatternId pattern, int track, SampleId sample);
     bool replaceTrackSample(PatternId pattern, int track, SampleId newSampleId);
     SampleId patternTrackSample(PatternId pattern, int track) const noexcept;
+    int addTrackToPattern(PatternId pattern, SampleId sample = {});
+    bool removeTrackFromPattern(PatternId pattern, int trackIndex);
+    int duplicateTrackInPattern(PatternId pattern, int trackIndex);
+    bool renamePatternTrack(PatternId pattern, int trackIndex, std::string name);
+    std::string patternTrackName(PatternId pattern, int trackIndex) const;
+    bool setPatternTrackKind(PatternId pattern, int trackIndex, SampleKind kind);
+    SampleKind patternTrackKind(PatternId pattern, int trackIndex) const;
 
     // --- Arrangement ---------------------------------------------------------
     std::optional<BlockId> placeBlock(int arrangerTrack, PatternId pattern, int startBar);
     bool moveBlock(BlockId block, int newTrack, int newStartBar);
     bool removeBlock(BlockId block);
+    bool renameArrangerTrack(int trackIndex, std::string name);
+    std::string arrangerTrackName(int trackIndex) const;
+    PatternId arrangerTrackPattern(int trackIndex) const;
+    bool setArrangerTrackPattern(int trackIndex, PatternId patternId);
+    int findTrackForPattern(PatternId patternId) const;
     const Arrangement& arrangement() const noexcept { return arrangement_; }
     ArrangerTrack* arrangerTrack(int index) noexcept;
 

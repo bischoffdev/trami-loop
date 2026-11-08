@@ -35,9 +35,12 @@ struct PlaybackSnapshot
 {
     std::vector<PlaybackEvent> events; ///< Sorted by startSample.
     std::int64_t lengthSamples = 0;
+    std::int64_t loopStartSample = 0;
+    std::int64_t loopEndSample = 0;
     bool looping = true;
     double samplesPerBeat = 0.0;
-    std::array<TrackMixSnapshot, 16> trackMixes{};
+    inline static constexpr int kMaxTrackMixes = 64;
+    std::array<TrackMixSnapshot, kMaxTrackMixes> trackMixes{};
     bool hasTrackMixes = false;
 
     /// Owns the audio referenced by events, so it outlives the snapshot's use.

@@ -89,8 +89,8 @@ TEST_CASE("Events trigger on the exact sample regardless of block size")
     {
         Fixture f;
         f.song.placeClip(f.pattern, 0, f.sample, 0);
-        f.song.placeClip(f.pattern, 1, f.sample, 3);
-        f.song.placeClip(f.pattern, 2, f.sample, 15);
+        f.song.placeClip(f.pattern, 1, f.sample, 6);
+        f.song.placeClip(f.pattern, 2, f.sample, 30);
 
         SnapshotExchange exchange;
         exchange.publish(f.snapshot());
@@ -119,8 +119,8 @@ TEST_CASE("Swing shifts odd steps by the exact amount")
 {
     Fixture f;
     f.song.setSwing(0.5);
-    f.song.placeClip(f.pattern, 0, f.sample, 1);
     f.song.placeClip(f.pattern, 0, f.sample, 2);
+    f.song.placeClip(f.pattern, 0, f.sample, 4);
 
     SnapshotExchange exchange;
     exchange.publish(f.snapshot());
@@ -179,7 +179,7 @@ TEST_CASE("New snapshots are adopted while playing and keep the position")
     seq.requestPlaying(true);
     render(seq, 30000, 512);
 
-    f.song.placeClip(f.pattern, 0, f.sample, 8);
+    f.song.placeClip(f.pattern, 0, f.sample, 16);
     exchange.publish(f.snapshot());
 
     const auto onsets = render(seq, 30000, 512);
@@ -192,7 +192,7 @@ TEST_CASE("Arrangement plays pattern blocks across multiple tracks and stops at 
     f.song.placeClip(f.pattern, 0, f.sample, 0); // hit at beat 1
 
     const auto pat2 = f.song.addPattern("P2", 1);
-    f.song.placeClip(pat2, 0, f.sample, 4); // hit at beat 2 (step 4 = 24000 samples)
+    f.song.placeClip(pat2, 0, f.sample, 8); // hit at beat 2 (step 8 = 24000 samples)
 
     // Track 0: Pattern 1 at bar 0 (0..96000) and bar 2 (192000..288000)
     f.song.placeBlock(0, f.pattern, 0);
@@ -221,7 +221,7 @@ TEST_CASE("Muted and soloed pattern tracks in playback")
 {
     Fixture f;
     f.song.placeClip(f.pattern, 0, f.sample, 0);
-    f.song.placeClip(f.pattern, 1, f.sample, 4);
+    f.song.placeClip(f.pattern, 1, f.sample, 8);
 
     // Both play normally
     auto snapNormal = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
@@ -391,4 +391,45 @@ TEST_CASE("Real-time track mix changes take effect immediately during playback")
     seq.process(left.data(), right.data(), 256);
     REQUIRE(left[10] == Catch::Approx(0.0f).margin(1e-5));
     REQUIRE(right[10] > 0.0f);
+}
+
+TEST_CASE("Clips are cut off at the loop point of the pattern")
+{
+    Fixture f;
+    // Pattern f.pattern is 1 bar (96000 samples, 32 1/32-steps).
+    // Sample is 96000 samples long.
+    // Place clip at step 16 (half-way through bar):
+    // startSample is 48000.
+    // The pattern ends at 96000.
+    // The event's maxFrames must be capped to 48000 so it does not spill past the loop boundary!
+    f.song.placeClip(f.pattern, 0, f.sample, 16);
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    REQUIRE(snap->events.size() == 1);
+    REQUIRE(snap->events[0].startSample == 48000);
+    REQUIRE(snap->events[0].maxFrames == 48000);
+}
+
+TEST_CASE("Sequencer loops within custom loop region")
+{
+    Fixture f;
+    // Clip at step 4 (sample 12000) and step 8 (sample 24000)
+    f.song.placeClip(f.pattern, 0, f.sample, 4);
+    f.song.placeClip(f.pattern, 0, f.sample, 8);
+
+    // Build pattern with loop region from step 4 (12000) to step 8 (24000)
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate, 4, 8);
+    REQUIRE(snap->loopStartSample == 12000);
+    REQUIRE(snap->loopEndSample == 24000);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    // Play 36000 samples. It should start at 0, hit 12000, then wrap at 24000 back to 12000!
+    // So triggers will be at 12000 and 24000 (after loop wrap at 12000 again)
+    auto triggers = render(seq, 36000, 256);
+    REQUIRE(triggers.size() >= 2);
+    REQUIRE(triggers[0] == 12000);
+    REQUIRE(triggers[1] == 24000);
 }

@@ -19,6 +19,11 @@ public:
     using MixChangedCallback = std::function<void(int track)>;
     using TrackSelectedCallback = std::function<void(int track, SampleId sampleId)>;
     using FileDroppedCallback = std::function<void(const juce::String& filePath, int track)>;
+    using AddTrackCallback = std::function<void()>;
+    using TrackTypeChangedCallback = std::function<void(int track, SampleKind newKind)>;
+    using DuplicateTrackCallback = std::function<void(int track)>;
+    using DeleteTrackCallback = std::function<void(int track)>;
+    using TrackRenamedCallback = std::function<void(int track, const std::string& name)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
 
@@ -29,6 +34,11 @@ public:
 
     void setOnTrackSelected(TrackSelectedCallback cb) { onTrackSelected_ = std::move(cb); }
     void setOnFileDropped(FileDroppedCallback cb) { onFileDropped_ = std::move(cb); }
+    void setOnAddTrack(AddTrackCallback cb) { onAddTrack_ = std::move(cb); }
+    void setOnTrackTypeChanged(TrackTypeChangedCallback cb) { onTrackTypeChanged_ = std::move(cb); }
+    void setOnDuplicateTrack(DuplicateTrackCallback cb) { onDuplicateTrack_ = std::move(cb); }
+    void setOnDeleteTrack(DeleteTrackCallback cb) { onDeleteTrack_ = std::move(cb); }
+    void setOnTrackRenamed(TrackRenamedCallback cb) { onTrackRenamed_ = std::move(cb); }
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
 
@@ -39,10 +49,16 @@ public:
 
     // FileDragAndDropTarget
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     // DragAndDropTarget
     bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+    void itemDragEnter(const SourceDetails& dragSourceDetails) override;
+    void itemDragMove(const SourceDetails& dragSourceDetails) override;
+    void itemDragExit(const SourceDetails& dragSourceDetails) override;
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kHeaderWidth = 260;
@@ -51,9 +67,12 @@ private:
     struct TrackControls
     {
         std::unique_ptr<juce::Label> nameLabel;
+        std::unique_ptr<juce::TextButton> typeButton;
         std::unique_ptr<juce::TextButton> muteButton;
         std::unique_ptr<juce::TextButton> soloButton;
+        std::unique_ptr<juce::Label> volLabel;
         std::unique_ptr<juce::Slider> volumeSlider;
+        std::unique_ptr<juce::Label> panLabel;
         std::unique_ptr<juce::Slider> panSlider;
     };
 
@@ -64,9 +83,16 @@ private:
     MixChangedCallback onMixChanged_;
     TrackSelectedCallback onTrackSelected_;
     FileDroppedCallback onFileDropped_;
+    AddTrackCallback onAddTrack_;
+    TrackTypeChangedCallback onTrackTypeChanged_;
+    DuplicateTrackCallback onDuplicateTrack_;
+    DeleteTrackCallback onDeleteTrack_;
+    TrackRenamedCallback onTrackRenamed_;
     int trackHeight_ = 36;
+    int dragHoverTrack_ = -1;
 
-    std::array<TrackControls, kTracksPerPattern> controls_;
+    std::vector<TrackControls> controls_;
+    std::unique_ptr<juce::TextButton> addTrackButton_;
 };
 
 } // namespace trami

@@ -144,7 +144,11 @@ bool Song::removePattern(PatternId id)
         return false;
 
     for (auto& track : arrangement_)
+    {
         std::erase_if(track.blocks, [id](const PatternBlock& b) { return b.patternId == id; });
+        if (track.patternId == id)
+            track.patternId = {};
+    }
     return true;
 }
 
@@ -168,6 +172,9 @@ std::optional<ClipId> Song::placeClip(PatternId patternId, int track, SampleId s
         startStep < 0 || startStep >= pattern->lengthSteps() || lengthSteps < 0 || offsetSteps < 0)
         return std::nullopt;
 
+    if (track >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(track + 1));
+
     const Clip clip{clipIds_.next(), sample, startStep, lengthSteps, offsetSteps};
     auto& trackObj = pattern->tracks[static_cast<std::size_t>(track)];
     trackObj.clips.push_back(clip);
@@ -180,6 +187,11 @@ bool Song::resizeClip(PatternId patternId, ClipId clipId, int newStartStep, int 
     Pattern* pattern = findPattern(patternId);
     if (pattern == nullptr || newStartStep < 0 || newStartStep >= pattern->lengthSteps() ||
         newLengthSteps <= 0 || newOffsetSteps < 0)
+        return false;
+
+    const int maxAllowedLen = pattern->lengthSteps() - newStartStep;
+    newLengthSteps = std::min(newLengthSteps, maxAllowedLen);
+    if (newLengthSteps <= 0)
         return false;
 
     for (auto& track : pattern->tracks)
@@ -205,6 +217,9 @@ bool Song::moveClip(PatternId patternId, ClipId clipId, int newTrack, int newSta
         newStartStep >= pattern->lengthSteps())
         return false;
 
+    if (newTrack >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(newTrack + 1));
+
     for (auto& track : pattern->tracks)
     {
         auto it = std::find_if(track.clips.begin(), track.clips.end(), [clipId](const Clip& c) { return c.id == clipId; });
@@ -215,6 +230,31 @@ bool Song::moveClip(PatternId patternId, ClipId clipId, int newTrack, int newSta
         clip.startStep = newStartStep;
         track.clips.erase(it);
         pattern->tracks[static_cast<std::size_t>(newTrack)].clips.push_back(clip);
+        return true;
+    }
+    return false;
+}
+
+bool Song::moveClipBetweenPatterns(PatternId fromPattern, PatternId toPattern, ClipId clipId, int newStartStep)
+{
+    Pattern* fromP = findPattern(fromPattern);
+    Pattern* toP = findPattern(toPattern);
+    if (fromP == nullptr || toP == nullptr || newStartStep < 0 || newStartStep >= toP->lengthSteps())
+        return false;
+
+    if (toP->tracks.empty())
+        toP->tracks.resize(1);
+
+    for (auto& track : fromP->tracks)
+    {
+        auto it = std::find_if(track.clips.begin(), track.clips.end(), [clipId](const Clip& c) { return c.id == clipId; });
+        if (it == track.clips.end())
+            continue;
+
+        Clip clip = *it;
+        clip.startStep = newStartStep;
+        track.clips.erase(it);
+        toP->tracks[0].clips.push_back(clip);
         return true;
     }
     return false;
@@ -237,6 +277,10 @@ bool Song::setPatternTrackSample(PatternId patternId, int track, SampleId sample
     Pattern* pattern = findPattern(patternId);
     if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern))
         return false;
+
+    if (track >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(track + 1));
+
     pattern->tracks[static_cast<std::size_t>(track)].sampleId = sample;
     return true;
 }
@@ -246,6 +290,10 @@ bool Song::replaceTrackSample(PatternId patternId, int track, SampleId newSample
     Pattern* pattern = findPattern(patternId);
     if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern) || findSample(newSampleId) == nullptr)
         return false;
+
+    if (track >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(track + 1));
+
     auto& t = pattern->tracks[static_cast<std::size_t>(track)];
     t.sampleId = newSampleId;
     for (auto& clip : t.clips)
@@ -258,12 +306,121 @@ SampleId Song::patternTrackSample(PatternId patternId, int track) const noexcept
     const Pattern* pattern = findPattern(patternId);
     if (pattern == nullptr || !isValidTrack(track, kTracksPerPattern))
         return {};
+    if (track >= static_cast<int>(pattern->tracks.size()))
+        return {};
     const auto& t = pattern->tracks[static_cast<std::size_t>(track)];
     if (t.sampleId.isValid())
         return t.sampleId;
     if (!t.clips.empty())
         return t.clips.front().sampleId;
     return {};
+}
+
+int Song::addTrackToPattern(PatternId patternId, SampleId sample)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || pattern->tracks.size() >= kTracksPerPattern)
+        return -1;
+
+    PatternTrack newTrack;
+    newTrack.sampleId = sample;
+    pattern->tracks.push_back(std::move(newTrack));
+    return static_cast<int>(pattern->tracks.size() - 1);
+}
+
+bool Song::removeTrackFromPattern(PatternId patternId, int trackIndex)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return false;
+
+    // Always keep at least 1 track in the pattern
+    if (pattern->tracks.size() <= 1)
+    {
+        pattern->tracks.front().clips.clear();
+        pattern->tracks.front().sampleId = {};
+        pattern->tracks.front().mix = {};
+        pattern->tracks.front().muted = false;
+        pattern->tracks.front().solo = false;
+        return true;
+    }
+
+    pattern->tracks.erase(pattern->tracks.begin() + trackIndex);
+    return true;
+}
+
+int Song::duplicateTrackInPattern(PatternId patternId, int trackIndex)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()) ||
+        pattern->tracks.size() >= kTracksPerPattern)
+        return -1;
+
+    PatternTrack newTrack = pattern->tracks[static_cast<std::size_t>(trackIndex)];
+    for (auto& clip : newTrack.clips)
+        clip.id = clipIds_.next();
+
+    pattern->tracks.push_back(std::move(newTrack));
+    return static_cast<int>(pattern->tracks.size() - 1);
+}
+
+bool Song::renamePatternTrack(PatternId patternId, int trackIndex, std::string name)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern))
+        return false;
+    if (trackIndex >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(trackIndex + 1));
+    pattern->tracks[static_cast<std::size_t>(trackIndex)].name = std::move(name);
+    return true;
+}
+
+std::string Song::patternTrackName(PatternId patternId, int trackIndex) const
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern) ||
+        trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return {};
+    return pattern->tracks[static_cast<std::size_t>(trackIndex)].name;
+}
+
+bool Song::setPatternTrackKind(PatternId patternId, int trackIndex, SampleKind kind)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern))
+        return false;
+    if (trackIndex >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(trackIndex + 1));
+    auto& track = pattern->tracks[static_cast<std::size_t>(trackIndex)];
+    track.kindOverride = kind;
+
+    // Reset explicit length on clips so they immediately adopt the new kind's visual representation & span
+    for (auto& clip : track.clips)
+    {
+        clip.lengthSteps = 0;
+        clip.offsetSteps = 0;
+    }
+    return true;
+}
+
+SampleKind Song::patternTrackKind(PatternId patternId, int trackIndex) const
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern) ||
+        trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return SampleKind::OneShot;
+
+    const auto& t = pattern->tracks[static_cast<std::size_t>(trackIndex)];
+    if (t.kindOverride.has_value())
+        return *t.kindOverride;
+
+    SampleId sid = t.sampleId;
+    if (!sid.isValid() && !t.clips.empty())
+        sid = t.clips.front().sampleId;
+    if (const Sample* s = findSample(sid))
+        return s->kind;
+
+    return SampleKind::OneShot;
 }
 
 // --- Arrangement -------------------------------------------------------------
@@ -275,8 +432,19 @@ std::optional<BlockId> Song::placeBlock(int arrangerTrack, PatternId patternId, 
         startBar + length > kMaxBars || !blockFits(arrangerTrack, startBar, length, BlockId{}))
         return std::nullopt;
 
+    auto& track = arrangement_[static_cast<std::size_t>(arrangerTrack)];
+    if (!track.patternId.isValid())
+    {
+        track.patternId = patternId;
+    }
+    else if (track.patternId != patternId)
+    {
+        // Enforce: each arranger track is dedicated to one pattern
+        return std::nullopt;
+    }
+
     const PatternBlock block{blockIds_.next(), patternId, startBar};
-    arrangement_[static_cast<std::size_t>(arrangerTrack)].blocks.push_back(block);
+    track.blocks.push_back(block);
     return block.id;
 }
 
@@ -285,12 +453,22 @@ bool Song::moveBlock(BlockId blockId, int newTrack, int newStartBar)
     if (!isValidTrack(newTrack, kArrangerTracks) || newStartBar < 0)
         return false;
 
-    for (auto& track : arrangement_)
+    for (std::size_t t = 0; t < arrangement_.size(); ++t)
     {
+        auto& track = arrangement_[t];
         auto it = std::find_if(track.blocks.begin(), track.blocks.end(),
                                [blockId](const PatternBlock& b) { return b.id == blockId; });
         if (it == track.blocks.end())
             continue;
+
+        if (static_cast<int>(t) != newTrack)
+        {
+            auto& destTrack = arrangement_[static_cast<std::size_t>(newTrack)];
+            if (destTrack.patternId.isValid() && destTrack.patternId != it->patternId)
+                return false;
+            if (!destTrack.patternId.isValid())
+                destTrack.patternId = it->patternId;
+        }
 
         const int length = patternLength(it->patternId);
         if (newStartBar + length > kMaxBars || !blockFits(newTrack, newStartBar, length, blockId))
@@ -316,6 +494,56 @@ bool Song::removeBlock(BlockId blockId)
 ArrangerTrack* Song::arrangerTrack(int index) noexcept
 {
     return isValidTrack(index, kArrangerTracks) ? &arrangement_[static_cast<std::size_t>(index)] : nullptr;
+}
+
+bool Song::renameArrangerTrack(int trackIndex, std::string name)
+{
+    if (!isValidTrack(trackIndex, kArrangerTracks))
+        return false;
+    arrangement_[static_cast<std::size_t>(trackIndex)].name = std::move(name);
+    return true;
+}
+
+std::string Song::arrangerTrackName(int trackIndex) const
+{
+    if (!isValidTrack(trackIndex, kArrangerTracks))
+        return {};
+    return arrangement_[static_cast<std::size_t>(trackIndex)].name;
+}
+
+PatternId Song::arrangerTrackPattern(int trackIndex) const
+{
+    if (!isValidTrack(trackIndex, kArrangerTracks))
+        return {};
+    return arrangement_[static_cast<std::size_t>(trackIndex)].patternId;
+}
+
+bool Song::setArrangerTrackPattern(int trackIndex, PatternId patternId)
+{
+    if (!isValidTrack(trackIndex, kArrangerTracks))
+        return false;
+    auto& track = arrangement_[static_cast<std::size_t>(trackIndex)];
+    if (track.patternId == patternId)
+        return true;
+
+    if (track.patternId.isValid() && patternId.isValid() && track.patternId != patternId)
+    {
+        std::erase_if(track.blocks, [patternId](const PatternBlock& b) { return b.patternId != patternId; });
+    }
+    track.patternId = patternId;
+    return true;
+}
+
+int Song::findTrackForPattern(PatternId patternId) const
+{
+    if (!patternId.isValid())
+        return -1;
+    for (int t = 0; t < kArrangerTracks; ++t)
+    {
+        if (arrangement_[static_cast<std::size_t>(t)].patternId == patternId)
+            return t;
+    }
+    return -1;
 }
 
 int Song::lengthBars() const noexcept

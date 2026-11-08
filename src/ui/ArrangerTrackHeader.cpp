@@ -17,6 +17,17 @@ ArrangerTrackHeaderList::ArrangerTrackHeaderList(Song& song, MixChangedCallback 
         c.label->setFont(Typography::bold(14.0f));
         c.label->setColour(juce::Label::textColourId, Palette::text);
         c.label->setJustificationType(juce::Justification::centredLeft);
+        c.label->setEditable(false, true, false);
+        c.label->onTextChange = [this, t, lbl = c.label.get()] {
+            if (lbl != nullptr)
+            {
+                juce::String txt = lbl->getText().trim();
+                song_.renameArrangerTrack(t, txt.toStdString());
+                if (onTrackRenamed_)
+                    onTrackRenamed_(t, txt.toStdString());
+                updateFromModel();
+            }
+        };
         addAndMakeVisible(c.label.get());
 
         c.muteButton = std::make_unique<juce::TextButton>("M");
@@ -53,6 +64,13 @@ ArrangerTrackHeaderList::ArrangerTrackHeaderList(Song& song, MixChangedCallback 
         };
         addAndMakeVisible(c.soloButton.get());
 
+        c.volLabel = std::make_unique<juce::Label>("vol", "Vol");
+        c.volLabel->setFont(Typography::bold(10.0f));
+        c.volLabel->setColour(juce::Label::textColourId, Palette::textDim);
+        c.volLabel->setJustificationType(juce::Justification::centredRight);
+        c.volLabel->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(c.volLabel.get());
+
         c.volumeSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
         c.volumeSlider->setRange(0.0, 2.0, 0.01);
         c.volumeSlider->setValue(1.0, juce::dontSendNotification);
@@ -67,6 +85,13 @@ ArrangerTrackHeaderList::ArrangerTrackHeaderList(Song& song, MixChangedCallback 
             }
         };
         addAndMakeVisible(c.volumeSlider.get());
+
+        c.panLabel = std::make_unique<juce::Label>("pan", "Pan");
+        c.panLabel->setFont(Typography::bold(10.0f));
+        c.panLabel->setColour(juce::Label::textColourId, Palette::textDim);
+        c.panLabel->setJustificationType(juce::Justification::centredRight);
+        c.panLabel->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(c.panLabel.get());
 
         c.panSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
         c.panSlider->setRange(-1.0, 1.0, 0.01);
@@ -93,11 +118,29 @@ void ArrangerTrackHeaderList::updateFromModel()
     {
         const auto& track = arrangement[static_cast<std::size_t>(t)];
         auto& c = controls_[static_cast<std::size_t>(t)];
+        const std::string name = song_.arrangerTrackName(t);
+        if (!name.empty())
+        {
+            c.label->setText(juce::String(name), juce::dontSendNotification);
+        }
+        else if (track.patternId.isValid())
+        {
+            if (const auto* p = song_.findPattern(track.patternId))
+                c.label->setText(juce::String(t + 1) + ". " + juce::String(p->name), juce::dontSendNotification);
+            else
+                c.label->setText("Track " + juce::String(t + 1), juce::dontSendNotification);
+        }
+        else
+        {
+            c.label->setText("Track " + juce::String(t + 1) + " (Empty)", juce::dontSendNotification);
+        }
+
         c.muteButton->setToggleState(track.muted, juce::dontSendNotification);
         c.soloButton->setToggleState(track.solo, juce::dontSendNotification);
         c.volumeSlider->setValue(track.mix.volume, juce::dontSendNotification);
         c.panSlider->setValue(track.mix.pan, juce::dontSendNotification);
     }
+    repaint();
 }
 
 void ArrangerTrackHeaderList::setTrackHeight(int height)
@@ -113,11 +156,14 @@ void ArrangerTrackHeaderList::setTrackHeight(int height)
 
 void ArrangerTrackHeaderList::paint(juce::Graphics& g)
 {
-    g.fillAll(Palette::surface);
+    g.fillAll(Palette::trackHeaderSurface);
 
     // Header top area (matching ruler)
-    g.setColour(Palette::background);
+    g.setColour(Palette::panelHeader);
     g.fillRect(0, 0, getWidth(), ArrangerGrid::kRulerHeight);
+    g.setColour(Palette::gridLine);
+    g.drawHorizontalLine(ArrangerGrid::kRulerHeight - 1, 0.0f, static_cast<float>(getWidth()));
+
     g.setColour(Palette::textDim);
     g.setFont(Typography::bold(12.0f));
     g.drawText("ARRANGER TRACKS", 10, 0, getWidth() - 20, ArrangerGrid::kRulerHeight, juce::Justification::centredLeft);
@@ -128,14 +174,26 @@ void ArrangerTrackHeaderList::paint(juce::Graphics& g)
 
         if (t % 2 != 0)
         {
-            g.setColour(Palette::background.withAlpha(0.2f));
+            g.setColour(Palette::trackHeaderSurface.brighter(0.04f));
             g.fillRect(0, y, getWidth(), trackHeight_);
+        }
+
+        const auto& track = song_.arrangement()[static_cast<std::size_t>(t)];
+        if (track.patternId.isValid())
+        {
+            g.setColour(ArrangerGrid::patternColour(track.patternId));
+            g.fillRect(0, y + 2, 4, trackHeight_ - 4);
         }
 
         // Horizontal separator
         g.setColour(Palette::gridLine.withAlpha(0.6f));
         g.drawHorizontalLine(y + trackHeight_, 0.0f, static_cast<float>(getWidth()));
     }
+
+    // Right vertical border dividing from ArrangerGrid
+    g.setColour(Palette::gridLine);
+    g.drawVerticalLine(getWidth() - 2, 0.0f, static_cast<float>(getHeight()));
+    g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
 }
 
 void ArrangerTrackHeaderList::resized()
@@ -153,32 +211,36 @@ void ArrangerTrackHeaderList::resized()
             auto topArea = row.removeFromTop(20).reduced(6, 1);
             c.label->setBounds(topArea);
 
-            // Bottom: M S Vol Pan
+            // Bottom: M S Vol [slider] Pan [slider]
             auto botArea = row.reduced(6, 2);
-            c.muteButton->setBounds(botArea.removeFromLeft(22));
+            c.muteButton->setBounds(botArea.removeFromLeft(20));
+            botArea.removeFromLeft(2);
+            c.soloButton->setBounds(botArea.removeFromLeft(20));
             botArea.removeFromLeft(4);
-            c.soloButton->setBounds(botArea.removeFromLeft(22));
-            botArea.removeFromLeft(8);
 
-            const int sliderWidth = std::max(20, (botArea.getWidth() - 6) / 2);
+            c.volLabel->setBounds(botArea.removeFromLeft(22));
+            const int sliderWidth = std::max(20, (botArea.getWidth() - 28) / 2);
             c.volumeSlider->setBounds(botArea.removeFromLeft(sliderWidth));
-            botArea.removeFromLeft(6);
+            botArea.removeFromLeft(4);
+            c.panLabel->setBounds(botArea.removeFromLeft(24));
             c.panSlider->setBounds(botArea);
         }
         else
         {
             // 1-row compact layout
             auto r = row.reduced(6, 2);
-            c.label->setBounds(r.removeFromLeft(65));
-            r.removeFromLeft(3);
+            c.label->setBounds(r.removeFromLeft(55));
+            r.removeFromLeft(2);
             c.muteButton->setBounds(r.removeFromLeft(18));
             r.removeFromLeft(2);
             c.soloButton->setBounds(r.removeFromLeft(18));
-            r.removeFromLeft(4);
-
-            const int sliderWidth = std::max(15, (r.getWidth() - 3) / 2);
-            c.volumeSlider->setBounds(r.removeFromLeft(sliderWidth));
             r.removeFromLeft(3);
+
+            c.volLabel->setBounds(r.removeFromLeft(20));
+            const int sliderWidth = std::max(15, (r.getWidth() - 26) / 2);
+            c.volumeSlider->setBounds(r.removeFromLeft(sliderWidth));
+            r.removeFromLeft(2);
+            c.panLabel->setBounds(r.removeFromLeft(22));
             c.panSlider->setBounds(r);
         }
     }
@@ -190,6 +252,66 @@ void ArrangerTrackHeaderList::mouseWheelMove(const juce::MouseEvent& e, const ju
         onMouseWheel(e, wheel);
     else
         juce::Component::mouseWheelMove(e, wheel);
+}
+
+void ArrangerTrackHeaderList::mouseDown(const juce::MouseEvent& e)
+{
+    const int t = (e.getPosition().y - ArrangerGrid::kRulerHeight) / trackHeight_;
+    if (t < 0 || t >= kArrangerTracks)
+        return;
+
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        m.addItem(1, "Rename Track...");
+
+        juce::PopupMenu assignMenu;
+        assignMenu.addItem(100, "(Unassigned)", true, !song_.arrangerTrackPattern(t).isValid());
+        int menuIdx = 101;
+        std::vector<PatternId> patIds;
+        for (const auto& pat : song_.patterns())
+        {
+            const bool isCurrent = (song_.arrangerTrackPattern(t) == pat.id);
+            assignMenu.addItem(menuIdx++, juce::String(pat.name), true, isCurrent);
+            patIds.push_back(pat.id);
+        }
+        m.addSubMenu("Assign Pattern", assignMenu);
+        m.addItem(2, "Clear Track Blocks");
+
+        m.showMenuAsync(
+            juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(
+                juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
+            [this, t, patIds](int result) {
+                if (result == 1 && t < static_cast<int>(controls_.size()))
+                {
+                    if (controls_[static_cast<std::size_t>(t)].label != nullptr)
+                        controls_[static_cast<std::size_t>(t)].label->showEditor();
+                }
+                else if (result == 2)
+                {
+                    if (auto* trk = song_.arrangerTrack(t))
+                    {
+                        trk->blocks.clear();
+                        if (onMixChanged_)
+                            onMixChanged_(t);
+                    }
+                }
+                else if (result == 100)
+                {
+                    song_.setArrangerTrackPattern(t, PatternId{});
+                    updateFromModel();
+                    if (onMixChanged_)
+                        onMixChanged_(t);
+                }
+                else if (result >= 101 && result < 101 + static_cast<int>(patIds.size()))
+                {
+                    song_.setArrangerTrackPattern(t, patIds[static_cast<std::size_t>(result - 101)]);
+                    updateFromModel();
+                    if (onMixChanged_)
+                        onMixChanged_(t);
+                }
+            });
+    }
 }
 
 } // namespace trami
