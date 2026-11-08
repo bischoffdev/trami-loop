@@ -15,18 +15,22 @@ namespace trami
 
 class SampleBrowserPanel : public juce::Component,
                            public juce::FileBrowserListener,
-                           public juce::DragAndDropContainer,
                            private juce::Timer
 {
 public:
     using SampleImportedCallback = std::function<void(SampleId newSampleId)>;
+    using AddToNewTrackCallback = std::function<void(const juce::String& filePath, SampleKind kind)>;
 
     SampleBrowserPanel(Song& song, AudioEngine& engine, StretchCache& stretchCache,
                        SampleImportedCallback onImported);
     ~SampleBrowserPanel() override;
 
+    void setOnAddToNewTrack(AddToNewTrackCallback cb) { onAddToNewTrack_ = std::move(cb); }
+
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
 
     // FileBrowserListener
     void selectionChanged() override;
@@ -42,6 +46,7 @@ private:
     AudioEngine& engine_;
     StretchCache& stretchCache_;
     SampleImportedCallback onImported_;
+    AddToNewTrackCallback onAddToNewTrack_;
 
     SampleImporter importer_;
     juce::TimeSliceThread formatThread_{"AudioFormatThread"};
@@ -51,6 +56,8 @@ private:
 
     IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
     juce::ToggleButton autoPreviewToggle_{"Auto Preview"};
+    IconButton addLoopButton_{"+ Loop", IconButton::Icon::Duplicate, "Add as Loop to New Track"};
+    IconButton addOneShotButton_{"+ 1-Shot", IconButton::Icon::Duplicate, "Add as One-Shot to New Track"};
 
     juce::Label titleLabel_;
     juce::Label pathLabel_;
@@ -63,6 +70,7 @@ private:
     double previewProgress_ = 0.0;
     juce::Rectangle<int> waveformRect_;
 
+    void startSampleDrag(const juce::File& file);
     void timerCallback() override;
 };
 

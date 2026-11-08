@@ -31,6 +31,7 @@ public:
     /// Stores raw audio for a sample.
     void setRawAudio(SampleId id, std::shared_ptr<const AudioData> audio);
     std::shared_ptr<const AudioData> getRawAudio(SampleId id) const;
+    SampleBank getRawBank() const;
     void removeSample(SampleId id);
     void clear();
 

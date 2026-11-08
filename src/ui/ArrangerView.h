@@ -15,15 +15,20 @@
 namespace trami
 {
 
-class ArrangerView : public juce::Component, public ArrangerGrid::Listener, private juce::Timer
+class ArrangerView : public juce::Component,
+                     public ArrangerGrid::Listener,
+                     public juce::DragAndDropTarget,
+                     private juce::Timer
 {
 public:
     using EditPatternCallback = std::function<void(PatternId patternId)>;
+    using PushUndoCallback = std::function<void()>;
 
     ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretchCache,
                  EditPatternCallback onEditPattern);
     ~ArrangerView() override;
 
+    void setOnPushUndo(PushUndoCallback cb) { onPushUndo_ = std::move(cb); }
     void updatePatternList();
     void republish();
     void publishSnapshotQuick();
@@ -35,12 +40,18 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
 
+    // DragAndDropTarget
+    bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+    void itemDropped(const SourceDetails& dragSourceDetails) override;
+
     // ArrangerGrid::Listener
     void blockClicked(BlockId blockId) override;
     void blockDoubleClicked(PatternId patternId) override;
     void blockMoved(BlockId blockId, int newTrack, int newBar) override;
     void blockDeleteRequested(BlockId blockId) override;
     void gridCellClicked(int track, int bar) override;
+    void patternDropped(PatternId patternId, int track, int bar) override;
+    void loopRegionChanged(int startBar, int endBar) override;
     void zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid) override;
 
     void applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid);
@@ -58,27 +69,20 @@ private:
     AudioEngine& engine_;
     StretchCache& stretchCache_;
     EditPatternCallback onEditPattern_;
+    PushUndoCallback onPushUndo_;
 
     PatternId activePattern_;
     SampleBank activeBank_;
 
     float zoomX_ = 1.0f;
     float zoomY_ = 1.0f;
+    int loopStartBar_ = 0;
+    int loopEndBar_ = 0;
 
     // Toolbar controls
     juce::ComboBox patternCombo_;
-    IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "New"};
-    IconButton duplicatePatternButton_{"Duplicate", IconButton::Icon::Duplicate, "Duplicate"};
-    IconButton deletePatternButton_{"Delete", IconButton::Icon::Delete, "Delete"};
+    IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "+ Pattern"};
     IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Pattern"};
-
-    IconButton rewindButton_{"Rewind", IconButton::Icon::Rewind, "Rewind"};
-    IconButton playButton_{"Play", IconButton::Icon::Play, "Play Song"};
-    IconButton recordButton_{"Rec", IconButton::Icon::Record, "Rec"};
-    IconButton metroToggle_{"Click", IconButton::Icon::Metronome, "Click"};
-    juce::Label tempoLabel_;
-    juce::TextButton tempoDown_{"-"};
-    juce::TextButton tempoUp_{"+"};
 
     // Zoom controls
     IconButton zoomOutButton_{"ZoomOut", IconButton::Icon::ZoomOut, "Out"};

@@ -5,9 +5,9 @@
 namespace trami
 {
 
-/// Musical time constants. trami-loop works in 4/4 with a 1/16 step grid.
+/// Musical time constants. trami-loop works in 4/4 with a 1/32 base step grid.
 inline constexpr int kBeatsPerBar = 4;
-inline constexpr int kStepsPerBeat = 4;
+inline constexpr int kStepsPerBeat = 8;
 inline constexpr int kStepsPerBar = kBeatsPerBar * kStepsPerBeat;
 
 /// Converts between musical positions (bars/steps) and sample positions

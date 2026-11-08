@@ -65,21 +65,50 @@ private:
         const auto hihat = addSample("Hihat", "Hihat.wav", synth::hihat(rate), SampleKind::OneShot, 1);
         const auto bass = addSample("Bass Loop", "Bass_Loop.wav", synth::bassLoop(rate), SampleKind::Loop, 1);
 
-        const auto pattern = song_.addPattern("Pattern 1", 1);
-        song_.setPatternTrackSample(pattern, 0, kick);
-        song_.setPatternTrackSample(pattern, 1, snare);
-        song_.setPatternTrackSample(pattern, 2, hihat);
-        song_.setPatternTrackSample(pattern, 3, bass);
+        // Pattern 1: "Main Beat" - 4-track drum & bass pattern (1 bar)
+        const auto patBeat = song_.addPattern("Main Beat", 1);
+        song_.setPatternTrackSample(patBeat, 0, kick);
+        for (int step : {0, 8, 16, 24})
+            song_.placeClip(patBeat, 0, kick, step);
 
-        for (int step : {0, 6, 8, 11})
-            song_.placeClip(pattern, 0, kick, step);
-        for (int step : {4, 12})
-            song_.placeClip(pattern, 1, snare, step);
-        for (int step = 0; step < kStepsPerBar; step += 2)
-            song_.placeClip(pattern, 2, hihat, step);
-        song_.placeClip(pattern, 3, bass, 0);
+        const int snareTrk = song_.addTrackToPattern(patBeat, snare);
+        song_.placeClip(patBeat, snareTrk, snare, 8);
+        song_.placeClip(patBeat, snareTrk, snare, 24);
 
-        song_.placeBlock(0, pattern, 0);
+        const int hihatTrk = song_.addTrackToPattern(patBeat, hihat);
+        for (int step : {0, 4, 8, 12, 16, 20, 24, 28})
+            song_.placeClip(patBeat, hihatTrk, hihat, step);
+
+        const int bassTrk = song_.addTrackToPattern(patBeat, bass);
+        song_.placeClip(patBeat, bassTrk, bass, 0);
+
+        // Pattern 2: "Groove" - 2-track pattern
+        const auto patGroove = song_.addPattern("Groove", 1);
+        song_.setPatternTrackSample(patGroove, 0, hihat);
+        for (int step : {0, 4, 8, 12, 16, 20, 24, 28})
+            song_.placeClip(patGroove, 0, hihat, step);
+
+        const int grooveBass = song_.addTrackToPattern(patGroove, bass);
+        song_.placeClip(patGroove, grooveBass, bass, 0);
+
+        // Pattern 3: "Drums Only" - 2-track pattern
+        const auto patDrums = song_.addPattern("Drums Only", 1);
+        song_.setPatternTrackSample(patDrums, 0, kick);
+        for (int step : {0, 8, 16, 24})
+            song_.placeClip(patDrums, 0, kick, step);
+        const int drumSnare = song_.addTrackToPattern(patDrums, snare);
+        song_.placeClip(patDrums, drumSnare, snare, 8);
+        song_.placeClip(patDrums, drumSnare, snare, 24);
+
+        // Pre-populate arrangement blocks on their dedicated arranger tracks
+        // Track 0: Main Beat, Track 1: Groove, Track 2: Drums Only
+        song_.setArrangerTrackPattern(0, patBeat);
+        song_.setArrangerTrackPattern(1, patGroove);
+        song_.setArrangerTrackPattern(2, patDrums);
+        song_.placeBlock(1, patGroove, 0);
+        song_.placeBlock(0, patBeat, 1);
+        song_.placeBlock(0, patBeat, 2);
+        song_.placeBlock(2, patDrums, 3);
     }
 
     TramiLookAndFeel lookAndFeel_;

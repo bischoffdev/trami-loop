@@ -8,7 +8,7 @@
 namespace trami
 {
 
-class ArrangerGrid : public juce::Component
+class ArrangerGrid : public juce::Component, public juce::DragAndDropTarget
 {
 public:
     class Listener
@@ -20,6 +20,8 @@ public:
         virtual void blockMoved(BlockId blockId, int newTrack, int newBar) = 0;
         virtual void blockDeleteRequested(BlockId blockId) = 0;
         virtual void gridCellClicked(int track, int bar) = 0;
+        virtual void patternDropped(PatternId /*patternId*/, int /*track*/, int /*bar*/) {}
+        virtual void loopRegionChanged(int /*startBar*/, int /*endBar*/) {}
         virtual void zoomRequested(float /*deltaX*/, float /*deltaY*/, juce::Point<int> /*anchorInGrid*/) {}
     };
 
@@ -27,6 +29,9 @@ public:
 
     void setSelectedBlock(BlockId blockId);
     void setPlayheadBar(double bar);
+    int loopStartBar() const noexcept { return loopStartBar_; }
+    int loopEndBar() const noexcept { return loopEndBar_; }
+    void setLoopRegion(int startBar, int endBar);
 
     void setZoom(float zoomX, float zoomY);
     float zoomX() const noexcept { return zoomX_; }
@@ -37,6 +42,7 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
+    void mouseMove(const juce::MouseEvent& e) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
@@ -44,11 +50,22 @@ public:
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     void mouseMagnify(const juce::MouseEvent& e, float scaleFactor) override;
 
+    // DragAndDropTarget
+    bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+    void itemDragEnter(const SourceDetails& dragSourceDetails) override;
+    void itemDragMove(const SourceDetails& dragSourceDetails) override;
+    void itemDragExit(const SourceDetails& dragSourceDetails) override;
+    void itemDropped(const SourceDetails& dragSourceDetails) override;
+
     static constexpr int kRulerHeight = 28;
     static constexpr int kDefaultTrackHeight = 44;
     static constexpr int kDefaultBarWidth = 64;
     static constexpr int kTrackHeight = kDefaultTrackHeight;
     static constexpr int kBarWidth = kDefaultBarWidth;
+
+    std::pair<int, int> pointToTrackAndBar(juce::Point<int> pt) const;
+
+    static juce::Colour patternColour(PatternId id);
 
 private:
     struct DragState
@@ -62,9 +79,7 @@ private:
     };
 
     juce::Rectangle<int> blockBounds(int track, int bar, int lengthBars) const;
-    std::pair<int, int> pointToTrackAndBar(juce::Point<int> pt) const;
     const PatternBlock* findBlockAt(juce::Point<int> pt) const;
-    juce::Colour patternColour(PatternId id) const;
 
     const Song& song_;
     Listener& listener_;
@@ -72,11 +87,30 @@ private:
     BlockId selectedBlock_;
     double playheadBar_ = -1.0;
     DragState drag_;
+    int dragHoverTrack_ = -1;
+    int dragHoverBar_ = -1;
+    PatternId dragHoverPatternId_;
 
     float zoomX_ = 1.0f;
     float zoomY_ = 1.0f;
     int barWidth_ = kDefaultBarWidth;
     int trackHeight_ = kDefaultTrackHeight;
+
+    enum class RulerDragMode
+    {
+        None,
+        SetRegion,
+        MoveRegion,
+        ResizeStart,
+        ResizeEnd
+    };
+
+    int loopStartBar_ = 0;
+    int loopEndBar_ = 4;
+    RulerDragMode rulerDragMode_ = RulerDragMode::None;
+    int rulerDragAnchorBar_ = 0;
+    int rulerDragOriginalStart_ = 0;
+    int rulerDragOriginalEnd_ = 4;
 };
 
 } // namespace trami

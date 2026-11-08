@@ -37,13 +37,25 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     browserToggle_.setToggleState(showBrowser_, juce::dontSendNotification);
     browserToggle_.onClick = [this]() {
         showBrowser_ = browserToggle_.getToggleState();
-        browserPanel_->setVisible(showBrowser_);
+        if (browserPanel_ != nullptr)
+            browserPanel_->setVisible(showBrowser_);
         resized();
     };
     addAndMakeVisible(browserToggle_);
 
     patternTitle_.setFont(Typography::bold(15.0f));
     patternTitle_.setColour(juce::Label::textColourId, Palette::text);
+    patternTitle_.setEditable(false, true, false);
+    patternTitle_.setTooltip("Double-click to rename pattern");
+    patternTitle_.onTextChange = [this]() {
+        const juce::String newName = patternTitle_.getText().trim();
+        if (newName.isNotEmpty())
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+            song_.renamePattern(currentPattern_, newName.toStdString());
+        }
+    };
     addAndMakeVisible(patternTitle_);
 
     lengthCombo_.addItem("1 Bar", 1);
@@ -52,61 +64,43 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     lengthCombo_.addItem("8 Bars", 8);
     lengthCombo_.onChange = [this]() {
         const int bars = lengthCombo_.getSelectedId();
-        if (bars > 0 && song_.setPatternLength(currentPattern_, bars))
+        if (bars > 0)
         {
-            republish();
-            resized();
+            if (onPushUndo_)
+                onPushUndo_();
+            if (song_.setPatternLength(currentPattern_, bars))
+            {
+                republish();
+                resized();
+            }
         }
     };
     addAndMakeVisible(lengthCombo_);
 
-    sampleCombo_.onChange = [this]() {
-        const int idx = sampleCombo_.getSelectedId();
-        if (idx > 0 && idx <= static_cast<int>(song_.samples().size()))
-            activeSample_ = song_.samples()[static_cast<std::size_t>(idx - 1)].id;
+    // Raster Size Selector
+    rasterLabel_.setFont(Typography::bold(12.0f));
+    rasterLabel_.setColour(juce::Label::textColourId, Palette::textDim);
+    rasterLabel_.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(rasterLabel_);
+
+    rasterCombo_.addItem("1 Bar", 32);
+    rasterCombo_.addItem("1/2", 16);
+    rasterCombo_.addItem("1/4", 8);
+    rasterCombo_.addItem("1/8", 4);
+    rasterCombo_.addItem("1/16", 2);
+    rasterCombo_.addItem("1/32", 1);
+    rasterCombo_.setSelectedId(2, juce::dontSendNotification); // Default 1/16
+    rasterCombo_.onChange = [this]() {
+        const int steps = rasterCombo_.getSelectedId();
+        if (steps > 0 && grid_ != nullptr)
+            grid_->setRasterSteps(steps);
     };
-    addAndMakeVisible(sampleCombo_);
+    rasterCombo_.setTooltip("Grid Snap Resolution (1 to 1/32)");
+    addAndMakeVisible(rasterCombo_);
 
-    playButton_.onClick = [this]() {
-        auto& seq = engine_.sequencer();
-        seq.requestPlaying(!seq.isPlaying());
-    };
-    addAndMakeVisible(playButton_);
-
-    recordButton_.setActiveColour(juce::Colour(0xffe53935));
-    recordButton_.onClick = [this]() { toggleRecording(); };
-    addAndMakeVisible(recordButton_);
-
-    rewindButton_.onClick = [this]() { engine_.sequencer().requestRewind(); };
-    addAndMakeVisible(rewindButton_);
-
-    metroToggle_.setClickingTogglesState(true);
-    metroToggle_.onClick = [this]() { engine_.sequencer().setMetronomeEnabled(metroToggle_.getToggleState()); };
-    addAndMakeVisible(metroToggle_);
-
-    swingToggle_.setClickingTogglesState(true);
-    swingToggle_.onClick = [this]() {
-        song_.setSwing(swingToggle_.getToggleState() ? 0.5 : 0.0);
-        republish();
-    };
-    addAndMakeVisible(swingToggle_);
-
-    tempoLabel_.setFont(Typography::bold(13.5f));
-    tempoLabel_.setColour(juce::Label::textColourId, Palette::text);
-    tempoLabel_.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(tempoLabel_);
-
-    tempoDown_.onClick = [this]() {
-        song_.setBpm(song_.bpm() - 1.0);
-        republish();
-    };
-    addAndMakeVisible(tempoDown_);
-
-    tempoUp_.onClick = [this]() {
-        song_.setBpm(song_.bpm() + 1.0);
-        republish();
-    };
-    addAndMakeVisible(tempoUp_);
+    // Add Track Button
+    addTrackButton_.onClick = [this]() { addTrack(); };
+    addAndMakeVisible(addTrackButton_);
 
     // Zoom controls
     zoomOutButton_.setTooltip("Zoom Out Time (Cmd -)");
@@ -135,19 +129,36 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         updateSampleSelector();
         republish();
     });
+    browserPanel_->setOnAddToNewTrack([this](const juce::String& filePath, SampleKind kind) {
+        importAndAssignToTrack(filePath, -1, 0, false, kind);
+    });
     addAndMakeVisible(browserPanel_.get());
 
     // Grid & Track headers
     trackHeaders_ = std::make_unique<TrackHeaderList>(song_, currentPattern_, [this](int track) {
-        if (const Pattern* p = song_.findPattern(currentPattern_))
+        if (const auto* pat = song_.findPattern(currentPattern_))
         {
-            if (track >= 0 && track < kTracksPerPattern)
+            if (track >= 0 && track < static_cast<int>(pat->tracks.size()))
             {
-                const auto& trk = p->tracks[static_cast<std::size_t>(track)];
+                const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
                 engine_.sequencer().setTrackMix(track, trk.mix.volume, trk.mix.pan, trk.muted, trk.solo);
             }
         }
         publishSnapshotQuick();
+    });
+    trackHeaders_->setOnAddTrack([this]() { addTrack(); });
+    trackHeaders_->setOnTrackTypeChanged([this](int track, SampleKind newKind) {
+        setTrackKind(track, newKind);
+    });
+    trackHeaders_->setOnTrackRenamed([this](int, const std::string&) {
+        if (onPushUndo_)
+            onPushUndo_();
+    });
+    trackHeaders_->setOnDuplicateTrack([this](int track) {
+        duplicateTrack(track);
+    });
+    trackHeaders_->setOnDeleteTrack([this](int track) {
+        deleteTrack(track);
     });
     trackHeaders_->setOnTrackSelected([this](int track, SampleId sampleId) {
         if (sampleId.isValid())
@@ -157,9 +168,15 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         }
         else if (activeSample_.isValid())
         {
-            song_.setPatternTrackSample(currentPattern_, track, activeSample_);
-            trackHeaders_->updateFromModel();
-            republish();
+            const auto* pat = song_.findPattern(currentPattern_);
+            if (pat != nullptr && track >= 0 && track < static_cast<int>(pat->tracks.size()))
+            {
+                if (onPushUndo_)
+                    onPushUndo_();
+                song_.setPatternTrackSample(currentPattern_, track, activeSample_);
+                trackHeaders_->updateFromModel();
+                republish();
+            }
         }
     });
     trackHeaders_->setOnFileDropped([this](const juce::String& filePath, int track) {
@@ -200,6 +217,9 @@ PatternView::~PatternView()
 void PatternView::setPattern(PatternId patternId)
 {
     currentPattern_ = patternId;
+    const auto* pat = song_.findPattern(patternId);
+    loopStartStep_ = 0;
+    loopEndStep_ = pat != nullptr ? pat->lengthSteps() : 16;
     trackHeaders_->setPattern(patternId);
     grid_->setPattern(patternId);
     updateLengthSelector();
@@ -209,15 +229,114 @@ void PatternView::setPattern(PatternId patternId)
     resized();
 }
 
+void PatternView::loopRegionChanged(int startStep, int endStep)
+{
+    loopStartStep_ = startStep;
+    loopEndStep_ = endStep;
+    republish();
+}
+
+void PatternView::updateTrackHeaders()
+{
+    if (trackHeaders_ != nullptr)
+    {
+        trackHeaders_->setPattern(currentPattern_);
+        trackHeaders_->updateFromModel();
+    }
+    if (grid_ != nullptr)
+    {
+        grid_->setPattern(currentPattern_);
+        grid_->repaint();
+    }
+}
+
+void PatternView::addTrack()
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.addTrackToPattern(currentPattern_, activeSample_);
+    trackHeaders_->updateFromModel();
+    republish();
+    resized();
+}
+
+void PatternView::duplicateTrack(int track)
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (song_.duplicateTrackInPattern(currentPattern_, track) >= 0)
+    {
+        trackHeaders_->updateFromModel();
+        republish();
+        resized();
+        grid_->repaint();
+    }
+}
+
+void PatternView::deleteTrack(int track)
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (song_.removeTrackFromPattern(currentPattern_, track))
+    {
+        trackHeaders_->updateFromModel();
+        republish();
+        resized();
+        grid_->repaint();
+    }
+}
+
+void PatternView::duplicateCurrentPattern()
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (auto newId = song_.duplicatePattern(currentPattern_))
+    {
+        setPattern(*newId);
+    }
+}
+
+void PatternView::deleteCurrentPattern()
+{
+    if (song_.patterns().size() <= 1)
+        return;
+
+    if (onPushUndo_)
+        onPushUndo_();
+
+    const auto oldId = currentPattern_;
+    song_.removePattern(oldId);
+    if (!song_.patterns().empty())
+        setPattern(song_.patterns().front().id);
+}
+
+void PatternView::setTrackKind(int trackIndex, SampleKind newKind)
+{
+    if (onPushUndo_)
+        onPushUndo_();
+
+    song_.setPatternTrackKind(currentPattern_, trackIndex, newKind);
+
+    updateSampleSelector();
+    trackHeaders_->updateFromModel();
+    republish();
+    grid_->repaint();
+}
+
+void PatternView::toggleCurrentTrackType()
+{
+}
+
 void PatternView::syncAllTrackMixes()
 {
-    if (const Pattern* p = song_.findPattern(currentPattern_))
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat == nullptr)
+        return;
+
+    for (std::size_t t = 0; t < pat->tracks.size() && t < PlaybackSnapshot::kMaxTrackMixes; ++t)
     {
-        for (int t = 0; t < kTracksPerPattern; ++t)
-        {
-            const auto& trk = p->tracks[static_cast<std::size_t>(t)];
-            engine_.sequencer().setTrackMix(t, trk.mix.volume, trk.mix.pan, trk.muted, trk.solo);
-        }
+        const auto& trk = pat->tracks[t];
+        engine_.sequencer().setTrackMix(static_cast<int>(t), trk.mix.volume, trk.mix.pan, trk.muted, trk.solo);
     }
 }
 
@@ -225,7 +344,9 @@ void PatternView::publishSnapshotQuick()
 {
     if (activeBank_.empty() && !song_.samples().empty())
         return;
-    engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, activeBank_, engine_.sampleRate()));
+    const auto rawBank = stretchCache_.getRawBank();
+    engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, activeBank_, engine_.sampleRate(),
+                                                 loopStartStep_, loopEndStep_, &rawBank));
 }
 
 void PatternView::updateLengthSelector()
@@ -240,34 +361,19 @@ void PatternView::updateLengthSelector()
 
 void PatternView::updateSampleSelector()
 {
-    sampleCombo_.clear(juce::dontSendNotification);
-    int selectedId = 1;
-    int idx = 1;
-
-    for (const auto& sample : song_.samples())
-    {
-        const juce::String tag = (sample.kind == SampleKind::Loop) ? "[L] " : "[1] ";
-        sampleCombo_.addItem(tag + sample.name, idx);
-        if (sample.id == activeSample_)
-            selectedId = idx;
-        ++idx;
-    }
-
-    if (!song_.samples().empty())
-        sampleCombo_.setSelectedId(selectedId, juce::dontSendNotification);
+    if (!activeSample_.isValid() && !song_.samples().empty())
+        activeSample_ = song_.samples().front().id;
 }
 
 void PatternView::republish()
 {
-    tempoLabel_.setText(juce::String(song_.bpm(), 0) + " BPM", juce::dontSendNotification);
-    swingToggle_.setToggleState(song_.swing() > 0.0, juce::dontSendNotification);
-    metroToggle_.setToggleState(engine_.sequencer().isMetronomeEnabled(), juce::dontSendNotification);
-
     stretchCache_.requestUpdateAsync(song_, engine_.sampleRate(), [this](SampleBank newBank) {
         juce::MessageManager::callAsync([this, bank = std::move(newBank)]() mutable {
             activeBank_ = std::move(bank);
             syncAllTrackMixes();
-            engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, activeBank_, engine_.sampleRate()));
+            const auto rawBank = stretchCache_.getRawBank();
+            engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, activeBank_, engine_.sampleRate(),
+                                                         loopStartStep_, loopEndStep_, &rawBank));
             if (trackHeaders_ != nullptr)
                 trackHeaders_->updateFromModel();
             if (grid_ != nullptr)
@@ -287,9 +393,6 @@ void PatternView::toggleRecording()
         const int countInSamples = static_cast<int>(timing.samplesPerBar());
 
         seq.setMetronomeEnabled(true);
-        recordButton_.setLabel("Stop");
-        recordButton_.setToggleState(true, juce::dontSendNotification);
-
         rec.start(countInSamples, engine_.inputLatencySamples(), [this](AudioData recorded) {
             juce::MessageManager::callAsync([this, audio = std::move(recorded)]() mutable {
                 onRecordFinished(std::move(audio));
@@ -301,15 +404,13 @@ void PatternView::toggleRecording()
     {
         rec.stop();
         seq.requestPlaying(false);
-        recordButton_.setLabel("Rec");
-        recordButton_.setToggleState(false, juce::dontSendNotification);
     }
 }
 
 void PatternView::onRecordFinished(AudioData recorded)
 {
-    recordButton_.setLabel("Rec");
-    recordButton_.setToggleState(false, juce::dontSendNotification);
+    if (onPushUndo_)
+        onPushUndo_();
 
     Sample s;
     s.name = ("Take " + juce::String(song_.samples().size() + 1)).toStdString();
@@ -320,9 +421,12 @@ void PatternView::onRecordFinished(AudioData recorded)
     stretchCache_.setRawAudio(id, std::make_shared<const AudioData>(std::move(recorded)));
     activeSample_ = id;
 
-    song_.placeClip(currentPattern_, 0, id, 0);
+    const int trackIdx = song_.addTrackToPattern(currentPattern_, id);
+    song_.placeClip(currentPattern_, trackIdx, id, 0);
+
     updateSampleSelector();
     republish();
+    resized();
 }
 
 void PatternView::clipClicked(ClipId)
@@ -331,66 +435,54 @@ void PatternView::clipClicked(ClipId)
 
 void PatternView::clipMoved(ClipId clipId, int newTrack, int newStep)
 {
-    if (song_.moveClip(currentPattern_, clipId, newTrack, newStep))
-    {
-        if (trackHeaders_ != nullptr)
-            trackHeaders_->updateFromModel();
-        republish();
-        grid_->repaint();
-    }
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (!pat || newTrack < 0 || newTrack >= static_cast<int>(pat->tracks.size()))
+        return;
+
+    if (onPushUndo_)
+        onPushUndo_();
+
+    song_.moveClip(currentPattern_, clipId, newTrack, newStep);
+    republish();
+    grid_->repaint();
 }
 
 void PatternView::clipResized(ClipId clipId, int newStartStep, int newLengthSteps, int newOffsetSteps)
 {
-    if (song_.resizeClip(currentPattern_, clipId, newStartStep, newLengthSteps, newOffsetSteps))
-    {
-        republish();
-        grid_->repaint();
-    }
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.resizeClip(currentPattern_, clipId, newStartStep, newLengthSteps, newOffsetSteps);
+    republish();
+    grid_->repaint();
 }
 
 void PatternView::clipDeleteRequested(ClipId clipId)
 {
-    if (song_.removeClip(currentPattern_, clipId))
-    {
-        if (trackHeaders_ != nullptr)
-            trackHeaders_->updateFromModel();
-        republish();
-        grid_->repaint();
-    }
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.removeClip(currentPattern_, clipId);
+    republish();
+    grid_->repaint();
 }
 
 void PatternView::gridCellClicked(int track, int step)
 {
-    const Pattern* p = song_.findPattern(currentPattern_);
-    SampleId sampleToUse = activeSample_;
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (!pat || track < 0 || track >= static_cast<int>(pat->tracks.size()))
+        return;
 
-    if (p != nullptr && track >= 0 && track < kTracksPerPattern)
-    {
-        const auto& patTrack = p->tracks[static_cast<std::size_t>(track)];
-        if (patTrack.sampleId.isValid() && song_.findSample(patTrack.sampleId) != nullptr)
-            sampleToUse = patTrack.sampleId;
-        else if (!patTrack.clips.empty() && song_.findSample(patTrack.clips.front().sampleId) != nullptr)
-            sampleToUse = patTrack.clips.front().sampleId;
-    }
+    SampleId sid = pat->tracks[static_cast<std::size_t>(track)].sampleId;
+    if (!sid.isValid())
+        sid = activeSample_;
+    if (!sid.isValid())
+        return;
 
-    if (!sampleToUse.isValid())
-    {
-        if (!song_.samples().empty())
-            sampleToUse = song_.samples().front().id;
-        else
-            return;
-    }
+    if (onPushUndo_)
+        onPushUndo_();
 
-    if (song_.placeClip(currentPattern_, track, sampleToUse, step))
-    {
-        activeSample_ = sampleToUse;
-        updateSampleSelector();
-        if (trackHeaders_ != nullptr)
-            trackHeaders_->updateFromModel();
-        republish();
-        grid_->repaint();
-    }
+    song_.placeClip(currentPattern_, track, sid, step);
+    republish();
+    grid_->repaint();
 }
 
 void PatternView::fileDroppedOnGrid(const juce::String& filePath, int track, int step)
@@ -405,133 +497,85 @@ void PatternView::fileDroppedOnTrack(const juce::String& filePath, int track)
 
 void PatternView::handleFileDrop(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep)
 {
+    importAndAssignToTrack(filePath, targetTrack, step, hasSpecificStep);
+}
+
+void PatternView::importAndAssignToTrack(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep,
+                                        std::optional<SampleKind> explicitKind)
+{
     const std::filesystem::path p(filePath.toStdString());
     if (!importer_.isSupportedFormat(p))
         return;
 
-    const Pattern* pat = song_.findPattern(currentPattern_);
-    if (pat == nullptr || targetTrack < 0 || targetTrack >= kTracksPerPattern)
+    const juce::String lowerName = filePath.toLowerCase();
+    SampleKind kind = explicitKind.has_value()
+                          ? *explicitKind
+                          : (lowerName.contains("loop") ? SampleKind::Loop : SampleKind::OneShot);
+    int bars = 1;
+    if (lowerName.contains("2bar") || lowerName.contains("2_bar") || lowerName.contains("2 bar"))
+        bars = 2;
+    else if (lowerName.contains("4bar") || lowerName.contains("4_bar") || lowerName.contains("4 bar"))
+        bars = 4;
+
+    auto res = importer_.importFile(p, engine_.sampleRate(), kind, bars);
+    if (!res.has_value())
         return;
 
-    const auto& trackObj = pat->tracks[static_cast<std::size_t>(targetTrack)];
-    const bool isOccupied = trackObj.sampleId.isValid() || !trackObj.clips.empty();
+    if (onPushUndo_)
+        onPushUndo_();
 
-    if (!isOccupied)
+    const auto sampleId = song_.addSample(std::move(res->sample));
+    stretchCache_.setRawAudio(sampleId, std::make_shared<const AudioData>(std::move(res->audio)));
+    activeSample_ = sampleId;
+
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat != nullptr && targetTrack >= 0 && targetTrack < static_cast<int>(pat->tracks.size()))
     {
-        importAndAssignToTrack(filePath, targetTrack, step, hasSpecificStep);
-        return;
+        song_.replaceTrackSample(currentPattern_, targetTrack, sampleId);
+        if (hasSpecificStep)
+            song_.placeClip(currentPattern_, targetTrack, sampleId, step);
     }
-
-    // Target track is occupied: find next empty track (if any)
-    int nextEmptyTrack = -1;
-    for (int i = 1; i < kTracksPerPattern; ++i)
-    {
-        const int candidate = (targetTrack + i) % kTracksPerPattern;
-        const auto& candTrack = pat->tracks[static_cast<std::size_t>(candidate)];
-        if (!candTrack.sampleId.isValid() && candTrack.clips.empty())
-        {
-            nextEmptyTrack = candidate;
-            break;
-        }
-    }
-
-    auto* alert = new juce::AlertWindow(
-        "Track Occupied",
-        "Track " + juce::String(targetTrack + 1) + " is already occupied.\nWhat would you like to do with " +
-            juce::File(filePath).getFileName() + "?",
-        juce::AlertWindow::QuestionIcon);
-
-    if (nextEmptyTrack >= 0)
-        alert->addButton("Add to Track " + juce::String(nextEmptyTrack + 1) + " (Next Empty)", 1);
     else
-        alert->addButton("No Empty Tracks Available", 0);
-
-    alert->addButton("Replace Sound on Track " + juce::String(targetTrack + 1), 2);
-    alert->addButton("Cancel", 3);
-
-    alert->enterModalState(
-        true,
-        juce::ModalCallbackFunction::create([this, alert, filePath, targetTrack, nextEmptyTrack, step,
-                                             hasSpecificStep](int result) {
-            std::unique_ptr<juce::AlertWindow> keeper(alert);
-            if (result == 1 && nextEmptyTrack >= 0)
-            {
-                importAndAssignToTrack(filePath, nextEmptyTrack, hasSpecificStep ? step : 0, hasSpecificStep);
-            }
-            else if (result == 2)
-            {
-                replaceSoundOnTrack(filePath, targetTrack, step, hasSpecificStep);
-            }
-        }),
-        false);
-}
-
-void PatternView::importAndAssignToTrack(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep)
-{
-    const std::filesystem::path p(filePath.toStdString());
-    if (!importer_.isSupportedFormat(p))
-        return;
-
-    const juce::String lowerName = filePath.toLowerCase();
-    SampleKind kind = lowerName.contains("loop") ? SampleKind::Loop : SampleKind::OneShot;
-    int bars = 1;
-    if (lowerName.contains("2bar") || lowerName.contains("2_bar") || lowerName.contains("2 bar"))
-        bars = 2;
-    else if (lowerName.contains("4bar") || lowerName.contains("4_bar") || lowerName.contains("4 bar"))
-        bars = 4;
-
-    auto res = importer_.importFile(p, engine_.sampleRate(), kind, bars);
-    if (!res.has_value())
-        return;
-
-    const auto sampleId = song_.addSample(std::move(res->sample));
-    stretchCache_.setRawAudio(sampleId, std::make_shared<const AudioData>(std::move(res->audio)));
-    activeSample_ = sampleId;
-
-    song_.setPatternTrackSample(currentPattern_, targetTrack, sampleId);
-    song_.placeClip(currentPattern_, targetTrack, sampleId, hasSpecificStep ? step : 0);
-    updateSampleSelector();
-    if (trackHeaders_ != nullptr)
-        trackHeaders_->updateFromModel();
-    republish();
-    grid_->repaint();
-}
-
-void PatternView::replaceSoundOnTrack(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep)
-{
-    const std::filesystem::path p(filePath.toStdString());
-    if (!importer_.isSupportedFormat(p))
-        return;
-
-    const juce::String lowerName = filePath.toLowerCase();
-    SampleKind kind = lowerName.contains("loop") ? SampleKind::Loop : SampleKind::OneShot;
-    int bars = 1;
-    if (lowerName.contains("2bar") || lowerName.contains("2_bar") || lowerName.contains("2 bar"))
-        bars = 2;
-    else if (lowerName.contains("4bar") || lowerName.contains("4_bar") || lowerName.contains("4 bar"))
-        bars = 4;
-
-    auto res = importer_.importFile(p, engine_.sampleRate(), kind, bars);
-    if (!res.has_value())
-        return;
-
-    const auto sampleId = song_.addSample(std::move(res->sample));
-    stretchCache_.setRawAudio(sampleId, std::make_shared<const AudioData>(std::move(res->audio)));
-    activeSample_ = sampleId;
-
-    song_.replaceTrackSample(currentPattern_, targetTrack, sampleId);
-
-    const Pattern* pat = song_.findPattern(currentPattern_);
-    if (pat != nullptr && pat->tracks[static_cast<std::size_t>(targetTrack)].clips.empty())
     {
-        song_.placeClip(currentPattern_, targetTrack, sampleId, hasSpecificStep ? step : 0);
+        const int newTrack = song_.addTrackToPattern(currentPattern_, sampleId);
+        song_.placeClip(currentPattern_, newTrack, sampleId, hasSpecificStep ? step : 0);
     }
 
     updateSampleSelector();
-    if (trackHeaders_ != nullptr)
-        trackHeaders_->updateFromModel();
+    updateLengthSelector();
+    trackHeaders_->updateFromModel();
     republish();
-    grid_->repaint();
+    resized();
+}
+
+bool PatternView::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (f.endsWithIgnoreCase(".wav") || f.endsWithIgnoreCase(".mp3"))
+            return true;
+    return false;
+}
+
+void PatternView::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*/)
+{
+    for (const auto& f : files)
+        handleFileDrop(f, -1, 0, false);
+}
+
+bool PatternView::isInterestedInDragSource(const SourceDetails& dragSourceDetails)
+{
+    if (dragSourceDetails.description.isString())
+    {
+        const juce::String s = dragSourceDetails.description.toString();
+        return s.endsWithIgnoreCase(".wav") || s.endsWithIgnoreCase(".mp3");
+    }
+    return false;
+}
+
+void PatternView::itemDropped(const SourceDetails& dragSourceDetails)
+{
+    if (dragSourceDetails.description.isString())
+        handleFileDrop(dragSourceDetails.description.toString(), -1, 0, false);
 }
 
 void PatternView::zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid)
@@ -542,112 +586,115 @@ void PatternView::zoomRequested(float deltaX, float deltaY, juce::Point<int> anc
 void PatternView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
 {
     const float newZoomX = std::clamp(targetZoomX, 0.25f, 4.0f);
-    const float newZoomY = std::clamp(targetZoomY, 0.65f, 2.5f);
+    const float newZoomY = std::clamp(targetZoomY, 0.5f, 2.5f);
 
     if (std::abs(newZoomX - zoomX_) < 0.001f && std::abs(newZoomY - zoomY_) < 0.001f)
         return;
 
-    const float oldZoomX = zoomX_;
-    const float oldZoomY = zoomY_;
-
-    const int screenAnchorX = anchorInGrid.x - gridViewport_->getViewPositionX();
-    const int screenAnchorY = anchorInGrid.y - gridViewport_->getViewPositionY();
+    const double ratioX = static_cast<double>(newZoomX) / static_cast<double>(zoomX_);
+    const int vpX = gridViewport_->getViewPositionX();
+    const int newVpX = juce::roundToInt((vpX + anchorInGrid.x) * ratioX - anchorInGrid.x);
 
     zoomX_ = newZoomX;
     zoomY_ = newZoomY;
 
-    grid_->setZoom(zoomX_, zoomY_);
-    trackHeaders_->setTrackHeight(grid_->trackHeight());
-
-    zoomResetButton_.setButtonText(juce::String(juce::roundToInt(zoomX_ * 100.0f)) + "%");
+    if (grid_ != nullptr)
+        grid_->setZoom(zoomX_, zoomY_);
+    if (trackHeaders_ != nullptr)
+        trackHeaders_->setTrackHeight(grid_->trackHeight());
 
     resized();
 
-    const int newGridX = juce::roundToInt(static_cast<float>(anchorInGrid.x) * (newZoomX / oldZoomX));
-    const int newGridY = juce::roundToInt(static_cast<float>(anchorInGrid.y) * (newZoomY / oldZoomY));
-
-    const int newViewX = std::max(0, newGridX - screenAnchorX);
-    const int newViewY = std::max(0, newGridY - screenAnchorY);
-
-    gridViewport_->setViewPosition(newViewX, newViewY);
-    if (trackHeadersViewport_ != nullptr)
-        trackHeadersViewport_->setViewPosition(0, newViewY);
+    if (gridViewport_ != nullptr)
+        gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
 }
 
 void PatternView::zoomIn()
 {
-    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
-    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
-    applyZoom(zoomX_ * 1.25f, zoomY_, {centerX, centerY});
+    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+    applyZoom(zoomX_ * 1.25f, zoomY_, anchor);
 }
 
 void PatternView::zoomOut()
 {
-    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
-    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
-    applyZoom(zoomX_ / 1.25f, zoomY_, {centerX, centerY});
+    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+    applyZoom(zoomX_ / 1.25f, zoomY_, anchor);
 }
 
 void PatternView::resetZoom()
 {
-    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
-    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
-    applyZoom(1.0f, 1.0f, {centerX, centerY});
+    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+    applyZoom(1.0f, 1.0f, anchor);
 }
 
 void PatternView::trackHeightIn()
 {
-    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
-    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
-    applyZoom(zoomX_, zoomY_ * 1.2f, {centerX, centerY});
+    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+    applyZoom(zoomX_, zoomY_ * 1.2f, anchor);
 }
 
 void PatternView::trackHeightOut()
 {
-    const int centerX = gridViewport_->getViewPositionX() + gridViewport_->getViewWidth() / 2;
-    const int centerY = gridViewport_->getViewPositionY() + gridViewport_->getViewHeight() / 2;
-    applyZoom(zoomX_, zoomY_ / 1.2f, {centerX, centerY});
+    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+    applyZoom(zoomX_, zoomY_ / 1.2f, anchor);
+}
+
+void PatternView::timerCallback()
+{
+    if (engine_.sequencer().isPlaying() && grid_ != nullptr)
+    {
+        const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
+        const double samplesPerStep = timing.samplesPerStep();
+        if (samplesPerStep > 0.0)
+        {
+            const auto* pat = song_.findPattern(currentPattern_);
+            const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+
+            const std::int64_t pos = engine_.sequencer().position();
+            const double currentStep = static_cast<double>(pos) / samplesPerStep;
+            grid_->setPlayheadStep(std::fmod(currentStep, static_cast<double>(totalSteps)));
+        }
+    }
+    else if (grid_ != nullptr)
+    {
+        grid_->setPlayheadStep(-1.0);
+    }
 }
 
 bool PatternView::keyPressed(const juce::KeyPress& key)
 {
-    auto& seq = engine_.sequencer();
-
-    if (key == juce::KeyPress::spaceKey)
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
     {
+        auto& seq = engine_.sequencer();
         seq.requestPlaying(!seq.isPlaying());
         return true;
     }
-    if (key == juce::KeyPress::returnKey)
+
+    if (key.getKeyCode() == juce::KeyPress::returnKey)
     {
-        seq.requestRewind();
+        engine_.sequencer().requestRewind();
         return true;
     }
 
-    const auto mods = key.getModifiers();
-    const bool isCmdOrCtrl = mods.isCommandDown() || mods.isCtrlDown();
-    if (isCmdOrCtrl)
+    if (key.getModifiers().isCommandDown())
     {
-        const auto ch = key.getTextCharacter();
-        const auto code = key.getKeyCode();
-
-        if (ch == '+' || ch == '=' || code == '+' || code == '=' || key.isKeyCode(juce::KeyPress::numberPadAdd))
+        if (key.getKeyCode() == '=' || key.getKeyCode() == '+')
         {
-            if (mods.isShiftDown())
+            if (key.getModifiers().isShiftDown())
                 trackHeightIn();
             else
                 zoomIn();
             return true;
         }
-        if (ch == '-' || code == '-' || key.isKeyCode(juce::KeyPress::numberPadSubtract))
+        if (key.getKeyCode() == '-')
         {
-            if (mods.isShiftDown())
+            if (key.getModifiers().isShiftDown())
                 trackHeightOut();
             else
                 zoomOut();
             return true;
         }
-        if (ch == '0' || code == '0' || key.isKeyCode(juce::KeyPress::numberPad0))
+        if (key.getKeyCode() == '0')
         {
             resetZoom();
             return true;
@@ -657,35 +704,11 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
-void PatternView::timerCallback()
-{
-    auto& seq = engine_.sequencer();
-    const bool isPlaying = seq.isPlaying();
-    playButton_.setIcon(isPlaying ? IconButton::Icon::Stop : IconButton::Icon::Play);
-    playButton_.setLabel(isPlaying ? "Stop" : "Play");
-    playButton_.setToggleState(isPlaying, juce::dontSendNotification);
-
-    const Pattern* p = song_.findPattern(currentPattern_);
-    if (p != nullptr && p->lengthBars > 0)
-    {
-        const Timing timing(song_.bpm(), engine_.sampleRate());
-        const double samplesPerStep = timing.samplesPerStep();
-        const std::int64_t totalSamples = static_cast<std::int64_t>(timing.samplesPerBar() * p->lengthBars);
-
-        if (totalSamples > 0 && samplesPerStep > 0.0)
-        {
-            const std::int64_t pos = seq.position() % totalSamples;
-            const double currentStep = static_cast<double>(pos) / samplesPerStep;
-            grid_->setPlayheadStep(seq.isPlaying() ? currentStep : -1.0);
-        }
-    }
-}
-
 void PatternView::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
-    constexpr int kToolbarHeight = 52;
+    constexpr int kToolbarHeight = 44;
     g.setColour(Palette::surface);
     g.fillRect(0, 0, getWidth(), kToolbarHeight);
     g.setColour(Palette::gridLine);
@@ -694,7 +717,7 @@ void PatternView::paint(juce::Graphics& g)
 
 void PatternView::resized()
 {
-    constexpr int kToolbarHeight = 52;
+    constexpr int kToolbarHeight = 44;
     auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 4);
 
     // Zoom controls on the right
@@ -713,31 +736,20 @@ void PatternView::resized()
     toolbar.removeFromRight(12);
 
     browserToggle_.setBounds(toolbar.removeFromLeft(54));
-    toolbar.removeFromLeft(6);
+    toolbar.removeFromLeft(8);
 
-    patternTitle_.setBounds(toolbar.removeFromLeft(85));
-    toolbar.removeFromLeft(6);
-    lengthCombo_.setBounds(toolbar.removeFromLeft(85));
-    toolbar.removeFromLeft(10);
-
-    sampleCombo_.setBounds(toolbar.removeFromLeft(150));
+    patternTitle_.setBounds(toolbar.removeFromLeft(80));
+    toolbar.removeFromLeft(4);
+    lengthCombo_.setBounds(toolbar.removeFromLeft(75));
     toolbar.removeFromLeft(12);
 
-    rewindButton_.setBounds(toolbar.removeFromLeft(48));
-    toolbar.removeFromLeft(3);
-    playButton_.setBounds(toolbar.removeFromLeft(48));
-    toolbar.removeFromLeft(3);
-    recordButton_.setBounds(toolbar.removeFromLeft(48));
+    // Grid / Raster
+    rasterLabel_.setBounds(toolbar.removeFromLeft(36));
+    toolbar.removeFromLeft(2);
+    rasterCombo_.setBounds(toolbar.removeFromLeft(65));
     toolbar.removeFromLeft(10);
 
-    metroToggle_.setBounds(toolbar.removeFromLeft(48));
-    toolbar.removeFromLeft(3);
-    swingToggle_.setBounds(toolbar.removeFromLeft(48));
-    toolbar.removeFromLeft(12);
-
-    tempoDown_.setBounds(toolbar.removeFromLeft(28));
-    tempoLabel_.setBounds(toolbar.removeFromLeft(68));
-    tempoUp_.setBounds(toolbar.removeFromLeft(28));
+    addTrackButton_.setBounds(toolbar.removeFromLeft(70));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
@@ -762,10 +774,12 @@ void PatternView::resized()
     const int gridW = getWidth() - headerW;
     gridViewport_->setBounds(headerW, contentY, gridW, timelineH);
 
-    const Pattern* p = song_.findPattern(currentPattern_);
-    const int steps = p != nullptr ? p->lengthSteps() : 16;
-    const int neededGridWidth = steps * grid_->stepWidth();
-    const int neededGridHeight = PatternGrid::kRulerHeight + kTracksPerPattern * grid_->trackHeight();
+    const auto* pat = song_.findPattern(currentPattern_);
+    const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
+    const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+
+    const int neededGridWidth = totalSteps * grid_->stepWidth();
+    const int neededGridHeight = PatternGrid::kRulerHeight + (numTracks + 1) * grid_->trackHeight();
 
     grid_->setSize(std::max(gridW, neededGridWidth), std::max(timelineH, neededGridHeight));
     trackHeaders_->setSize(headerW, std::max(timelineH, neededGridHeight));

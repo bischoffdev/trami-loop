@@ -1,0 +1,103 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.platform_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform_name: macOS
+          - os: windows-2022
+            platform_name: Windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Cache JUCE and dependencies downloaded via FetchContent
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-fetchcontent-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-fetchcontent-
+
+      - name: Configure CMake (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DTRAMI_BUILD_TESTS=ON
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -B build -A x64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTRAMI_BUILD_TESTS=ON
+
+      - name: Build Application (Release)
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Run Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
+      # Package artifacts for release / download
+      - name: Stage Artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts
+          APP_PATH=$(find build -name "trami-loop.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            echo "Packaging $APP_PATH..."
+            ditto -c -k --keepParent "$APP_PATH" artifacts/trami-loop-macOS.zip
+          else
+            echo "Error: trami-loop.app not found"
+            exit 1
+          fi
+
+      - name: Stage Artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          EXE_PATH=$(find build -name "trami-loop.exe" -type f | head -n 1)
+          if [ -n "$EXE_PATH" ]; then
+            echo "Packaging $EXE_PATH..."
+            cp "$EXE_PATH" artifacts/
+            cd artifacts && 7z a trami-loop-Windows.zip trami-loop.exe && rm trami-loop.exe && cd ..
+          else
+            echo "Error: trami-loop.exe not found"
+            exit 1
+          fi
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trami-loop-${{ matrix.platform_name }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Add to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

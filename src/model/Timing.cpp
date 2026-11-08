@@ -24,8 +24,10 @@ double Timing::samplesPerBar() const noexcept
 
 std::int64_t Timing::stepToSample(std::int64_t step) const noexcept
 {
-    const bool isOffbeat = (step % 2) != 0;
-    const double swingOffset = isOffbeat ? swing_ * samplesPerStep() * 0.5 : 0.0;
+    // In 1/32 grid, 1 beat = 8 steps, 1 16th note = 2 steps.
+    // 16th-note offbeats occur when (step / 2) is odd.
+    const bool is16thOffbeat = ((step / 2) % 2) != 0;
+    const double swingOffset = is16thOffbeat ? swing_ * samplesPerStep() * 1.0 : 0.0;
     return static_cast<std::int64_t>(std::llround(static_cast<double>(step) * samplesPerStep() + swingOffset));
 }
 

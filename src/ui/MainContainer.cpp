@@ -36,18 +36,62 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
     settingsButton_.onClick = [this]() { showSettingsDialog(); };
     addAndMakeVisible(settingsButton_);
 
+    PatternId initialPattern = song_.patterns().empty() ? PatternId{1} : song_.patterns().front().id;
+
+    // Pattern List Panel on the left (persistent in both views)
+    patternListPanel_ = std::make_unique<PatternListPanel>(
+        song_, initialPattern,
+        [this](PatternId patId) {
+            if (patternView_ != nullptr)
+                patternView_->setPattern(patId);
+        },
+        [this]() {
+            pushUndoState();
+            if (patternView_ != nullptr)
+                patternView_->updateTrackHeaders();
+            if (arrangerView_ != nullptr)
+                arrangerView_->updatePatternList();
+        });
+    addAndMakeVisible(patternListPanel_.get());
+
+    // Pattern View
     patternView_ = std::make_unique<PatternView>(song_, engine_, stretchCache_);
+    patternView_->setOnPushUndo([this]() { pushUndoState(); });
     addAndMakeVisible(patternView_.get());
 
+    // Arranger View
     arrangerView_ = std::make_unique<ArrangerView>(song_, engine_, stretchCache_, [this](PatternId patId) {
         editPattern(patId);
     });
+    arrangerView_->setOnPushUndo([this]() { pushUndoState(); });
     addChildComponent(arrangerView_.get());
+
+    // Bottom Transport Bar
+    transportBar_ = std::make_unique<TransportBar>(
+        song_, engine_,
+        [this]() {
+            if (currentMode_ == ViewMode::Pattern && patternView_ != nullptr)
+                patternView_->republish();
+            else if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
+                arrangerView_->republish();
+        },
+        [this]() {
+            if (currentMode_ == ViewMode::Pattern && patternView_ != nullptr)
+                patternView_->toggleRecording();
+            else if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
+                arrangerView_->toggleRecording();
+        });
+    addAndMakeVisible(transportBar_.get());
 
     setViewMode(ViewMode::Pattern);
 }
 
 MainContainer::~MainContainer() = default;
+
+void MainContainer::pushUndoState()
+{
+    history_.pushState(song_);
+}
 
 void MainContainer::setViewMode(ViewMode mode)
 {
@@ -74,11 +118,16 @@ void MainContainer::setViewMode(ViewMode mode)
             arrangerView_->grabKeyboardFocus();
     }
 
+    if (patternListPanel_ != nullptr)
+        patternListPanel_->updateFromModel();
+
     resized();
 }
 
 void MainContainer::editPattern(PatternId patternId)
 {
+    if (patternListPanel_ != nullptr)
+        patternListPanel_->setActivePattern(patternId);
     patternView_->setPattern(patternId);
     setViewMode(ViewMode::Pattern);
 }
@@ -183,12 +232,20 @@ void MainContainer::performRedo()
 
 void MainContainer::updateAllViews()
 {
+    if (patternListPanel_ != nullptr)
+    {
+        if (!song_.patterns().empty())
+            patternListPanel_->setActivePattern(song_.patterns().front().id);
+        patternListPanel_->updateFromModel();
+    }
+
     if (patternView_ != nullptr)
     {
         if (!song_.patterns().empty())
             patternView_->setPattern(song_.patterns().front().id);
         patternView_->updateLengthSelector();
         patternView_->updateSampleSelector();
+        patternView_->updateTrackHeaders();
         patternView_->republish();
     }
 
@@ -196,6 +253,11 @@ void MainContainer::updateAllViews()
     {
         arrangerView_->updatePatternList();
         arrangerView_->republish();
+    }
+
+    if (transportBar_ != nullptr)
+    {
+        transportBar_->updateDisplay();
     }
 }
 
@@ -243,7 +305,7 @@ void MainContainer::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
-    constexpr int kTopBarHeight = 50;
+    constexpr int kTopBarHeight = 44;
     g.setColour(Palette::surface.darker(0.3f));
     g.fillRect(0, 0, getWidth(), kTopBarHeight);
     g.setColour(Palette::gridLine);
@@ -256,7 +318,10 @@ void MainContainer::paint(juce::Graphics& g)
 
 void MainContainer::resized()
 {
-    constexpr int kTopBarHeight = 50;
+    constexpr int kTopBarHeight = 44;
+    constexpr int kBottomBarHeight = 44;
+    constexpr int kPatternListWidth = 210;
+
     auto topArea = juce::Rectangle<int>(0, 0, getWidth(), kTopBarHeight).reduced(8, 4);
     topArea.removeFromLeft(125);
 
@@ -279,11 +344,22 @@ void MainContainer::resized()
     topArea.removeFromLeft(6);
     settingsButton_.setBounds(topArea.removeFromLeft(48));
 
-    const auto contentBounds = juce::Rectangle<int>(0, kTopBarHeight, getWidth(), getHeight() - kTopBarHeight);
+    // Bottom transport bar
+    if (transportBar_ != nullptr)
+        transportBar_->setBounds(0, getHeight() - kBottomBarHeight, getWidth(), kBottomBarHeight);
+
+    // Main workspace area
+    const int contentY = kTopBarHeight;
+    const int contentH = getHeight() - kTopBarHeight - kBottomBarHeight;
+
+    if (patternListPanel_ != nullptr)
+        patternListPanel_->setBounds(0, contentY, kPatternListWidth, contentH);
+
+    const auto viewBounds = juce::Rectangle<int>(kPatternListWidth, contentY, getWidth() - kPatternListWidth, contentH);
     if (patternView_ != nullptr)
-        patternView_->setBounds(contentBounds);
+        patternView_->setBounds(viewBounds);
     if (arrangerView_ != nullptr)
-        arrangerView_->setBounds(contentBounds);
+        arrangerView_->setBounds(viewBounds);
 }
 
 } // namespace trami
