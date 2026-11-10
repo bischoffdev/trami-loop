@@ -2,6 +2,7 @@
 
 #include "model/Ids.h"
 #include "model/Song.h"
+#include "ui/DAWTrackControls.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -23,6 +24,7 @@ public:
     using TrackTypeChangedCallback = std::function<void(int track, SampleKind newKind)>;
     using DuplicateTrackCallback = std::function<void(int track)>;
     using DeleteTrackCallback = std::function<void(int track)>;
+    using MoveTrackCallback = std::function<void(int from, int to)>;
     using TrackRenamedCallback = std::function<void(int track, const std::string& name)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
@@ -38,14 +40,20 @@ public:
     void setOnTrackTypeChanged(TrackTypeChangedCallback cb) { onTrackTypeChanged_ = std::move(cb); }
     void setOnDuplicateTrack(DuplicateTrackCallback cb) { onDuplicateTrack_ = std::move(cb); }
     void setOnDeleteTrack(DeleteTrackCallback cb) { onDeleteTrack_ = std::move(cb); }
+    void setOnMoveTrack(MoveTrackCallback cb) { onMoveTrack_ = std::move(cb); }
     void setOnTrackRenamed(TrackRenamedCallback cb) { onTrackRenamed_ = std::move(cb); }
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
+    std::function<void(const juce::MouseEvent&)> onMarqueeStart;
+    std::function<void(const juce::MouseEvent&)> onMarqueeDrag;
+    std::function<void(const juce::MouseEvent&)> onMarqueeEnd;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
 
     // FileDragAndDropTarget
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
@@ -68,8 +76,10 @@ private:
     {
         std::unique_ptr<juce::Label> nameLabel;
         std::unique_ptr<juce::TextButton> typeButton;
-        std::unique_ptr<juce::TextButton> muteButton;
-        std::unique_ptr<juce::TextButton> soloButton;
+        std::unique_ptr<juce::TextButton> deleteButton;
+        std::unique_ptr<DAWMuteButton> muteButton;
+        std::unique_ptr<DAWSoloButton> soloButton;
+        std::unique_ptr<DAWArmButton> armButton;
         std::unique_ptr<juce::Label> volLabel;
         std::unique_ptr<juce::Slider> volumeSlider;
         std::unique_ptr<juce::Label> panLabel;
@@ -87,9 +97,11 @@ private:
     TrackTypeChangedCallback onTrackTypeChanged_;
     DuplicateTrackCallback onDuplicateTrack_;
     DeleteTrackCallback onDeleteTrack_;
+    MoveTrackCallback onMoveTrack_;
     TrackRenamedCallback onTrackRenamed_;
     int trackHeight_ = 36;
     int dragHoverTrack_ = -1;
+    bool isReorderDrag_ = false;
 
     std::vector<TrackControls> controls_;
     std::unique_ptr<juce::TextButton> addTrackButton_;

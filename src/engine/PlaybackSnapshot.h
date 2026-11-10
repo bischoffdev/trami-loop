@@ -19,6 +19,9 @@ struct PlaybackEvent
     std::int64_t audioOffset = 0;
     std::int64_t maxFrames = -1;
     int track = -1;
+    std::int64_t fadeInSamples = 0;
+    std::int64_t fadeOutSamples = 0;
+    std::uint32_t clipId = 0;
 };
 
 struct TrackMixSnapshot

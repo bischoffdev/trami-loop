@@ -8,6 +8,8 @@ namespace trami
 IconButton::IconButton(const juce::String& buttonName, Icon icon, const juce::String& label)
     : juce::Button(buttonName), icon_(icon), label_(label)
 {
+    if (label.isEmpty() && getTooltip().isEmpty() && !buttonName.isEmpty())
+        setTooltip(buttonName);
 }
 
 void IconButton::setIcon(Icon icon)
@@ -24,6 +26,8 @@ void IconButton::setLabel(const juce::String& label)
     if (label_ != label)
     {
         label_ = label;
+        if (label_.isEmpty() && getTooltip().isEmpty() && !getName().isEmpty())
+            setTooltip(getName());
         repaint();
     }
 }
@@ -67,10 +71,10 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     }
     else
     {
-        bg = Palette::surface;
-        border = Palette::gridLine.brighter(0.08f);
-        iconCol = Palette::textDim.brighter(0.3f);
-        textCol = Palette::textDim.brighter(0.35f);
+        bg = Palette::surface.brighter(0.04f);
+        border = Palette::gridLine.brighter(0.18f);
+        iconCol = Palette::text.withAlpha(0.85f);
+        textCol = Palette::text;
     }
 
     // Standard DAW colors for key transport icons
@@ -109,11 +113,24 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     g.setColour(border);
     g.drawRoundedRectangle(bounds, 5.0f, isOn ? 1.5f : 1.0f);
 
-    // Layout: top is icon, bottom is text label underneath
+    const float totalW = bounds.getWidth();
     const float totalH = bounds.getHeight();
-    const float iconH = std::round(totalH * 0.58f);
-    auto iconArea = bounds.removeFromTop(iconH);
-    auto labelArea = bounds;
+    juce::Rectangle<float> iconArea;
+    juce::Rectangle<float> labelArea;
+
+    if (totalW >= 85.0f && totalW > totalH * 1.7f)
+    {
+        // Wide button: horizontal layout (icon on left, label on right)
+        iconArea = bounds.removeFromLeft(24.0f).reduced(2.0f, 0.0f);
+        labelArea = bounds.withTrimmedLeft(2.0f);
+    }
+    else
+    {
+        // Standard button: vertical layout (icon on top, label underneath)
+        const float iconH = std::round(totalH * 0.58f);
+        iconArea = bounds.removeFromTop(iconH);
+        labelArea = bounds;
+    }
 
     if (shouldDrawButtonAsDown)
     {
@@ -124,9 +141,12 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     drawIcon(g, iconArea, iconCol);
 
     g.setColour(textCol);
-    const float fontSz = totalH >= 38.0f ? 11.5f : 10.5f;
+    const float fontSz = (totalW >= 85.0f && totalW > totalH * 1.7f) ? 12.5f : (totalH >= 38.0f ? 11.5f : 10.5f);
     g.setFont(Typography::bold(fontSz));
-    g.drawText(label_, labelArea.reduced(2.0f, 0.0f), juce::Justification::centred, true);
+    g.drawText(label_, labelArea.reduced(2.0f, 0.0f),
+               (totalW >= 85.0f && totalW > totalH * 1.7f) ? juce::Justification::centredLeft
+                                                           : juce::Justification::centred,
+               true);
 }
 
 void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)

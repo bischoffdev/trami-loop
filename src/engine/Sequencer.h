@@ -29,6 +29,7 @@ public:
     // --- Any thread ----------------------------------------------------------
     void requestPlaying(bool shouldPlay) noexcept { playRequested_.store(shouldPlay); }
     void requestRewind() noexcept { rewindRequested_.store(true); }
+    void requestSeek(std::int64_t samplePosition) noexcept;
     void setMetronomeEnabled(bool enabled) noexcept { metronomeEnabled_.store(enabled); }
     void setLoopingEnabled(bool enabled) noexcept { loopingEnabled_.store(enabled); }
 
@@ -61,6 +62,21 @@ public:
     void syncTrackMixFromSnapshot() noexcept;
     void resetTrackMix() noexcept;
 
+    /// Master volume (0.0 to 2.0). Smoothly applied to final output.
+    void setMasterVolume(float volume) noexcept;
+    float masterVolume() const noexcept { return masterVolume_.load(std::memory_order_relaxed); }
+
+    struct OutputLevels
+    {
+        float peakL = 0.0f;
+        float peakR = 0.0f;
+        float rmsL = 0.0f;
+        float rmsR = 0.0f;
+        bool clipped = false;
+    };
+    OutputLevels outputLevels() const noexcept;
+    void resetClipped() noexcept { clipOccurred_.store(false, std::memory_order_relaxed); }
+
     /// Called on the message thread to safely delete retired preview buffers.
     void collectPreviewGarbage();
 
@@ -78,6 +94,7 @@ private:
         const AudioData* audio = nullptr;
         const PlaybackSnapshot* owner = nullptr;
         std::int64_t readPosition = 0;
+        std::int64_t startPosition = 0;
         std::int64_t endPosition = 0;
         int startDelay = 0;
         float baseGainLeft = 1.0f;
@@ -86,6 +103,9 @@ private:
         float gainRight = 1.0f;
         bool active = false;
         int track = -1;
+        std::int64_t fadeInSamples = 0;
+        std::int64_t fadeOutSamples = 0;
+        std::uint32_t clipId = 0;
     };
 
     struct TrackMixState
@@ -107,10 +127,13 @@ private:
     void scheduleRange(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL, float gainR,
-                    std::int64_t audioOffset = 0, std::int64_t maxFrames = -1, int track = -1) noexcept;
+                    std::int64_t audioOffset = 0, std::int64_t maxFrames = -1, int track = -1,
+                    std::int64_t fadeInSamples = 0, std::int64_t fadeOutSamples = 0,
+                    std::uint32_t clipId = 0) noexcept;
     void renderVoices(float* left, float* right, int numSamples) noexcept;
     void renderPreview(float* left, float* right, int numSamples) noexcept;
     void stopAllVoices() noexcept;
+    void stopTrackVoicesAt(int offsetInBlock) noexcept;
     bool hasVoicesFrom(const PlaybackSnapshot* snapshot) const noexcept;
     void retirePreview(PreviewItem* item) noexcept;
     void updateVoiceGainsForTrack(int track) noexcept;
@@ -142,10 +165,21 @@ private:
 
     std::atomic<bool> playRequested_{false};
     std::atomic<bool> rewindRequested_{false};
+    std::atomic<bool> seekRequested_{false};
+    std::atomic<std::int64_t> seekRequestedPosition_{0};
     std::atomic<bool> metronomeEnabled_{false};
     std::atomic<bool> loopingEnabled_{true};
     std::atomic<bool> playing_{false};
     std::atomic<std::int64_t> publishedPosition_{0};
+
+    // Master volume & loudness metering
+    std::atomic<float> masterVolume_{1.0f};
+    float currentMasterVol_ = 1.0f;
+    std::atomic<float> outPeakL_{0.0f};
+    std::atomic<float> outPeakR_{0.0f};
+    std::atomic<float> outRmsL_{0.0f};
+    std::atomic<float> outRmsR_{0.0f};
+    std::atomic<bool> clipOccurred_{false};
 };
 
 } // namespace trami

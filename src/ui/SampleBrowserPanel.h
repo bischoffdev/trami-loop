@@ -56,8 +56,8 @@ private:
 
     IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
     juce::ToggleButton autoPreviewToggle_{"Auto Preview"};
-    IconButton addLoopButton_{"+ Loop", IconButton::Icon::Duplicate, "Add as Loop to New Track"};
-    IconButton addOneShotButton_{"+ 1-Shot", IconButton::Icon::Duplicate, "Add as One-Shot to New Track"};
+    IconButton addLoopButton_{"AddLoop", IconButton::Icon::Duplicate, "Add as Loop"};
+    IconButton addOneShotButton_{"AddOneShot", IconButton::Icon::Duplicate, "Add as One-Shot"};
 
     juce::Label titleLabel_;
     juce::Label pathLabel_;

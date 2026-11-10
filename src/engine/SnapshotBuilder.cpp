@@ -12,7 +12,8 @@ namespace trami
 std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song, PatternId patternId,
                                                                 const SampleBank& bank, double sampleRate,
                                                                 int loopStartStep, int loopEndStep,
-                                                                const SampleBank* rawBank)
+                                                                const SampleBank* rawBank,
+                                                                const std::vector<DragClipOverride>* overrides)
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
     const Timing timing(song.bpm(), sampleRate, song.swing());
@@ -48,7 +49,6 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             anySolo = true;
     }
 
-    const float master = song.masterVolume();
     const double stepDurationSamples = timing.samplesPerStep();
     const std::int64_t patternEndSample = timing.stepToSample(p->lengthSteps());
 
@@ -63,7 +63,87 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
         const SampleKind trackKind = song.patternTrackKind(patternId, static_cast<int>(t));
         const SampleBank& sourceBank = (trackKind == SampleKind::OneShot && rawBank != nullptr) ? *rawBank : bank;
 
-        for (const auto& clip : trk.clips)
+        struct EffectiveClip
+        {
+            ClipId id;
+            SampleId sampleId;
+            double startStep = 0.0;
+            double lengthSteps = 0.0;
+            double offsetSteps = 0.0;
+            float gain = 1.0f;
+            float fadeInSteps = 0.0f;
+            float fadeOutSteps = 0.0f;
+        };
+
+        std::vector<EffectiveClip> trackClips;
+
+        if (overrides == nullptr || overrides->empty())
+        {
+            for (const auto& clip : trk.clips)
+            {
+                trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
+                                      clip.gain, clip.fadeInSteps, clip.fadeOutSteps});
+            }
+        }
+        else
+        {
+            // 1. Clips that were originally on this track:
+            for (const auto& clip : trk.clips)
+            {
+                const DragClipOverride* ov = nullptr;
+                for (const auto& item : *overrides)
+                {
+                    if (item.clipId == clip.id)
+                    {
+                        ov = &item;
+                        break;
+                    }
+                }
+
+                if (ov == nullptr)
+                {
+                    trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
+                                          clip.gain, clip.fadeInSteps, clip.fadeOutSteps});
+                }
+                else if (ov->currentTrack == static_cast<int>(t))
+                {
+                    trackClips.push_back({clip.id, clip.sampleId, ov->currentStartStep, ov->currentLengthSteps, ov->currentOffsetSteps,
+                                          ov->currentGain, ov->currentFadeIn, ov->currentFadeOut});
+                }
+                // If ov->currentTrack != t, the clip has been dragged away from track t; skip it here.
+            }
+
+            // 2. Clips dragged onto this track from other tracks:
+            for (const auto& ov : *overrides)
+            {
+                if (ov.currentTrack == static_cast<int>(t) && ov.originalTrack != static_cast<int>(t))
+                {
+                    SampleId sId;
+                    for (const auto& otherTrack : p->tracks)
+                    {
+                        for (const auto& c : otherTrack.clips)
+                        {
+                            if (c.id == ov.clipId)
+                            {
+                                sId = c.sampleId;
+                                break;
+                            }
+                        }
+                        if (sId.isValid())
+                            break;
+                    }
+
+                    if (sId.isValid())
+                    {
+                        trackClips.push_back({ov.clipId, sId, ov.currentStartStep, ov.currentLengthSteps, ov.currentOffsetSteps,
+                                              ov.currentGain, ov.currentFadeIn, ov.currentFadeOut});
+                    }
+                }
+            }
+        }
+
+        std::vector<TrackClipSpan> spans;
+        for (const auto& clip : trackClips)
         {
             auto found = sourceBank.find(clip.sampleId);
             if (found == sourceBank.end() || found->second == nullptr)
@@ -73,20 +153,70 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                     continue;
             }
 
-            const std::int64_t globalStep = clip.startStep;
+            const double globalStep = clip.startStep;
             const std::int64_t eventStartSample = timing.stepToSample(globalStep);
             if (eventStartSample >= patternEndSample)
                 continue;
 
-            const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, patternEndSample - eventStartSample);
+            const std::int64_t framesUntilPatternEnd = std::max<std::int64_t>(0, patternEndSample - eventStartSample);
             const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
-            std::int64_t maxFrames = (clip.lengthSteps > 0)
+            const std::int64_t availFrames = std::max<std::int64_t>(0, found->second->numFrames() - audioOffset);
+            std::int64_t maxFrames = (clip.lengthSteps > 0.0)
                 ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
-                : framesUntilLoop;
-            maxFrames = std::min(maxFrames, framesUntilLoop);
+                : std::min(framesUntilPatternEnd, availFrames);
+            maxFrames = std::min(maxFrames, framesUntilPatternEnd);
 
-            snapshot->events.push_back({eventStartSample, found->second.get(), master,
-                                        master, audioOffset, maxFrames, static_cast<int>(t)});
+            const double spanSteps = (clip.lengthSteps > 0.0)
+                ? clip.lengthSteps
+                : std::max(1.0, static_cast<double>(maxFrames) / stepDurationSamples);
+
+            spans.push_back({clip.id, clip.startStep, spanSteps, clip.fadeInSteps, clip.fadeOutSteps});
+        }
+        const auto crossfades = computeTrackCrossfades(spans);
+
+        for (const auto& clip : trackClips)
+        {
+            auto found = sourceBank.find(clip.sampleId);
+            if (found == sourceBank.end() || found->second == nullptr)
+            {
+                found = bank.find(clip.sampleId);
+                if (found == bank.end() || found->second == nullptr)
+                    continue;
+            }
+
+            const double globalStep = clip.startStep;
+            const std::int64_t eventStartSample = timing.stepToSample(globalStep);
+            if (eventStartSample >= patternEndSample)
+                continue;
+
+            const std::int64_t framesUntilPatternEnd = std::max<std::int64_t>(0, patternEndSample - eventStartSample);
+            const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
+            std::int64_t maxFrames = (clip.lengthSteps > 0.0)
+                ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
+                : framesUntilPatternEnd;
+            maxFrames = std::min(maxFrames, framesUntilPatternEnd);
+
+            if (snapshot->looping && snapshot->loopEndSample > snapshot->loopStartSample)
+            {
+                if (eventStartSample >= snapshot->loopStartSample && eventStartSample < snapshot->loopEndSample)
+                {
+                    const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, snapshot->loopEndSample - eventStartSample);
+                    maxFrames = std::min(maxFrames, framesUntilLoop);
+                }
+            }
+
+            const auto xfIt = crossfades.find(clip.id.value);
+            const float effectiveFadeIn = (xfIt != crossfades.end()) ? xfIt->second.fadeInSteps : clip.fadeInSteps;
+            const float effectiveFadeOut = (xfIt != crossfades.end()) ? xfIt->second.fadeOutSteps : clip.fadeOutSteps;
+
+            const std::int64_t fadeInSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeIn * stepDurationSamples)));
+            const std::int64_t fadeOutSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeOut * stepDurationSamples)));
+            const float clipGainL = clip.gain;
+            const float clipGainR = clip.gain;
+
+            snapshot->events.push_back({eventStartSample, found->second.get(), clipGainL,
+                                        clipGainR, audioOffset, maxFrames, static_cast<int>(t),
+                                        fadeInSamples, fadeOutSamples, clip.id.value});
             snapshot->keepAlive.push_back(found->second);
         }
     }
@@ -109,14 +239,15 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
     if (songBars == 0)
         return snapshot;
 
-    snapshot->lengthSamples = std::llround(timing.samplesPerBar() * songBars);
+    const int effectiveBars = std::max(songBars, (loopEndBar > loopStartBar ? loopEndBar : 0));
+    snapshot->lengthSamples = std::llround(timing.samplesPerBar() * effectiveBars);
     snapshot->looping = (loopEndBar > loopStartBar);
     snapshot->hasTrackMixes = true;
 
     if (loopEndBar > loopStartBar && loopStartBar >= 0)
     {
         snapshot->loopStartSample = timing.stepToSample(static_cast<std::int64_t>(loopStartBar) * kStepsPerBar);
-        snapshot->loopEndSample = std::min(timing.stepToSample(static_cast<std::int64_t>(loopEndBar) * kStepsPerBar), snapshot->lengthSamples);
+        snapshot->loopEndSample = timing.stepToSample(static_cast<std::int64_t>(loopEndBar) * kStepsPerBar);
     }
     else
     {
@@ -158,12 +289,46 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
                     continue;
 
                 const auto [patPanL, patPanR] = panGains(patTrack.mix.pan);
-                const float innerGain = song.masterVolume() * patTrack.mix.volume;
+                const float innerGain = patTrack.mix.volume;
                 const float combinedGainL = innerGain * patPanL;
                 const float combinedGainR = innerGain * patPanR;
 
                 const SampleKind trackKind = song.patternTrackKind(block.patternId, static_cast<int>(ptIdx));
                 const SampleBank& sourceBank = (trackKind == SampleKind::OneShot && rawBank != nullptr) ? *rawBank : bank;
+
+                const double stepDurationSamples = timing.samplesPerStep();
+                std::vector<TrackClipSpan> spans;
+                for (const auto& clip : patTrack.clips)
+                {
+                    auto found = sourceBank.find(clip.sampleId);
+                    if (found == sourceBank.end() || found->second == nullptr)
+                    {
+                        found = bank.find(clip.sampleId);
+                        if (found == bank.end() || found->second == nullptr)
+                            continue;
+                    }
+
+                    const double globalStep = static_cast<double>(blockBaseStep) + clip.startStep;
+                    const std::int64_t startSample = timing.stepToSample(globalStep);
+                    const std::int64_t blockEndSample = timing.stepToSample(blockBaseStep + pattern->lengthSteps());
+                    if (startSample >= blockEndSample)
+                        continue;
+
+                    const std::int64_t framesUntilEnd = std::max<std::int64_t>(0, blockEndSample - startSample);
+                    const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
+                    const std::int64_t availFrames = std::max<std::int64_t>(0, found->second->numFrames() - audioOffset);
+                    std::int64_t maxFrames = (clip.lengthSteps > 0.0)
+                        ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
+                        : std::min(framesUntilEnd, availFrames);
+                    maxFrames = std::min(maxFrames, framesUntilEnd);
+
+                    const double spanSteps = (clip.lengthSteps > 0.0)
+                        ? clip.lengthSteps
+                        : std::max(1.0, static_cast<double>(maxFrames) / stepDurationSamples);
+
+                    spans.push_back({clip.id, clip.startStep, spanSteps, clip.fadeInSteps, clip.fadeOutSteps});
+                }
+                const auto crossfades = computeTrackCrossfades(spans);
 
                 for (const auto& clip : patTrack.clips)
                 {
@@ -175,22 +340,39 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
                             continue;
                     }
 
-                    const std::int64_t globalStep = blockBaseStep + clip.startStep;
+                    const double globalStep = static_cast<double>(blockBaseStep) + clip.startStep;
                     const std::int64_t startSample = timing.stepToSample(globalStep);
                     const std::int64_t blockEndSample = timing.stepToSample(blockBaseStep + pattern->lengthSteps());
                     if (startSample >= blockEndSample)
                         continue;
 
                     const std::int64_t framesUntilEnd = std::max<std::int64_t>(0, blockEndSample - startSample);
-                    const double stepDurationSamples = timing.samplesPerStep();
                     const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
-                    std::int64_t maxFrames = (clip.lengthSteps > 0)
+                    std::int64_t maxFrames = (clip.lengthSteps > 0.0)
                         ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
                         : framesUntilEnd;
                     maxFrames = std::min(maxFrames, framesUntilEnd);
 
-                    snapshot->events.push_back({startSample, found->second.get(), combinedGainL, combinedGainR,
-                                                audioOffset, maxFrames, at});
+                    if (snapshot->looping && snapshot->loopEndSample > snapshot->loopStartSample)
+                    {
+                        if (startSample >= snapshot->loopStartSample && startSample < snapshot->loopEndSample)
+                        {
+                            const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, snapshot->loopEndSample - startSample);
+                            maxFrames = std::min(maxFrames, framesUntilLoop);
+                        }
+                    }
+
+                    const auto xfIt = crossfades.find(clip.id.value);
+                    const float effectiveFadeIn = (xfIt != crossfades.end()) ? xfIt->second.fadeInSteps : clip.fadeInSteps;
+                    const float effectiveFadeOut = (xfIt != crossfades.end()) ? xfIt->second.fadeOutSteps : clip.fadeOutSteps;
+
+                    const std::int64_t fadeInSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeIn * stepDurationSamples)));
+                    const std::int64_t fadeOutSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeOut * stepDurationSamples)));
+                    const float clipGainL = combinedGainL * clip.gain;
+                    const float clipGainR = combinedGainR * clip.gain;
+
+                    snapshot->events.push_back({startSample, found->second.get(), clipGainL, clipGainR,
+                                                audioOffset, maxFrames, static_cast<int>(at), fadeInSamples, fadeOutSamples, clip.id.value});
                     snapshot->keepAlive.push_back(found->second);
                 }
             }

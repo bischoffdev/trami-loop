@@ -1,6 +1,7 @@
 #include "ui/ArrangerView.h"
 
 #include "model/Timing.h"
+#include "ui/StudioOneZoomCorner.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <algorithm>
@@ -11,12 +12,45 @@ namespace trami
 class ArrangerView::SyncViewport : public juce::Viewport
 {
 public:
+    SyncViewport()
+    {
+        setScrollBarThickness(StudioOneZoomCorner::kThickness);
+        addAndMakeVisible(zoomCorner_);
+    }
+
+    StudioOneZoomCorner& zoomCorner() noexcept { return zoomCorner_; }
+
     std::function<void(const juce::Rectangle<int>&)> onAreaChanged;
     void visibleAreaChanged(const juce::Rectangle<int>& newVisibleArea) override
     {
         if (onAreaChanged)
             onAreaChanged(newVisibleArea);
     }
+
+    void resized() override
+    {
+        juce::Viewport::resized();
+
+        constexpr int T = StudioOneZoomCorner::kThickness;
+        constexpr int L = StudioOneZoomCorner::kSliderLength;
+        constexpr int totalSize = L + T;
+        const int w = getWidth();
+        const int h = getHeight();
+
+        auto& vBar = getVerticalScrollBar();
+        auto& hBar = getHorizontalScrollBar();
+
+        if (vBar.isVisible())
+            vBar.setBounds(vBar.getX(), vBar.getY(), vBar.getWidth(), std::max(0, h - totalSize));
+
+        if (hBar.isVisible())
+            hBar.setBounds(hBar.getX(), hBar.getY(), std::max(0, w - totalSize), hBar.getHeight());
+
+        zoomCorner_.setBounds(w - totalSize, h - totalSize, totalSize, totalSize);
+    }
+
+private:
+    StudioOneZoomCorner zoomCorner_;
 };
 
 ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretchCache,
@@ -36,6 +70,7 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(patternCombo_);
 
+    addPatternButton_.setTooltip("Create and append a new pattern");
     addPatternButton_.onClick = [this]() {
         if (onPushUndo_)
             onPushUndo_();
@@ -47,32 +82,18 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(addPatternButton_);
 
+    editPatternButton_.setTooltip("Switch to Pattern Editor for selected pattern");
     editPatternButton_.onClick = [this]() {
         if (onEditPattern_)
             onEditPattern_(activePattern_);
     };
     addAndMakeVisible(editPatternButton_);
 
-    // Zoom controls
-    zoomOutButton_.setTooltip("Zoom Out Time (Cmd -)");
-    zoomOutButton_.onClick = [this]() { zoomOut(); };
-    addAndMakeVisible(zoomOutButton_);
+    addTrackButton_.onClick = [this]() { addTrack(); };
+    addAndMakeVisible(addTrackButton_);
 
-    zoomResetButton_.setTooltip("Reset Zoom to 100% (Cmd 0)");
-    zoomResetButton_.onClick = [this]() { resetZoom(); };
-    addAndMakeVisible(zoomResetButton_);
-
-    zoomInButton_.setTooltip("Zoom In Time (Cmd +)");
-    zoomInButton_.onClick = [this]() { zoomIn(); };
-    addAndMakeVisible(zoomInButton_);
-
-    vZoomOutButton_.setTooltip("Decrease Track Height (Cmd Shift -)");
-    vZoomOutButton_.onClick = [this]() { trackHeightOut(); };
-    addAndMakeVisible(vZoomOutButton_);
-
-    vZoomInButton_.setTooltip("Increase Track Height (Cmd Shift +)");
-    vZoomInButton_.onClick = [this]() { trackHeightIn(); };
-    addAndMakeVisible(vZoomInButton_);
+    zoomX_ = song_.arrangerZoomX();
+    zoomY_ = song_.arrangerZoomY();
 
     // Headers & Grid
     trackHeaders_ = std::make_unique<ArrangerTrackHeaderList>(song_, [this](int track) {
@@ -83,6 +104,15 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     trackHeaders_->setOnTrackRenamed([this](int, const std::string&) {
         if (onPushUndo_)
             onPushUndo_();
+    });
+    trackHeaders_->setOnDeleteTrack([this](int track) {
+        deleteTrack(track);
+    });
+    trackHeaders_->setOnMoveTrack([this](int from, int to) {
+        moveTrack(from, to);
+    });
+    trackHeaders_->setOnAddTrack([this]() {
+        addTrack();
     });
     trackHeaders_->onMouseWheel = [this](const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
         if (gridViewport_ != nullptr)
@@ -95,6 +125,9 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     addAndMakeVisible(trackHeadersViewport_.get());
 
     grid_ = std::make_unique<ArrangerGrid>(song_, *this);
+    loopStartBar_ = grid_->loopStartBar();
+    loopEndBar_ = std::max(grid_->loopEndBar(), song_.lengthBars());
+    grid_->setLoopRegion(loopStartBar_, loopEndBar_);
 
     gridViewport_ = std::make_unique<SyncViewport>();
     gridViewport_->setViewedComponent(grid_.get(), false);
@@ -102,6 +135,23 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     gridViewport_->onAreaChanged = [this](const juce::Rectangle<int>& area) {
         if (trackHeadersViewport_ != nullptr)
             trackHeadersViewport_->setViewPosition(0, area.getY());
+    };
+    gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+    gridViewport_->zoomCorner().onZoomXChanged = [this](float newZoomX) {
+        const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+        applyZoom(newZoomX, zoomY_, anchor);
+    };
+    gridViewport_->zoomCorner().onZoomYChanged = [this](float newZoomY) {
+        const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
+        applyZoom(zoomX_, newZoomY, anchor);
+    };
+    gridViewport_->zoomCorner().onZoomIn = [this]() { zoomIn(); };
+    gridViewport_->zoomCorner().onZoomOut = [this]() { zoomOut(); };
+    gridViewport_->zoomCorner().onTrackHeightIn = [this]() { trackHeightIn(); };
+    gridViewport_->zoomCorner().onTrackHeightOut = [this]() { trackHeightOut(); };
+    gridViewport_->zoomCorner().onResetZoom = [this]() { resetZoom(); };
+    gridViewport_->zoomCorner().onZoomDelta = [this](float dx, float dy) {
+        applyZoom(zoomX_ * dx, zoomY_ * dy, {getWidth() / 2, 0});
     };
     addAndMakeVisible(gridViewport_.get());
 
@@ -147,10 +197,11 @@ void ArrangerView::syncAllTrackMixes()
 
 void ArrangerView::publishSnapshotQuick()
 {
-    if (activeBank_.empty() && !song_.samples().empty())
-        return;
     const auto rawBank = stretchCache_.getRawBank();
-    engine_.publish(SnapshotBuilder::buildArrangement(song_, activeBank_, engine_.sampleRate(),
+    const auto& bankToUse = activeBank_.empty() ? rawBank : activeBank_;
+    if (bankToUse.empty() && !song_.samples().empty())
+        return;
+    engine_.publish(SnapshotBuilder::buildArrangement(song_, bankToUse, engine_.sampleRate(),
                                                      loopStartBar_, loopEndBar_, &rawBank));
 }
 
@@ -177,6 +228,74 @@ void ArrangerView::loopRegionChanged(int startBar, int endBar)
     loopStartBar_ = startBar;
     loopEndBar_ = endBar;
     republish();
+    if (onLoopRegionChanged_)
+        onLoopRegionChanged_(loopStartBar_, loopEndBar_);
+}
+
+void ArrangerView::setLoopRegion(int startBar, int endBar)
+{
+    const int maxBars = std::max(2, song_.lengthBars());
+    loopStartBar_ = std::clamp(startBar, 0, maxBars);
+    loopEndBar_ = std::clamp(endBar, loopStartBar_ + 1, std::max(maxBars, endBar));
+    if (grid_ != nullptr)
+        grid_->setLoopRegion(loopStartBar_, loopEndBar_);
+    republish();
+    if (onLoopRegionChanged_)
+        onLoopRegionChanged_(loopStartBar_, loopEndBar_);
+}
+
+void ArrangerView::playheadSeekRequested(double bar)
+{
+    const Timing timing(song_.bpm(), engine_.sampleRate());
+    const double samplesPerBar = timing.samplesPerBar();
+    const std::int64_t targetSample = static_cast<std::int64_t>(std::round(bar * samplesPerBar));
+    engine_.sequencer().requestSeek(targetSample);
+    if (grid_ != nullptr)
+        grid_->setPlayheadBar(bar);
+}
+
+void ArrangerView::addTrack()
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (song_.addArrangerTrack(activePattern_) >= 0)
+    {
+        if (trackHeaders_ != nullptr)
+            trackHeaders_->updateFromModel();
+        republish();
+        if (grid_ != nullptr)
+            grid_->repaint();
+        resized();
+    }
+}
+
+void ArrangerView::deleteTrack(int track)
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (song_.deleteArrangerTrack(track))
+    {
+        trackHeaders_->updateFromModel();
+        syncAllTrackMixes();
+        republish();
+        if (grid_ != nullptr)
+            grid_->repaint();
+        resized();
+    }
+}
+
+void ArrangerView::moveTrack(int from, int to)
+{
+    if (onPushUndo_)
+        onPushUndo_();
+    if (song_.moveArrangerTrack(from, to))
+    {
+        trackHeaders_->updateFromModel();
+        syncAllTrackMixes();
+        republish();
+        if (grid_ != nullptr)
+            grid_->repaint();
+    }
 }
 
 void ArrangerView::toggleRecording()
@@ -300,6 +419,7 @@ void ArrangerView::patternDropped(PatternId patternId, int track, int bar)
 
         if (song_.placeBlock(targetTrack, patternId, bar))
         {
+            publishSnapshotQuick();
             republish();
             updatePatternList();
             if (trackHeaders_ != nullptr)
@@ -325,6 +445,7 @@ void ArrangerView::blockMoved(BlockId blockId, int newTrack, int newBar)
         onPushUndo_();
     if (song_.moveBlock(blockId, newTrack, newBar))
     {
+        publishSnapshotQuick();
         republish();
         grid_->repaint();
     }
@@ -332,12 +453,56 @@ void ArrangerView::blockMoved(BlockId blockId, int newTrack, int newBar)
 
 void ArrangerView::blockDeleteRequested(BlockId blockId)
 {
+    BlockId nextBlockId;
+    for (int t = 0; t < song_.numArrangerTracks(); ++t)
+    {
+        if (const auto* track = song_.arrangerTrack(t))
+        {
+            const auto it = std::find_if(track->blocks.begin(), track->blocks.end(),
+                                         [blockId](const PatternBlock& b) { return b.id == blockId; });
+            if (it != track->blocks.end())
+            {
+                const int curBar = it->startBar;
+                const PatternBlock* nextBlock = nullptr;
+                const PatternBlock* prevBlock = nullptr;
+
+                for (const auto& b : track->blocks)
+                {
+                    if (b.id == blockId)
+                        continue;
+
+                    if (b.startBar >= curBar)
+                    {
+                        if (nextBlock == nullptr || b.startBar < nextBlock->startBar)
+                            nextBlock = &b;
+                    }
+                    else
+                    {
+                        if (prevBlock == nullptr || b.startBar > prevBlock->startBar)
+                            prevBlock = &b;
+                    }
+                }
+
+                if (nextBlock != nullptr)
+                    nextBlockId = nextBlock->id;
+                else if (prevBlock != nullptr)
+                    nextBlockId = prevBlock->id;
+
+                break;
+            }
+        }
+    }
+
     if (onPushUndo_)
         onPushUndo_();
     if (song_.removeBlock(blockId))
     {
+        if (grid_ != nullptr)
+            grid_->setSelectedBlock(nextBlockId);
+        publishSnapshotQuick();
         republish();
-        grid_->repaint();
+        if (grid_ != nullptr)
+            grid_->repaint();
     }
 }
 
@@ -367,11 +532,17 @@ void ArrangerView::gridCellClicked(int track, int bar)
 
     if (song_.placeBlock(track, patId, bar))
     {
+        publishSnapshotQuick();
         republish();
         if (trackHeaders_ != nullptr)
             trackHeaders_->updateFromModel();
         grid_->repaint();
     }
+}
+
+void ArrangerView::setZoom(float x, float y)
+{
+    applyZoom(x, y, {0, 0});
 }
 
 void ArrangerView::zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid)
@@ -384,6 +555,8 @@ void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<i
     const float newZoomX = std::clamp(targetZoomX, 0.2f, 4.0f);
     const float newZoomY = std::clamp(targetZoomY, 0.5f, 2.5f);
 
+    song_.setArrangerZoom(newZoomX, newZoomY);
+
     if (std::abs(newZoomX - zoomX_) < 0.001f && std::abs(newZoomY - zoomY_) < 0.001f)
         return;
 
@@ -393,6 +566,9 @@ void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<i
 
     zoomX_ = newZoomX;
     zoomY_ = newZoomY;
+
+    if (gridViewport_ != nullptr)
+        gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
 
     if (grid_ != nullptr)
         grid_->setZoom(zoomX_, zoomY_);
@@ -450,6 +626,15 @@ bool ArrangerView::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (key.getKeyCode() == juce::KeyPress::deleteKey || key.getKeyCode() == juce::KeyPress::backspaceKey)
+    {
+        if (grid_ != nullptr && grid_->selectedBlock().isValid())
+        {
+            blockDeleteRequested(grid_->selectedBlock());
+            return true;
+        }
+    }
+
     if (key.getModifiers().isCommandDown())
     {
         if (key.getKeyCode() == '=' || key.getKeyCode() == '+')
@@ -484,10 +669,10 @@ void ArrangerView::timerCallback()
     const Timing timing(song_.bpm(), engine_.sampleRate());
     const double samplesPerBar = timing.samplesPerBar();
 
-    if (samplesPerBar > 0.0)
+    if (samplesPerBar > 0.0 && grid_ != nullptr)
     {
         const double currentBar = static_cast<double>(seq.position()) / samplesPerBar;
-        grid_->setPlayheadBar(seq.isPlaying() ? currentBar : -1.0);
+        grid_->setPlayheadBar(currentBar);
     }
 }
 
@@ -496,10 +681,11 @@ void ArrangerView::paint(juce::Graphics& g)
     g.fillAll(Palette::background);
 
     constexpr int kToolbarHeight = 44;
-    g.setColour(Palette::surface);
+    g.setColour(Palette::arrangerHeaderBg);
     g.fillRect(0, 0, getWidth(), kToolbarHeight);
-    g.setColour(Palette::gridLine);
+    g.setColour(Palette::arrangerAccent.withAlpha(0.7f));
     g.drawHorizontalLine(kToolbarHeight, 0.0f, static_cast<float>(getWidth()));
+    g.fillRect(0, 0, 4, kToolbarHeight);
 }
 
 void ArrangerView::resized()
@@ -507,26 +693,13 @@ void ArrangerView::resized()
     constexpr int kToolbarHeight = 44;
     auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 4);
 
-    // Zoom controls on the right
-    auto rightCluster = toolbar.removeFromRight(236);
-    vZoomInButton_.setBounds(rightCluster.removeFromRight(46));
-    rightCluster.removeFromRight(3);
-    vZoomOutButton_.setBounds(rightCluster.removeFromRight(46));
-    rightCluster.removeFromRight(6);
-
-    zoomInButton_.setBounds(rightCluster.removeFromRight(44));
-    rightCluster.removeFromRight(2);
-    zoomResetButton_.setBounds(rightCluster.removeFromRight(48));
-    rightCluster.removeFromRight(2);
-    zoomOutButton_.setBounds(rightCluster.removeFromRight(44));
-
-    toolbar.removeFromRight(12);
-
     patternCombo_.setBounds(toolbar.removeFromLeft(150));
     toolbar.removeFromLeft(8);
     addPatternButton_.setBounds(toolbar.removeFromLeft(68));
     toolbar.removeFromLeft(8);
     editPatternButton_.setBounds(toolbar.removeFromLeft(88));
+    toolbar.removeFromLeft(8);
+    addTrackButton_.setBounds(toolbar.removeFromLeft(70));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
@@ -539,9 +712,10 @@ void ArrangerView::resized()
     const int gridW = getWidth() - gridX;
     gridViewport_->setBounds(gridX, contentY, gridW, contentH);
 
+    const int numTracks = song_.numArrangerTracks();
     const int totalBars = std::max(16, song_.lengthBars() + 6);
     const int neededGridWidth = totalBars * grid_->barWidth();
-    const int neededGridHeight = ArrangerGrid::kRulerHeight + kArrangerTracks * grid_->trackHeight();
+    const int neededGridHeight = ArrangerGrid::kRulerHeight + (numTracks + 1) * grid_->trackHeight();
 
     grid_->setSize(std::max(gridW, neededGridWidth), std::max(contentH, neededGridHeight));
     trackHeaders_->setSize(headerW, std::max(contentH, neededGridHeight));

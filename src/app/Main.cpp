@@ -76,7 +76,7 @@ private:
         song_.placeClip(patBeat, snareTrk, snare, 24);
 
         const int hihatTrk = song_.addTrackToPattern(patBeat, hihat);
-        for (int step : {0, 4, 8, 12, 16, 20, 24, 28})
+        for (int step : {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30})
             song_.placeClip(patBeat, hihatTrk, hihat, step);
 
         const int bassTrk = song_.addTrackToPattern(patBeat, bass);
@@ -85,7 +85,7 @@ private:
         // Pattern 2: "Groove" - 2-track pattern
         const auto patGroove = song_.addPattern("Groove", 1);
         song_.setPatternTrackSample(patGroove, 0, hihat);
-        for (int step : {0, 4, 8, 12, 16, 20, 24, 28})
+        for (int step : {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30})
             song_.placeClip(patGroove, 0, hihat, step);
 
         const int grooveBass = song_.addTrackToPattern(patGroove, bass);

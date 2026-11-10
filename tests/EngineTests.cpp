@@ -217,6 +217,29 @@ TEST_CASE("Arrangement plays pattern blocks across multiple tracks and stops at 
     REQUIRE(onsets == std::vector<std::int64_t>{0, 120000, 192000});
 }
 
+TEST_CASE("Arrangement loops within custom loop region")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0); // hit at beat 1
+
+    f.song.placeBlock(0, f.pattern, 0);
+
+    auto snap = SnapshotBuilder::buildArrangement(f.song, f.bank, kRate, 0, 1);
+    REQUIRE(snap->looping);
+    REQUIRE(snap->loopStartSample == 0);
+    REQUIRE(snap->loopEndSample == 96000);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    const auto onsets = render(seq, 150000, 512);
+    REQUIRE(onsets.size() == 2);
+    REQUIRE(onsets[0] == 0);
+    REQUIRE(onsets[1] == 96000);
+}
+
 TEST_CASE("Muted and soloed pattern tracks in playback")
 {
     Fixture f;
@@ -432,4 +455,375 @@ TEST_CASE("Sequencer loops within custom loop region")
     REQUIRE(triggers.size() >= 2);
     REQUIRE(triggers[0] == 12000);
     REQUIRE(triggers[1] == 24000);
+}
+
+TEST_CASE("Sequencer seek updates position and stops active voices")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+
+    // Initial position is 0
+    REQUIRE(seq.position() == 0);
+
+    // Seek to sample 48000 while stopped
+    seq.requestSeek(48000);
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(seq.position() == 48000);
+
+    // Start playing, let it advance
+    seq.requestPlaying(true);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(seq.position() == 48000 + 256);
+
+    // Seek back to sample 10000
+    seq.requestSeek(10000);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(seq.position() == 10000 + 256);
+}
+
+TEST_CASE("Clip volume envelope shapes playback audio with gain and fades")
+{
+    Fixture f;
+    auto data = std::make_shared<AudioData>();
+    data->channels.push_back(std::vector<float>(1000, 1.0f));
+    f.bank[f.sample] = data;
+
+    const auto clipId = *f.song.placeClip(f.pattern, 0, f.sample, 0);
+    // Set 50% gain, 4 steps fade in, 4 steps fade out
+    f.song.setClipEnvelope(f.pattern, clipId, 0.5f, 4.0f, 4.0f);
+
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    REQUIRE(snap->events.size() == 1);
+    REQUIRE(snap->events[0].gainLeft == Catch::Approx(0.5f));
+    REQUIRE(snap->events[0].fadeInSamples > 0);
+    REQUIRE(snap->events[0].fadeOutSamples > 0);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    // Audio starts at 0 due to fade-in and smoothly ramps up
+    REQUIRE(left[0] == Catch::Approx(0.0f).margin(0.001f));
+    REQUIRE(left[255] > 0.0f);
+}
+
+TEST_CASE("Sound clip longer than loop region stops at end of loop without overlapping itself")
+{
+    Fixture f;
+    // Sample is 4 bars long (96000 * 4 = 384000 samples) filled with constant 0.5f
+    auto data = std::make_shared<AudioData>();
+    data->channels.push_back(std::vector<float>(96000 * 4, 0.5f));
+    f.bank[f.sample] = data;
+
+    // Pattern is 4 bars long, but custom loop region is set to 1 bar (steps 0 to 32)
+    f.song.setPatternLength(f.pattern, 4);
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+
+    // Build pattern snapshot with 1-bar loop (steps 0 to 32, i.e. 0 to 96000 samples)
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate, 0, 32);
+    REQUIRE(snap->loopStartSample == 0);
+    REQUIRE(snap->loopEndSample == 96000);
+    REQUIRE(snap->events.size() == 1);
+    // maxFrames must be capped to 96000 so the clip stops at the end of the loop!
+    REQUIRE(snap->events[0].maxFrames == 96000);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    // Render 2 full loops (192000 samples).
+    // In every block, output should be exactly 0.5f (from single voice) and NEVER 1.0f (which would indicate overlapping voices)!
+    std::vector<float> left(512, 0.0f);
+    std::vector<float> right(512, 0.0f);
+    float maxSample = 0.0f;
+    for (int rendered = 0; rendered < 192000; rendered += 512)
+    {
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        seq.process(left.data(), right.data(), 512);
+        for (float s : left)
+            maxSample = std::max(maxSample, std::abs(s));
+    }
+
+    // Since voices never overlap, maxSample should be 0.5f (or less with master), and never >= 0.9f
+    REQUIRE(maxSample == Catch::Approx(0.5f).margin(0.01f));
+}
+
+TEST_CASE("Sequencer master volume scales overall output audio")
+{
+    Fixture f;
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(96000, 1.0f));
+    sustained->channels.push_back(std::vector<float>(96000, 1.0f));
+    f.bank[f.sample] = sustained;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+
+    // Default unity master volume (1.0f)
+    REQUIRE(seq.masterVolume() == Catch::Approx(1.0f));
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(1.0f));
+
+    // Master volume to 0.5f
+    seq.setMasterVolume(0.5f);
+    REQUIRE(seq.masterVolume() == Catch::Approx(0.5f));
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.5f));
+
+    // Master volume to 0.0f (mute)
+    seq.setMasterVolume(0.0f);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(0.0f));
+}
+
+TEST_CASE("Sequencer output loudness metering detects peaks, RMS and clipping")
+{
+    Fixture f;
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(96000, 0.8f));
+    sustained->channels.push_back(std::vector<float>(96000, 0.8f));
+    f.bank[f.sample] = sustained;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate);
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+
+    seq.process(left.data(), right.data(), 256);
+    auto levels = seq.outputLevels();
+    REQUIRE(levels.peakL == Catch::Approx(0.8f));
+    REQUIRE(levels.peakR == Catch::Approx(0.8f));
+    REQUIRE(levels.rmsL > 0.0f);
+    REQUIRE(levels.clipped == false);
+
+    // Boost master volume to 1.5 -> output will be 0.8 * 1.5 = 1.2 >= 1.0 (clipping!)
+    seq.setMasterVolume(1.5f);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    levels = seq.outputLevels();
+    REQUIRE(levels.peakL == Catch::Approx(1.2f));
+    REQUIRE(levels.clipped == true);
+
+    // Lower master volume and let it ramp down
+    seq.setMasterVolume(0.5f);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    // Reset clip indicator and process clean block
+    seq.resetClipped();
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    levels = seq.outputLevels();
+    REQUIRE(levels.clipped == false);
+}
+
+TEST_CASE("Removing an active clip silences its voice immediately during playback")
+{
+    Fixture fix;
+    auto sound = std::make_shared<AudioData>();
+    sound->channels.push_back(std::vector<float>(48000, 0.9f));
+    fix.bank[fix.sample] = sound;
+
+    auto clipId = fix.song.placeClip(fix.pattern, 0, fix.sample, 0.0);
+    REQUIRE(clipId.has_value());
+
+    SnapshotExchange exchange;
+    exchange.publish(SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+
+    // Initial block triggers clip at step 0
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[0] == Catch::Approx(0.9f));
+    REQUIRE(left[100] == Catch::Approx(0.9f));
+
+    // Remove clip from pattern while playback is in progress
+    fix.song.removeClip(fix.pattern, *clipId);
+    exchange.publish(SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate));
+
+    // Next block adopts new snapshot; voice for deleted clip should be silenced immediately
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    for (int i = 0; i < 256; ++i)
+    {
+        REQUIRE(left[i] == 0.0f);
+        REQUIRE(right[i] == 0.0f);
+    }
+}
+
+TEST_CASE("Dragging a clip is reflected in real time via snapshot overrides and immediate voice sync")
+{
+    Fixture fix;
+    auto sound = std::make_shared<AudioData>();
+    sound->channels.push_back(std::vector<float>(48000, 0.8f));
+    fix.bank[fix.sample] = sound;
+
+    auto clipId = fix.song.placeClip(fix.pattern, 0, fix.sample, 0.0);
+    REQUIRE(clipId.has_value());
+
+    SnapshotExchange exchange;
+    exchange.publish(SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+
+    // Initial block plays clip at step 0
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[0] == Catch::Approx(0.8f));
+
+    // User drags clip to step 4 (sample 12000 at 120 BPM) - far in the future
+    DragClipOverride dragOv;
+    dragOv.clipId = *clipId;
+    dragOv.originalTrack = 0;
+    dragOv.originalStartStep = 0.0;
+    dragOv.currentTrack = 0;
+    dragOv.currentStartStep = 4.0;
+    dragOv.currentLengthSteps = 4.0;
+    dragOv.currentGain = 0.8f;
+    std::vector<DragClipOverride> overrides = {dragOv};
+
+    auto draggedSnap = SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate, 0, 0, nullptr, &overrides);
+    REQUIRE(draggedSnap->events.size() == 1);
+    REQUIRE(draggedSnap->events[0].startSample == 12000);
+    REQUIRE(draggedSnap->events[0].clipId == clipId->value);
+
+    // Publish drag state while sequencer is around sample 256
+    exchange.publish(std::move(draggedSnap));
+
+    // Next block: voice at step 0 is stopped because clip moved away
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[0] == 0.0f);
+
+    // Seek/jump right before step 4 (sample 11900)
+    seq.requestSeek(11900);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256); // crosses 12000 (offset 100)
+
+    // Triggered at offset 100 in this block
+    REQUIRE(left[99] == 0.0f);
+    REQUIRE(left[100] == Catch::Approx(0.64f)); // 0.8 sample * 0.8 gain
+}
+
+TEST_CASE("Swing changes are reflected in real time during active playback")
+{
+    Fixture fix;
+    auto sound = std::make_shared<AudioData>();
+    sound->channels.push_back(std::vector<float>(48000, 1.0f));
+    fix.bank[fix.sample] = sound;
+
+    // Place clip on 16th-note offbeat step 2 (each 16th note is 2 steps in 1/32 grid)
+    auto clipId = fix.song.placeClip(fix.pattern, 0, fix.sample, 2.0);
+    REQUIRE(clipId.has_value());
+
+    // Initially swing is 0 (straight): at 120 BPM, step 2 is at sample 6000
+    fix.song.setSwing(0.0);
+    SnapshotExchange exchange;
+    exchange.publish(SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate));
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f);
+    std::vector<float> right(256, 0.0f);
+
+    // Verify initial snapshot event startSample
+    {
+        auto snap = SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate);
+        REQUIRE(snap->events.size() == 1);
+        REQUIRE(snap->events[0].startSample == 6000);
+    }
+
+    // Now change swing to 50% (0.5) in real time
+    fix.song.setSwing(0.5);
+    auto swungSnap = SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate);
+    REQUIRE(swungSnap->events.size() == 1);
+    // Offbeat swing offset = 0.5 * 3000 = 1500 samples -> startSample = 6000 + 1500 = 7500
+    REQUIRE(swungSnap->events[0].startSample == 7500);
+
+    // Publish swung snapshot during playback while playhead is at sample 5000
+    seq.requestSeek(5000);
+    exchange.publish(std::move(swungSnap));
+
+    // Process a block around the old trigger sample (sample 5900..6156)
+    seq.requestSeek(5900);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    // Old trigger at sample 6000 (offset 100) must NOT fire because swing delayed it to 7500
+    REQUIRE(left[100] == 0.0f);
+    for (float sampleVal : left)
+        REQUIRE(sampleVal == 0.0f);
+
+    // Now process a block around sample 7400 (7400..7656)
+    seq.requestSeek(7400);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    // Should fire at sample 7500 (offset 100)
+    REQUIRE(left[99] == 0.0f);
+    REQUIRE(left[100] == Catch::Approx(1.0f));
+
+    // Test fractional step offbeat detection (e.g. unconstrained clip placed around step 1.98)
+    fix.song.removeClip(fix.pattern, *clipId);
+    auto fracClip = fix.song.placeClip(fix.pattern, 0, fix.sample, 1.98);
+    REQUIRE(fracClip.has_value());
+
+    auto fracSnap = SnapshotBuilder::buildPattern(fix.song, fix.pattern, fix.bank, kRate);
+    REQUIRE(fracSnap->events.size() == 1);
+    // Continuous swing scaling for fractional steps (1.98 * (2.0 + 0.5) / 2.0 * 3000 = 7425 samples)
+    REQUIRE(fracSnap->events[0].startSample == 7425);
 }
