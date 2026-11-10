@@ -28,8 +28,15 @@ public:
     double samplesPerStep() const noexcept;
     double samplesPerBar() const noexcept;
 
+    /// Returns the swung musical step position for a given straight step position,
+    /// matching the exact swing timing used in stepToSample.
+    double stepToSwungStep(double step) const noexcept;
+
+    /// Converts a swung step position back to a straight musical step.
+    double swungStepToStep(double swungStep) const noexcept;
+
     /// Sample position of a grid step, including the swing offset.
-    std::int64_t stepToSample(std::int64_t step) const noexcept;
+    std::int64_t stepToSample(double step) const noexcept;
 
     /// Original tempo of a loop, given its duration and length in bars.
     static double loopBpm(double durationSeconds, int lengthInBars) noexcept;

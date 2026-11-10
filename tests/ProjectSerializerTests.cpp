@@ -16,6 +16,8 @@ TEST_CASE("ProjectSerializer saves and loads a self-contained project")
     originalSong.setBpm(135.0);
     originalSong.setSwing(0.4);
     originalSong.setMasterVolume(1.5f);
+    originalSong.setPatternZoom(1.75f, 1.25f);
+    originalSong.setArrangerZoom(2.0f, 1.5f);
 
     Sample s1;
     s1.name = "Kick";
@@ -61,6 +63,10 @@ TEST_CASE("ProjectSerializer saves and loads a self-contained project")
     REQUIRE(loadedSong.bpm() == Catch::Approx(135.0));
     REQUIRE(loadedSong.swing() == Catch::Approx(0.4));
     REQUIRE(loadedSong.masterVolume() == Catch::Approx(1.5f));
+    REQUIRE(loadedSong.patternZoomX() == Catch::Approx(1.75f));
+    REQUIRE(loadedSong.patternZoomY() == Catch::Approx(1.25f));
+    REQUIRE(loadedSong.arrangerZoomX() == Catch::Approx(2.0f));
+    REQUIRE(loadedSong.arrangerZoomY() == Catch::Approx(1.5f));
 
     REQUIRE(loadedSong.samples().size() == 2);
     REQUIRE(loadedSong.patterns().size() == 1);

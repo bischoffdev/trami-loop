@@ -52,8 +52,18 @@ public:
     void gridCellClicked(int track, int bar) override;
     void patternDropped(PatternId patternId, int track, int bar) override;
     void loopRegionChanged(int startBar, int endBar) override;
+    void playheadSeekRequested(double bar) override;
     void zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid) override;
 
+    int loopStartBar() const noexcept { return loopStartBar_; }
+    int loopEndBar() const noexcept { return loopEndBar_; }
+    void setLoopRegion(int startBar, int endBar);
+    void setOnLoopRegionChanged(std::function<void(int, int)> cb) { onLoopRegionChanged_ = std::move(cb); }
+
+    void addTrack();
+    void deleteTrack(int track);
+    void moveTrack(int from, int to);
+    void setZoom(float x, float y);
     void applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid);
     void zoomIn();
     void zoomOut();
@@ -70,6 +80,7 @@ private:
     StretchCache& stretchCache_;
     EditPatternCallback onEditPattern_;
     PushUndoCallback onPushUndo_;
+    std::function<void(int, int)> onLoopRegionChanged_;
 
     PatternId activePattern_;
     SampleBank activeBank_;
@@ -77,19 +88,13 @@ private:
     float zoomX_ = 1.0f;
     float zoomY_ = 1.0f;
     int loopStartBar_ = 0;
-    int loopEndBar_ = 0;
+    int loopEndBar_ = 4;
 
     // Toolbar controls
     juce::ComboBox patternCombo_;
     IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "+ Pattern"};
     IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Pattern"};
-
-    // Zoom controls
-    IconButton zoomOutButton_{"ZoomOut", IconButton::Icon::ZoomOut, "Out"};
-    IconButton zoomResetButton_{"ZoomReset", IconButton::Icon::ZoomReset, "100%"};
-    IconButton zoomInButton_{"ZoomIn", IconButton::Icon::ZoomIn, "In"};
-    IconButton vZoomOutButton_{"VZoomOut", IconButton::Icon::ZoomOut, "Tracks-"};
-    IconButton vZoomInButton_{"VZoomIn", IconButton::Icon::ZoomIn, "Tracks+"};
+    IconButton addTrackButton_{"AddTrack", IconButton::Icon::Plus, "+ Track"};
 
     std::unique_ptr<ArrangerTrackHeaderList> trackHeaders_;
     std::unique_ptr<juce::Viewport> trackHeadersViewport_;

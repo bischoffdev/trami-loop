@@ -22,12 +22,14 @@ public:
         virtual void gridCellClicked(int track, int bar) = 0;
         virtual void patternDropped(PatternId /*patternId*/, int /*track*/, int /*bar*/) {}
         virtual void loopRegionChanged(int /*startBar*/, int /*endBar*/) {}
+        virtual void playheadSeekRequested(double /*bar*/) {}
         virtual void zoomRequested(float /*deltaX*/, float /*deltaY*/, juce::Point<int> /*anchorInGrid*/) {}
     };
 
     ArrangerGrid(const Song& song, Listener& listener);
 
     void setSelectedBlock(BlockId blockId);
+    BlockId selectedBlock() const noexcept { return selectedBlock_; }
     void setPlayheadBar(double bar);
     int loopStartBar() const noexcept { return loopStartBar_; }
     int loopEndBar() const noexcept { return loopEndBar_; }
@@ -49,6 +51,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     void mouseMagnify(const juce::MouseEvent& e, float scaleFactor) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     // DragAndDropTarget
     bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
@@ -75,6 +78,7 @@ private:
         int originalBar = 0;
         int currentTrack = 0;
         int currentBar = 0;
+        juce::Point<int> startMousePos;
         bool active = false;
     };
 
@@ -99,6 +103,7 @@ private:
     enum class RulerDragMode
     {
         None,
+        SeekPlayhead,
         SetRegion,
         MoveRegion,
         ResizeStart,

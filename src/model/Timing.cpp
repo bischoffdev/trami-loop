@@ -22,13 +22,53 @@ double Timing::samplesPerBar() const noexcept
     return samplesPerStep() * kStepsPerBar;
 }
 
-std::int64_t Timing::stepToSample(std::int64_t step) const noexcept
+double Timing::stepToSwungStep(double step) const noexcept
 {
+    if (swing_ <= 0.0)
+        return step;
+
     // In 1/32 grid, 1 beat = 8 steps, 1 16th note = 2 steps.
-    // 16th-note offbeats occur when (step / 2) is odd.
-    const bool is16thOffbeat = ((step / 2) % 2) != 0;
-    const double swingOffset = is16thOffbeat ? swing_ * samplesPerStep() * 1.0 : 0.0;
-    return static_cast<std::int64_t>(std::llround(static_cast<double>(step) * samplesPerStep() + swingOffset));
+    // Each 16th-note pair has length 4 steps (e.g. 0..4, 4..8, 8..12).
+    // The first 16th note [0..2] is onbeat and expands by (swing_ * 1.0) steps.
+    // The second 16th note [2..4] is offbeat and contracts by (swing_ * 1.0) steps.
+    const double pairBase = std::floor(step / 4.0) * 4.0;
+    const double sub = step - pairBase;
+
+    if (sub < 2.0)
+    {
+        return pairBase + sub * (2.0 + swing_) / 2.0;
+    }
+    else
+    {
+        return pairBase + (2.0 + swing_) + (sub - 2.0) * (2.0 - swing_) / 2.0;
+    }
+}
+
+double Timing::swungStepToStep(double swungStep) const noexcept
+{
+    if (swing_ <= 0.0)
+        return swungStep;
+
+    const double pairBase = std::floor(swungStep / 4.0) * 4.0;
+    const double sub = swungStep - pairBase;
+    const double splitPoint = 2.0 + swing_;
+
+    if (sub < splitPoint)
+    {
+        return pairBase + sub * 2.0 / splitPoint;
+    }
+    else
+    {
+        const double rem = 4.0 - splitPoint;
+        if (rem <= 0.0001)
+            return pairBase + 2.0;
+        return pairBase + 2.0 + (sub - splitPoint) * 2.0 / rem;
+    }
+}
+
+std::int64_t Timing::stepToSample(double step) const noexcept
+{
+    return static_cast<std::int64_t>(std::llround(stepToSwungStep(step) * samplesPerStep()));
 }
 
 double Timing::loopBpm(double durationSeconds, int lengthInBars) noexcept

@@ -122,6 +122,22 @@ void Sequencer::resetTrackMix() noexcept
     updateAllVoiceGains();
 }
 
+void Sequencer::setMasterVolume(float volume) noexcept
+{
+    masterVolume_.store(std::clamp(volume, 0.0f, 2.0f), std::memory_order_relaxed);
+}
+
+Sequencer::OutputLevels Sequencer::outputLevels() const noexcept
+{
+    return {
+        outPeakL_.load(std::memory_order_relaxed),
+        outPeakR_.load(std::memory_order_relaxed),
+        outRmsL_.load(std::memory_order_relaxed),
+        outRmsR_.load(std::memory_order_relaxed),
+        clipOccurred_.load(std::memory_order_relaxed)
+    };
+}
+
 void Sequencer::syncTrackMixFromSnapshot() noexcept
 {
     if (current_ == nullptr || !current_->hasTrackMixes)
@@ -243,8 +259,8 @@ void Sequencer::handlePreviewRequests() noexcept
             retirePreview(currentPreview_);
 
         currentPreview_ = next;
-        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, currentPreview_->audio->numFrames(),
-                               0, 0.85f, 0.85f, 0.85f, 0.85f, true, -1};
+        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, currentPreview_->audio->numFrames(),
+                              0, 0.85f, 0.85f, 0.85f, 0.85f, true, -1, 0, 0, 0};
         previewPlaying_.store(true, std::memory_order_release);
     }
 }
@@ -300,6 +316,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
             {
                 if (isLooping && loopEnd > loopStart)
                 {
+                    stopTrackVoicesAt(offset);
                     position_ = loopStart;
                 }
                 else
@@ -316,6 +333,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
             {
                 if (isLooping && loopEnd > loopStart)
                 {
+                    stopTrackVoicesAt(offset);
                     position_ = loopStart;
                     continue;
                 }
@@ -337,6 +355,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
             {
                 if (isLooping && loopEnd > loopStart)
                 {
+                    stopTrackVoicesAt(offset);
                     position_ = loopStart;
                 }
                 else
@@ -355,6 +374,58 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
     renderVoices(left, right, numSamples);
     renderPreview(left, right, numSamples);
+
+    // Apply master volume ramp
+    const float targetVol = masterVolume_.load(std::memory_order_relaxed);
+    if (std::abs(currentMasterVol_ - targetVol) < 0.0001f)
+    {
+        currentMasterVol_ = targetVol;
+        if (currentMasterVol_ != 1.0f)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                left[i] *= currentMasterVol_;
+                right[i] *= currentMasterVol_;
+            }
+        }
+    }
+    else
+    {
+        const float step = (targetVol - currentMasterVol_) / static_cast<float>(numSamples);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            currentMasterVol_ += step;
+            left[i] *= currentMasterVol_;
+            right[i] *= currentMasterVol_;
+        }
+        currentMasterVol_ = targetVol;
+    }
+
+    // Measure overall loudness (peak & RMS)
+    float peakL = 0.0f;
+    float peakR = 0.0f;
+    float sumSqL = 0.0f;
+    float sumSqR = 0.0f;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float aL = std::abs(left[i]);
+        const float aR = std::abs(right[i]);
+        if (aL > peakL) peakL = aL;
+        if (aR > peakR) peakR = aR;
+        sumSqL += left[i] * left[i];
+        sumSqR += right[i] * right[i];
+    }
+
+    outPeakL_.store(peakL, std::memory_order_relaxed);
+    outPeakR_.store(peakR, std::memory_order_relaxed);
+    const float denom = static_cast<float>(std::max(1, numSamples));
+    outRmsL_.store(std::sqrt(sumSqL / denom), std::memory_order_relaxed);
+    outRmsR_.store(std::sqrt(sumSqR / denom), std::memory_order_relaxed);
+
+    if (peakL >= 1.0f || peakR >= 1.0f)
+        clipOccurred_.store(true, std::memory_order_relaxed);
+
     publishedPosition_.store(position_);
 }
 
@@ -399,6 +470,110 @@ void Sequencer::adoptPendingSnapshot() noexcept
         if (current_->lengthSamples > 0)
             position_ %= current_->lengthSamples;
         syncTrackMixFromSnapshot();
+
+        // Real-time synchronization of active voices with the newly adopted snapshot:
+        if (playing_.load(std::memory_order_relaxed))
+        {
+            for (auto& voice : voices_)
+            {
+                if (!voice.active || voice.clipId == 0)
+                    continue;
+
+                const PlaybackEvent* matchingEv = nullptr;
+                for (const auto& ev : current_->events)
+                {
+                    if (ev.clipId != 0 && ev.clipId == voice.clipId)
+                    {
+                        matchingEv = &ev;
+                        break;
+                    }
+                }
+
+                if (matchingEv == nullptr)
+                {
+                    // Clip was removed or moved away from active playback: silence voice immediately
+                    voice.active = false;
+                }
+                else
+                {
+                    const std::int64_t evEnd = matchingEv->startSample +
+                        (matchingEv->maxFrames >= 0 ? matchingEv->maxFrames : (matchingEv->audio ? matchingEv->audio->numFrames() : 0));
+
+                    if (position_ >= matchingEv->startSample && position_ < evEnd)
+                    {
+                        // Clip moved/adjusted but still spans current playback position: resync voice
+                        voice.track = matchingEv->track;
+                        voice.owner = current_;
+                        voice.audio = matchingEv->audio;
+                        voice.startPosition = matchingEv->audioOffset;
+                        voice.endPosition = (matchingEv->maxFrames >= 0 && matchingEv->audio != nullptr)
+                            ? std::min<std::int64_t>(matchingEv->audioOffset + matchingEv->maxFrames, matchingEv->audio->numFrames())
+                            : (matchingEv->audio ? static_cast<std::int64_t>(matchingEv->audio->numFrames()) : 0);
+                        voice.fadeInSamples = matchingEv->fadeInSamples;
+                        voice.fadeOutSamples = matchingEv->fadeOutSamples;
+                        voice.baseGainLeft = matchingEv->gainLeft;
+                        voice.baseGainRight = matchingEv->gainRight;
+                        const std::int64_t expectedOffset = (position_ - matchingEv->startSample) + matchingEv->audioOffset;
+                        if (matchingEv->audio != nullptr)
+                            voice.readPosition = std::clamp<std::int64_t>(expectedOffset, 0, matchingEv->audio->numFrames());
+                    }
+                    else
+                    {
+                        // Clip moved away from current playback position: stop old voice
+                        voice.active = false;
+                    }
+                }
+            }
+
+            // If a clip was placed, pasted, or dragged directly onto the current playback position, start it
+            for (const auto& ev : current_->events)
+            {
+                if (ev.clipId == 0 || ev.audio == nullptr)
+                    continue;
+
+                const std::int64_t totalFrames = ev.audio->numFrames();
+                const std::int64_t evEnd = ev.startSample +
+                    (ev.maxFrames >= 0 ? ev.maxFrames : totalFrames);
+
+                if (position_ >= ev.startSample && position_ < evEnd)
+                {
+                    bool voicePlaying = false;
+                    for (const auto& v : voices_)
+                    {
+                        if (v.active && v.clipId == ev.clipId)
+                        {
+                            voicePlaying = true;
+                            break;
+                        }
+                    }
+
+                    if (!voicePlaying)
+                    {
+                        const std::int64_t offsetInClip = (position_ - ev.startSample) + ev.audioOffset;
+                        const std::int64_t remainingFrames = evEnd - position_;
+                        if (offsetInClip < totalFrames && remainingFrames > 0)
+                        {
+                            startVoice(ev.audio, current_, 0, ev.gainLeft, ev.gainRight,
+                                       offsetInClip, remainingFrames, ev.track,
+                                       ev.fadeInSamples, ev.fadeOutSamples, ev.clipId);
+                        }
+                    }
+                }
+            }
+
+            updateAllVoiceGains();
+        }
+    }
+}
+
+void Sequencer::requestSeek(std::int64_t samplePosition) noexcept
+{
+    const auto pos = std::max<std::int64_t>(0, samplePosition);
+    seekRequestedPosition_.store(pos);
+    seekRequested_.store(true);
+    if (!playing_.load())
+    {
+        publishedPosition_.store(pos);
     }
 }
 
@@ -407,6 +582,17 @@ void Sequencer::handleTransportRequests() noexcept
     if (rewindRequested_.exchange(false))
     {
         position_ = 0;
+        publishedPosition_.store(0);
+        stopAllVoices();
+    }
+
+    if (seekRequested_.exchange(false))
+    {
+        const auto target = seekRequestedPosition_.load();
+        position_ = std::max<std::int64_t>(0, target);
+        if (current_ != nullptr && current_->lengthSamples > 0)
+            position_ = std::min(position_, current_->lengthSamples);
+        publishedPosition_.store(position_);
         stopAllVoices();
     }
 
@@ -427,7 +613,8 @@ void Sequencer::scheduleRange(std::int64_t from, std::int64_t to, int blockOffse
 
     for (; it != events.end() && it->startSample < to; ++it)
         startVoice(it->audio, current_, blockOffset + static_cast<int>(it->startSample - from), it->gainLeft,
-                   it->gainRight, it->audioOffset, it->maxFrames, it->track);
+                   it->gainRight, it->audioOffset, it->maxFrames, it->track, it->fadeInSamples, it->fadeOutSamples,
+                   it->clipId);
 }
 
 void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept
@@ -450,7 +637,8 @@ void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockO
 }
 
 void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL,
-                           float gainR, std::int64_t audioOffset, std::int64_t maxFrames, int track) noexcept
+                           float gainR, std::int64_t audioOffset, std::int64_t maxFrames, int track,
+                           std::int64_t fadeInSamples, std::int64_t fadeOutSamples, std::uint32_t clipId) noexcept
 {
     if (audio == nullptr || audio->numFrames() == 0)
         return;
@@ -497,7 +685,8 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
         }
     }
 
-    *target = Voice{audio, owner, startFrame, endFrame, delay, gainL, gainR, effL, effR, true, track};
+    *target = Voice{audio, owner, startFrame, startFrame, endFrame, delay, gainL, gainR, effL, effR, true, track,
+                    std::max<std::int64_t>(0, fadeInSamples), std::max<std::int64_t>(0, fadeOutSamples), clipId};
 }
 
 void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
@@ -533,8 +722,23 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
                 voice.owner = nullptr;
                 break;
             }
-            left[i] += srcL[voice.readPosition] * voice.gainLeft;
-            right[i] += srcR[voice.readPosition] * voice.gainRight;
+
+            float env = 1.0f;
+            if (voice.fadeInSamples > 0)
+            {
+                const std::int64_t offsetFromStart = voice.readPosition - voice.startPosition;
+                if (offsetFromStart < voice.fadeInSamples)
+                    env *= static_cast<float>(offsetFromStart) / static_cast<float>(voice.fadeInSamples);
+            }
+            if (voice.fadeOutSamples > 0)
+            {
+                const std::int64_t remaining = voice.endPosition - voice.readPosition;
+                if (remaining < voice.fadeOutSamples)
+                    env *= static_cast<float>(remaining) / static_cast<float>(voice.fadeOutSamples);
+            }
+
+            left[i] += srcL[voice.readPosition] * voice.gainLeft * env;
+            right[i] += srcR[voice.readPosition] * voice.gainRight * env;
             ++voice.readPosition;
         }
         voice.startDelay = 0;
@@ -547,6 +751,26 @@ void Sequencer::stopAllVoices() noexcept
     {
         voice.active = false;
         voice.owner = nullptr;
+    }
+}
+
+void Sequencer::stopTrackVoicesAt(int offsetInBlock) noexcept
+{
+    for (auto& voice : voices_)
+    {
+        if (voice.active && voice.owner != nullptr)
+        {
+            if (voice.startDelay <= offsetInBlock)
+            {
+                const std::int64_t framesUntilWrap = static_cast<std::int64_t>(offsetInBlock - voice.startDelay);
+                voice.endPosition = std::min(voice.endPosition, voice.readPosition + framesUntilWrap);
+                if (voice.endPosition <= voice.readPosition)
+                {
+                    voice.active = false;
+                    voice.owner = nullptr;
+                }
+            }
+        }
     }
 }
 

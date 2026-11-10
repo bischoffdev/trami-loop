@@ -1,4 +1,5 @@
 #include "ui/PatternListPanel.h"
+#include "ui/ArrangerGrid.h"
 
 #include <algorithm>
 
@@ -134,10 +135,10 @@ void PatternListPanel::updateFromModel()
 
 void PatternListPanel::paint(juce::Graphics& g)
 {
-    g.fillAll(Palette::panelBackground);
+    g.fillAll(Palette::sidebarBackground);
 
     constexpr int kHeaderHeight = 32;
-    g.setColour(Palette::panelHeader);
+    g.setColour(Palette::sidebarHeader);
     g.fillRect(0, 0, getWidth(), kHeaderHeight);
 
     // Right border dividing from Track headers / Arranger
@@ -169,9 +170,9 @@ void PatternListPanel::resized()
             const int y = static_cast<int>(i) * rowHeight;
             row.bounds = juce::Rectangle<int>(0, y, w, rowHeight);
 
-            // Left name & info
-            row.nameLabel->setBounds(8, y + 2, w - 82, 19);
-            row.infoLabel->setBounds(8, y + 21, w - 82, 16);
+            // Left name & info (shifted to accommodate pattern color pill)
+            row.nameLabel->setBounds(20, y + 2, w - 94, 19);
+            row.infoLabel->setBounds(20, y + 21, w - 94, 16);
 
             // Right action buttons: Edit, Duplicate, Delete
             row.editButton->setBounds(w - 74, y + 10, 22, 22);
@@ -183,18 +184,34 @@ void PatternListPanel::resized()
 
 void PatternListPanel::paintContent(juce::Graphics& g)
 {
-    g.fillAll(Palette::panelBackground);
+    g.fillAll(Palette::sidebarBackground);
 
     for (const auto& row : rows_)
     {
+        const juce::Colour patCol = ArrangerGrid::patternColour(row.id);
         const bool isSelected = (row.id == activePattern_);
         if (isSelected)
         {
-            g.setColour(Palette::accent.withAlpha(0.18f));
+            g.setColour(patCol.withAlpha(0.20f));
             g.fillRect(row.bounds);
-            g.setColour(Palette::accent);
-            g.fillRect(row.bounds.getX(), row.bounds.getY(), 3, row.bounds.getHeight());
+            g.setColour(patCol);
+            g.fillRect(row.bounds.getX(), row.bounds.getY(), 4, row.bounds.getHeight());
         }
+        else
+        {
+            g.setColour(patCol.withAlpha(0.06f));
+            g.fillRect(row.bounds);
+            g.setColour(patCol.withAlpha(0.6f));
+            g.fillRect(row.bounds.getX(), row.bounds.getY() + 3, 3, row.bounds.getHeight() - 6);
+        }
+
+        // Color badge pill matching arranger representation
+        const auto badgeRect = juce::Rectangle<float>(static_cast<float>(row.bounds.getX() + 8),
+                                                      static_cast<float>(row.bounds.getY() + 7),
+                                                      5.0f,
+                                                      static_cast<float>(row.bounds.getHeight() - 14));
+        g.setColour(patCol);
+        g.fillRoundedRectangle(badgeRect, 2.5f);
 
         // Row bottom separator
         g.setColour(Palette::gridLine.withAlpha(0.45f));

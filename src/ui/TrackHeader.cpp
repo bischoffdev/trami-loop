@@ -8,6 +8,34 @@
 namespace trami
 {
 
+class TrackNameLabel : public juce::Label
+{
+public:
+    TrackNameLabel(const juce::String& name, const juce::String& text)
+        : juce::Label(name, text) {}
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (auto* parent = getParentComponent())
+        {
+            if (e.mods.isPopupMenu())
+            {
+                parent->mouseDown(e.getEventRelativeTo(parent));
+                return;
+            }
+            parent->mouseDown(e.getEventRelativeTo(parent));
+        }
+        juce::Label::mouseDown(e);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (auto* parent = getParentComponent())
+            parent->mouseDrag(e.getEventRelativeTo(parent));
+        juce::Label::mouseDrag(e);
+    }
+};
+
 TrackHeaderList::TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged)
     : song_(song), patternId_(patternId), onMixChanged_(std::move(onMixChanged))
 {
@@ -56,7 +84,7 @@ void TrackHeaderList::updateFromModel()
         {
             auto& c = controls_[static_cast<std::size_t>(t)];
 
-            c.nameLabel = std::make_unique<juce::Label>("lbl", juce::String(t + 1) + ": (empty)");
+            c.nameLabel = std::make_unique<TrackNameLabel>("lbl", juce::String(t + 1) + ": (empty)");
             c.nameLabel->setFont(Typography::bold(13.0f));
             c.nameLabel->setColour(juce::Label::textColourId, Palette::textDim.withAlpha(0.7f));
             c.nameLabel->setJustificationType(juce::Justification::centredLeft);
@@ -78,12 +106,18 @@ void TrackHeaderList::updateFromModel()
             c.typeButton = std::make_unique<juce::TextButton>("type");
             addAndMakeVisible(c.typeButton.get());
 
-            c.muteButton = std::make_unique<juce::TextButton>("M");
-            c.muteButton->setClickingTogglesState(true);
-            c.muteButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.05f));
-            c.muteButton->setColour(juce::TextButton::textColourOffId, Palette::textDim);
-            c.muteButton->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe53935));
-            c.muteButton->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+            c.deleteButton = std::make_unique<juce::TextButton>(juce::CharPointer_UTF8("\xc3\x97"));
+            c.deleteButton->setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+            c.deleteButton->setColour(juce::TextButton::textColourOffId, Palette::textDim.withAlpha(0.5f));
+            c.deleteButton->setColour(juce::TextButton::buttonOnColourId, Palette::danger.withAlpha(0.2f));
+            c.deleteButton->setTooltip("Delete Track " + juce::String(t + 1));
+            c.deleteButton->onClick = [this, t]() {
+                if (onDeleteTrack_)
+                    onDeleteTrack_(t);
+            };
+            addAndMakeVisible(c.deleteButton.get());
+
+            c.muteButton = std::make_unique<DAWMuteButton>();
             c.muteButton->setTooltip("Mute Track " + juce::String(t + 1));
             c.muteButton->onClick = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
@@ -99,12 +133,7 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.muteButton.get());
 
-            c.soloButton = std::make_unique<juce::TextButton>("S");
-            c.soloButton->setClickingTogglesState(true);
-            c.soloButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.05f));
-            c.soloButton->setColour(juce::TextButton::textColourOffId, Palette::textDim);
-            c.soloButton->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xfffdd835));
-            c.soloButton->setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+            c.soloButton = std::make_unique<DAWSoloButton>();
             c.soloButton->setTooltip("Solo Track " + juce::String(t + 1));
             c.soloButton->onClick = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
@@ -120,10 +149,15 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.soloButton.get());
 
+            c.armButton = std::make_unique<DAWArmButton>();
+            c.armButton->setTooltip("Arm Track " + juce::String(t + 1) + " for Recording");
+            addAndMakeVisible(c.armButton.get());
+
             c.volLabel = std::make_unique<juce::Label>("vol", "Vol");
             c.volLabel->setFont(Typography::bold(10.0f));
+            c.volLabel->setBorderSize(juce::BorderSize<int>(0));
             c.volLabel->setColour(juce::Label::textColourId, Palette::textDim);
-            c.volLabel->setJustificationType(juce::Justification::centredRight);
+            c.volLabel->setJustificationType(juce::Justification::centred);
             c.volLabel->setInterceptsMouseClicks(false, false);
             addAndMakeVisible(c.volLabel.get());
 
@@ -147,8 +181,9 @@ void TrackHeaderList::updateFromModel()
 
             c.panLabel = std::make_unique<juce::Label>("pan", "Pan");
             c.panLabel->setFont(Typography::bold(10.0f));
+            c.panLabel->setBorderSize(juce::BorderSize<int>(0));
             c.panLabel->setColour(juce::Label::textColourId, Palette::textDim);
-            c.panLabel->setJustificationType(juce::Justification::centredRight);
+            c.panLabel->setJustificationType(juce::Justification::centred);
             c.panLabel->setInterceptsMouseClicks(false, false);
             addAndMakeVisible(c.panLabel.get());
 
@@ -248,99 +283,77 @@ void TrackHeaderList::setTrackHeight(int height)
 
 void TrackHeaderList::paint(juce::Graphics& g)
 {
-    g.fillAll(Palette::trackHeaderSurface);
+    g.fillAll(juce::Colour(0xff22252b));
 
     // Header top area (matching ruler)
-    g.setColour(Palette::panelHeader);
+    g.setColour(Palette::patternHeaderBg);
     g.fillRect(0, 0, getWidth(), PatternGrid::kRulerHeight);
-    g.setColour(Palette::gridLine);
+    g.setColour(Palette::patternAccent);
     g.drawHorizontalLine(PatternGrid::kRulerHeight - 1, 0.0f, static_cast<float>(getWidth()));
 
-    g.setColour(Palette::textDim);
+    g.setColour(Palette::patternAccent);
     g.setFont(Typography::bold(12.0f));
-    g.drawText("TRACKS", 10, 0, getWidth() - 20, PatternGrid::kRulerHeight, juce::Justification::centredLeft);
+    g.drawText("PATTERN TRACKS", 12, 0, getWidth() - 24, PatternGrid::kRulerHeight, juce::Justification::centredLeft);
 
     const auto* pat = song_.findPattern(patternId_);
     const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
+    constexpr int kStripWidth = 14;
 
     for (int t = 0; t < numTracks; ++t)
     {
         const int y = PatternGrid::kRulerHeight + t * trackHeight_;
 
-        if (t % 2 != 0)
-        {
-            g.setColour(Palette::trackHeaderSurface.brighter(0.04f));
-            g.fillRect(0, y, getWidth(), trackHeight_);
-        }
+        // Track surface background
+        g.setColour(t % 2 == 0 ? juce::Colour(0xff24282f) : juce::Colour(0xff282c34));
+        g.fillRect(0, y, getWidth(), trackHeight_);
 
-        // ACID-style track badge on left
-        const auto badgeRect = juce::Rectangle<float>(6.0f, static_cast<float>(y + 3), 32.0f,
-                                                      static_cast<float>(std::max(16, trackHeight_ - 6)));
-        juce::Colour badgeCol = Palette::surface.brighter(0.08f);
-        const SampleKind kind = song_.patternTrackKind(patternId_, t);
-        bool hasSample = false;
-
+        // Studio One left color strip
+        juce::Colour badgeCol = Palette::patternAccent.withAlpha(0.6f);
         const auto& track = pat->tracks[static_cast<std::size_t>(t)];
         SampleId sid = track.sampleId;
         if (!sid.isValid() && !track.clips.empty())
             sid = track.clips.front().sampleId;
 
         if (const Sample* s = song_.findSample(sid))
-        {
-            hasSample = true;
-            badgeCol = juce::Colour::fromHSV(s->hue(), 0.75f, 0.85f, 1.0f);
-        }
+            badgeCol = juce::Colour::fromHSV(s->hue(), 0.8f, 0.88f, 1.0f);
 
         g.setColour(badgeCol);
-        g.fillRoundedRectangle(badgeRect, 4.0f);
-        g.setColour(kind == SampleKind::Loop ? juce::Colour(0xffffb300) : badgeCol.brighter(0.25f));
-        g.drawRoundedRectangle(badgeRect, 4.0f, kind == SampleKind::Loop ? 1.5f : 1.0f);
+        g.fillRect(0, y, kStripWidth, trackHeight_);
 
-        const float bcx = badgeRect.getCentreX();
-        const float bcy = badgeRect.getCentreY();
+        // Dark divider on right edge of color strip
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.drawVerticalLine(kStripWidth - 1, static_cast<float>(y), static_cast<float>(y + trackHeight_));
 
-        if (!hasSample)
+        // Chevron fold icon at top of color strip
+        DAWTrackIcons::drawTrackFoldChevron(g, kStripWidth * 0.5f, static_cast<float>(y + 8), 7.0f);
+
+        // Waveform icon before track name (if row height allows)
+        if (trackHeight_ >= 30)
         {
-            g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(12.0f));
-            g.drawText(juce::String(t + 1), badgeRect.toNearestInt(), juce::Justification::centred, false);
-        }
-        else if (kind == SampleKind::Loop)
-        {
-            // ACID loop swirl vector icon
-            g.setColour(juce::Colours::white);
-            juce::Path swirl;
-            swirl.startNewSubPath(bcx - 6.0f, bcy + 3.0f);
-            swirl.cubicTo(bcx - 7.0f, bcy - 5.0f, bcx - 1.0f, bcy - 6.0f, bcx + 2.0f, bcy - 3.5f);
-            swirl.cubicTo(bcx + 5.5f, bcy - 1.0f, bcx + 5.5f, bcy + 4.5f, bcx + 1.0f, bcy + 5.5f);
-            swirl.cubicTo(bcx - 3.5f, bcy + 6.0f, bcx - 4.5f, bcy + 1.0f, bcx - 1.0f, bcy - 0.2f);
-            swirl.cubicTo(bcx + 1.5f, bcy - 1.0f, bcx + 2.5f, bcy + 1.8f, bcx + 0.8f, bcy + 2.2f);
-            g.strokePath(swirl, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-        else
-        {
-            // One-shot arrow icon
-            g.setColour(juce::Colours::white);
-            juce::Path arrow;
-            arrow.startNewSubPath(bcx - 5.0f, bcy);
-            arrow.lineTo(bcx + 4.0f, bcy);
-            arrow.startNewSubPath(bcx + 1.0f, bcy - 4.0f);
-            arrow.lineTo(bcx + 5.0f, bcy);
-            arrow.lineTo(bcx + 1.0f, bcy + 4.0f);
-            g.strokePath(arrow, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            DAWTrackIcons::drawAudioWaveformIcon(g, juce::Rectangle<float>(static_cast<float>(kStripWidth + 4),
+                                                                           static_cast<float>(y + 2), 16.0f, 18.0f),
+                                                 juce::Colour(0xff9ca3af));
         }
 
-        // Horizontal separator
-        g.setColour(Palette::gridLine.withAlpha(0.6f));
-        g.drawHorizontalLine(y + trackHeight_, 0.0f, static_cast<float>(getWidth()));
+        // Horizontal separator between tracks
+        g.setColour(juce::Colour(0xff181a1f));
+        g.drawHorizontalLine(y + trackHeight_ - 1, 0.0f, static_cast<float>(getWidth()));
 
         // Drag hover highlight
         if (dragHoverTrack_ == t)
         {
-            g.setColour(Palette::accent.withAlpha(0.22f));
-            g.fillRect(0, y, getWidth(), trackHeight_);
-            g.setColour(Palette::accent);
-            g.drawRect(1.0f, static_cast<float>(y + 1), static_cast<float>(getWidth() - 2), static_cast<float>(trackHeight_ - 2), 2.0f);
+            if (isReorderDrag_)
+            {
+                g.setColour(Palette::patternAccent);
+                g.fillRect(0, y, getWidth(), 3);
+            }
+            else
+            {
+                g.setColour(Palette::accent.withAlpha(0.22f));
+                g.fillRect(0, y, getWidth(), trackHeight_);
+                g.setColour(Palette::accent);
+                g.drawRect(1.0f, static_cast<float>(y + 1), static_cast<float>(getWidth() - 2), static_cast<float>(trackHeight_ - 2), 2.0f);
+            }
         }
     }
 
@@ -353,7 +366,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
     }
 
     // Right border dividing from PatternGrid
-    g.setColour(Palette::gridLine);
+    g.setColour(juce::Colour(0xff181a1f));
     g.drawVerticalLine(getWidth() - 2, 0.0f, static_cast<float>(getHeight()));
     g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
 }
@@ -361,6 +374,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
 void TrackHeaderList::resized()
 {
     const int numTracks = static_cast<int>(controls_.size());
+    constexpr int kStripWidth = 14;
 
     for (int t = 0; t < numTracks; ++t)
     {
@@ -370,41 +384,66 @@ void TrackHeaderList::resized()
         if (trackHeight_ >= 34)
         {
             // 2-row layout:
-            // Top: Name Label & Type Button
-            c.nameLabel->setBounds(44, y + 2, getWidth() - 110, 18);
+            // Top: Waveform icon + Name Label + Type Button + Delete Button
+            const int nameX = kStripWidth + 24;
+            const int nameW = std::max(40, getWidth() - nameX - 80);
+            c.nameLabel->setBounds(nameX, y + 2, nameW, 18);
             if (c.typeButton != nullptr)
-                c.typeButton->setBounds(getWidth() - 62, y + 2, 56, 18);
+                c.typeButton->setBounds(getWidth() - 76, y + 2, 48, 18);
+            if (c.deleteButton != nullptr)
+                c.deleteButton->setBounds(getWidth() - 24, y + 2, 20, 18);
 
-            // Bottom: M S Vol [slider] Pan [slider]
-            c.muteButton->setBounds(44, y + 21, 20, 16);
-            c.soloButton->setBounds(66, y + 21, 20, 16);
+            // Bottom: [ M | S ]  ( • )  Vol [===] Pan [===]
+            const int btnY = y + 22;
+            const int btnH = std::min(18, trackHeight_ - 24);
 
-            const int remainW = getWidth() - 92;
-            const int sliderW = std::max(20, (remainW - 54) / 2);
-            c.volLabel->setBounds(88, y + 21, 22, 16);
-            c.volumeSlider->setBounds(112, y + 21, sliderW, 16);
-            c.panLabel->setBounds(114 + sliderW, y + 21, 24, 16);
-            c.panSlider->setBounds(140 + sliderW, y + 21, sliderW, 16);
+            c.muteButton->setBounds(kStripWidth + 4, btnY, 22, btnH);
+            c.soloButton->setBounds(kStripWidth + 26, btnY, 22, btnH);
+            c.armButton->setBounds(kStripWidth + 52, btnY, 18, btnH);
+
+            const int remainX = kStripWidth + 74;
+            const int remainW = std::max(20, getWidth() - remainX - 6);
+            constexpr int lblW = 28;
+            const int sliderW = std::max(20, (remainW - (lblW * 2 + 8)) / 2);
+
+            c.volLabel->setVisible(true);
+            c.volumeSlider->setVisible(true);
+            c.panLabel->setVisible(true);
+            c.panSlider->setVisible(true);
+
+            int curX = remainX;
+            c.volLabel->setBounds(curX, btnY, lblW, btnH);
+            curX += lblW + 2;
+            c.volumeSlider->setBounds(curX, btnY, sliderW, btnH);
+            curX += sliderW + 6;
+            c.panLabel->setBounds(curX, btnY, lblW, btnH);
+            curX += lblW + 2;
+            c.panSlider->setBounds(curX, btnY, sliderW, btnH);
         }
         else
         {
             // 1-row compact layout
-            c.nameLabel->setBounds(42, y + 2, getWidth() - 250, trackHeight_ - 4);
+            c.nameLabel->setBounds(kStripWidth + 4, y + 1, std::max(40, getWidth() - 240), trackHeight_ - 2);
             if (c.typeButton != nullptr)
-                c.typeButton->setBounds(getWidth() - 200, y + 2, 48, trackHeight_ - 4);
-            c.muteButton->setBounds(getWidth() - 148, y + 2, 18, trackHeight_ - 4);
-            c.soloButton->setBounds(getWidth() - 128, y + 2, 18, trackHeight_ - 4);
-            c.volLabel->setBounds(getWidth() - 108, y + 2, 22, trackHeight_ - 4);
-            c.volumeSlider->setBounds(getWidth() - 84, y + 2, 36, trackHeight_ - 4);
-            c.panLabel->setBounds(getWidth() - 46, y + 2, 22, trackHeight_ - 4);
-            c.panSlider->setBounds(getWidth() - 22, y + 2, 18, trackHeight_ - 4);
+                c.typeButton->setBounds(getWidth() - 225, y + 1, 44, trackHeight_ - 2);
+            c.muteButton->setBounds(getWidth() - 176, y + 1, 18, trackHeight_ - 2);
+            c.soloButton->setBounds(getWidth() - 156, y + 1, 18, trackHeight_ - 2);
+            c.armButton->setBounds(getWidth() - 134, y + 1, 16, trackHeight_ - 2);
+            c.volLabel->setVisible(true);
+            c.volLabel->setBounds(getWidth() - 118, y + 1, 28, trackHeight_ - 2);
+            c.volumeSlider->setVisible(true);
+            c.volumeSlider->setBounds(getWidth() - 88, y + 1, 60, trackHeight_ - 2);
+            c.panLabel->setVisible(false);
+            c.panSlider->setVisible(false);
+            if (c.deleteButton != nullptr)
+                c.deleteButton->setBounds(getWidth() - 22, y + 1, 18, trackHeight_ - 2);
         }
     }
 
     if (addTrackButton_ != nullptr)
     {
         const int y = PatternGrid::kRulerHeight + numTracks * trackHeight_ + 6;
-        addTrackButton_->setBounds(10, y, getWidth() - 20, 26);
+        addTrackButton_->setBounds(kStripWidth + 4, y, getWidth() - kStripWidth - 12, 24);
     }
 }
 
@@ -413,7 +452,11 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     const int t = pointToTrack(e.getPosition());
     const auto* pat = song_.findPattern(patternId_);
     if (!pat || t < 0 || t >= static_cast<int>(pat->tracks.size()))
+    {
+        if (onMarqueeStart)
+            onMarqueeStart(e);
         return;
+    }
 
     const auto& track = pat->tracks[static_cast<std::size_t>(t)];
     SampleId sid = track.sampleId;
@@ -430,6 +473,9 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         m.addItem(3, "Track Type: One-Shot (natural pitch)", true, kind == SampleKind::OneShot);
         m.addSeparator();
         m.addItem(4, "Duplicate Track");
+        m.addItem(10, "Move Track Up", t > 0);
+        m.addItem(11, "Move Track Down", t < static_cast<int>(pat->tracks.size()) - 1);
+        m.addSeparator();
         m.addItem(5, "Delete Track", pat->tracks.size() > 1);
 
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(
@@ -446,6 +492,10 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                                 onTrackTypeChanged_(t, SampleKind::OneShot);
                             else if (result == 4 && onDuplicateTrack_)
                                 onDuplicateTrack_(t);
+                            else if (result == 10 && onMoveTrack_)
+                                onMoveTrack_(t, t - 1);
+                            else if (result == 11 && onMoveTrack_)
+                                onMoveTrack_(t, t + 1);
                             else if (result == 5 && onDeleteTrack_)
                                 onDeleteTrack_(t);
                         });
@@ -453,7 +503,7 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     }
 
     const int y = PatternGrid::kRulerHeight + t * trackHeight_;
-    const auto badgeRect = juce::Rectangle<int>(6, y + 3, 32, std::max(16, trackHeight_ - 6));
+    const auto badgeRect = juce::Rectangle<int>(0, y, 36, trackHeight_);
     if (badgeRect.contains(e.getPosition()))
     {
         const SampleKind newKind = (kind == SampleKind::Loop) ? SampleKind::OneShot : SampleKind::Loop;
@@ -472,6 +522,52 @@ void TrackHeaderList::mouseWheelMove(const juce::MouseEvent& e, const juce::Mous
         onMouseWheel(e, wheel);
     else
         juce::Component::mouseWheelMove(e, wheel);
+}
+
+void TrackHeaderList::mouseDrag(const juce::MouseEvent& e)
+{
+    const int startT = pointToTrack(e.getMouseDownPosition());
+    const auto* pat = song_.findPattern(patternId_);
+    if (!pat || startT < 0 || startT >= static_cast<int>(pat->tracks.size()))
+    {
+        if (onMarqueeDrag)
+            onMarqueeDrag(e);
+        return;
+    }
+
+    if (e.mouseWasDraggedSinceMouseDown() && !e.mods.isPopupMenu())
+    {
+        const int t = startT;
+        if (pat != nullptr && t >= 0 && t < static_cast<int>(pat->tracks.size()))
+        {
+            if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
+            {
+                if (!container->isDragAndDropActive())
+                {
+                    const int trackY = PatternGrid::kRulerHeight + t * trackHeight_;
+                    const auto trackBounds = juce::Rectangle<int>(0, trackY, getWidth(), trackHeight_);
+                    auto dragImg = createComponentSnapshot(trackBounds, true, 1.0f);
+                    {
+                        juce::Graphics g(dragImg);
+                        g.setColour(Palette::accent);
+                        g.drawRect(dragImg.getBounds().toFloat(), 1.5f);
+                    }
+                    const auto offset = trackBounds.getPosition() - e.getPosition();
+                    container->startDragging(juce::var("pattern_track_drag:" + juce::String(t)),
+                                             this,
+                                             juce::ScaledImage(dragImg, 1.0),
+                                             true,
+                                             &offset);
+                }
+            }
+        }
+    }
+}
+
+void TrackHeaderList::mouseUp(const juce::MouseEvent& e)
+{
+    if (onMarqueeEnd)
+        onMarqueeEnd(e);
 }
 
 bool TrackHeaderList::isInterestedInFileDrag(const juce::StringArray& files)
@@ -525,6 +621,8 @@ bool TrackHeaderList::isInterestedInDragSource(const SourceDetails& dragSourceDe
     if (dragSourceDetails.description.isString())
     {
         const juce::String s = dragSourceDetails.description.toString();
+        if (s.startsWith("pattern_track_drag:"))
+            return true;
         return s.endsWithIgnoreCase(".wav") || s.endsWithIgnoreCase(".mp3");
     }
     return false;
@@ -532,12 +630,14 @@ bool TrackHeaderList::isInterestedInDragSource(const SourceDetails& dragSourceDe
 
 void TrackHeaderList::itemDragEnter(const SourceDetails& dragSourceDetails)
 {
+    isReorderDrag_ = dragSourceDetails.description.toString().startsWith("pattern_track_drag:");
     dragHoverTrack_ = pointToTrack(dragSourceDetails.localPosition);
     repaint();
 }
 
 void TrackHeaderList::itemDragMove(const SourceDetails& dragSourceDetails)
 {
+    isReorderDrag_ = dragSourceDetails.description.toString().startsWith("pattern_track_drag:");
     const int t = pointToTrack(dragSourceDetails.localPosition);
     if (t != dragHoverTrack_)
     {
@@ -549,17 +649,33 @@ void TrackHeaderList::itemDragMove(const SourceDetails& dragSourceDetails)
 void TrackHeaderList::itemDragExit(const SourceDetails& /*dragSourceDetails*/)
 {
     dragHoverTrack_ = -1;
+    isReorderDrag_ = false;
     repaint();
 }
 
 void TrackHeaderList::itemDropped(const SourceDetails& dragSourceDetails)
 {
     dragHoverTrack_ = -1;
+    isReorderDrag_ = false;
     repaint();
     if (!dragSourceDetails.description.isString())
         return;
 
-    const juce::String filePath = dragSourceDetails.description.toString();
+    const juce::String desc = dragSourceDetails.description.toString();
+    if (desc.startsWith("pattern_track_drag:"))
+    {
+        const int fromTrack = desc.fromFirstOccurrenceOf("pattern_track_drag:", false, false).getIntValue();
+        const int toTrack = pointToTrack(dragSourceDetails.localPosition);
+        const auto* pat = song_.findPattern(patternId_);
+        if (pat != nullptr && fromTrack != toTrack && toTrack >= 0 && toTrack < static_cast<int>(pat->tracks.size()))
+        {
+            if (onMoveTrack_)
+                onMoveTrack_(fromTrack, toTrack);
+        }
+        return;
+    }
+
+    const juce::String filePath = desc;
     const int t = pointToTrack(dragSourceDetails.localPosition);
     if (onFileDropped_)
         onFileDropped_(filePath, t);

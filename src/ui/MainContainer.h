@@ -11,6 +11,7 @@
 #include "ui/IconButton.h"
 #include "ui/PatternListPanel.h"
 #include "ui/PatternView.h"
+#include "ui/ToastOverlay.h"
 #include "ui/TransportBar.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -40,6 +41,8 @@ public:
     void openProjectDialog();
     void showExportDialog();
     void showSettingsDialog();
+
+    void showToast(const juce::String& message, bool isError = false);
 
     void performUndo();
     void performRedo();
@@ -77,6 +80,8 @@ private:
     std::unique_ptr<TransportBar> transportBar_;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
+    juce::TooltipWindow tooltipWindow_{this, 400};
+    ToastOverlay toastOverlay_;
 };
 
 } // namespace trami

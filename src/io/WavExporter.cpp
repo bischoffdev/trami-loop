@@ -40,6 +40,7 @@ bool WavExporter::exportMixdown(const Song& song, StretchCache& stretchCache, co
     SnapshotExchange exchange;
     exchange.publish(std::move(snapshot));
     Sequencer sequencer(exchange, options.sampleRate);
+    sequencer.setMasterVolume(song.masterVolume());
     sequencer.requestPlaying(true);
 
     constexpr int kBlockSize = 512;

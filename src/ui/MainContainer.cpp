@@ -12,27 +12,37 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
 {
     setWantsKeyboardFocus(true);
 
+    patternModeButton_.setActiveColour(Palette::patternAccent);
+    patternModeButton_.setTooltip("Switch to Pattern Editor (F1)");
     patternModeButton_.onClick = [this]() { setViewMode(ViewMode::Pattern); };
     addAndMakeVisible(patternModeButton_);
 
+    arrangerModeButton_.setActiveColour(Palette::arrangerAccent);
+    arrangerModeButton_.setTooltip("Switch to Arranger Timeline (F2)");
     arrangerModeButton_.onClick = [this]() { setViewMode(ViewMode::Arranger); };
     addAndMakeVisible(arrangerModeButton_);
 
+    undoButton_.setTooltip("Undo last change (Cmd+Z)");
     undoButton_.onClick = [this]() { performUndo(); };
     addAndMakeVisible(undoButton_);
 
+    redoButton_.setTooltip("Redo last undone change (Cmd+Shift+Z)");
     redoButton_.onClick = [this]() { performRedo(); };
     addAndMakeVisible(redoButton_);
 
+    saveButton_.setTooltip("Save Project (Cmd+S)");
     saveButton_.onClick = [this]() { saveProjectDialog(); };
     addAndMakeVisible(saveButton_);
 
+    openButton_.setTooltip("Open Project (Cmd+O)");
     openButton_.onClick = [this]() { openProjectDialog(); };
     addAndMakeVisible(openButton_);
 
+    exportButton_.setTooltip("Export Mix to WAV (Cmd+E)");
     exportButton_.onClick = [this]() { showExportDialog(); };
     addAndMakeVisible(exportButton_);
 
+    settingsButton_.setTooltip("Audio Device & MIDI Settings");
     settingsButton_.onClick = [this]() { showSettingsDialog(); };
     addAndMakeVisible(settingsButton_);
 
@@ -81,7 +91,48 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
             else if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
                 arrangerView_->toggleRecording();
         });
+
+    patternView_->setOnLoopRegionChanged([this](int start, int end) {
+        if (currentMode_ == ViewMode::Pattern && transportBar_ != nullptr)
+            transportBar_->setLoopRange(start, end, false);
+    });
+
+    arrangerView_->setOnLoopRegionChanged([this](int start, int end) {
+        if (currentMode_ == ViewMode::Arranger && transportBar_ != nullptr)
+            transportBar_->setLoopRange(start, end, true);
+    });
+
+    transportBar_->setOnLoopRangeChanged([this](int start, int end) {
+        if (currentMode_ == ViewMode::Pattern && patternView_ != nullptr)
+            patternView_->setLoopRegion(start, end);
+        else if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
+            arrangerView_->setLoopRegion(start, end);
+    });
+
+    patternView_->setOnShowToast([this](const juce::String& msg) { showToast(msg); });
+    transportBar_->setOnShowToast([this](const juce::String& msg) { showToast(msg); });
+
+    transportBar_->setOnSwingChanged([this](double /*newSwing*/) {
+        if (currentMode_ == ViewMode::Pattern && patternView_ != nullptr)
+        {
+            patternView_->publishSnapshotQuick();
+            patternView_->repaintGrid();
+        }
+        else if (currentMode_ == ViewMode::Arranger && arrangerView_ != nullptr)
+        {
+            arrangerView_->publishSnapshotQuick();
+        }
+    });
+
+    engine_.sequencer().setMasterVolume(song_.masterVolume());
+
     addAndMakeVisible(transportBar_.get());
+    addAndMakeVisible(toastOverlay_);
+
+    if (patternView_ != nullptr)
+        patternView_->setZoom(song_.patternZoomX(), song_.patternZoomY());
+    if (arrangerView_ != nullptr)
+        arrangerView_->setZoom(song_.arrangerZoomX(), song_.arrangerZoomY());
 
     setViewMode(ViewMode::Pattern);
 }
@@ -95,6 +146,18 @@ void MainContainer::pushUndoState()
 
 void MainContainer::setViewMode(ViewMode mode)
 {
+    if (mode != currentMode_)
+    {
+        if (engine_.recorder().state() != RecordState::Idle)
+            engine_.recorder().stop();
+
+        if (engine_.sequencer().isPlaying())
+        {
+            engine_.sequencer().requestPlaying(false);
+            engine_.sequencer().requestRewind();
+        }
+    }
+
     currentMode_ = mode;
 
     patternModeButton_.setToggleState(mode == ViewMode::Pattern, juce::dontSendNotification);
@@ -120,6 +183,14 @@ void MainContainer::setViewMode(ViewMode mode)
 
     if (patternListPanel_ != nullptr)
         patternListPanel_->updateFromModel();
+
+    if (transportBar_ != nullptr)
+    {
+        if (mode == ViewMode::Pattern && patternView_ != nullptr)
+            transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
+        else if (mode == ViewMode::Arranger && arrangerView_ != nullptr)
+            transportBar_->setLoopRange(arrangerView_->loopStartBar(), arrangerView_->loopEndBar(), true);
+    }
 
     resized();
 }
@@ -147,6 +218,7 @@ void MainContainer::saveProjectDialog()
                 if (ProjectSerializer::saveProject(song_, stretchCache_, dir))
                 {
                     currentProjectDir_ = dir;
+                    showToast("Project saved: " + result.getFileName());
                 }
             }
         });
@@ -169,6 +241,7 @@ void MainContainer::openProjectDialog()
                     song_ = std::move(*loaded);
                     currentProjectDir_ = dir;
                     history_.clear();
+                    engine_.sequencer().setMasterVolume(song_.masterVolume());
                     updateAllViews();
                 }
             }
@@ -218,16 +291,29 @@ void MainContainer::showExportDialog()
         });
 }
 
+void MainContainer::showToast(const juce::String& message, bool isError)
+{
+    toastOverlay_.show(message, isError);
+}
+
 void MainContainer::performUndo()
 {
     if (history_.undo(song_))
+    {
+        engine_.sequencer().setMasterVolume(song_.masterVolume());
         updateAllViews();
+        showToast("Undo");
+    }
 }
 
 void MainContainer::performRedo()
 {
     if (history_.redo(song_))
+    {
+        engine_.sequencer().setMasterVolume(song_.masterVolume());
         updateAllViews();
+        showToast("Redo");
+    }
 }
 
 void MainContainer::updateAllViews()
@@ -241,6 +327,7 @@ void MainContainer::updateAllViews()
 
     if (patternView_ != nullptr)
     {
+        patternView_->setZoom(song_.patternZoomX(), song_.patternZoomY());
         if (!song_.patterns().empty())
             patternView_->setPattern(song_.patterns().front().id);
         patternView_->updateLengthSelector();
@@ -251,6 +338,7 @@ void MainContainer::updateAllViews()
 
     if (arrangerView_ != nullptr)
     {
+        arrangerView_->setZoom(song_.arrangerZoomX(), song_.arrangerZoomY());
         arrangerView_->updatePatternList();
         arrangerView_->republish();
     }
@@ -360,6 +448,12 @@ void MainContainer::resized()
         patternView_->setBounds(viewBounds);
     if (arrangerView_ != nullptr)
         arrangerView_->setBounds(viewBounds);
+
+    // Toast notification overlay (floating above transport bar)
+    const int toastW = std::clamp(320, 200, getWidth() - 40);
+    constexpr int toastH = 34;
+    toastOverlay_.setBounds((getWidth() - toastW) / 2, getHeight() - kBottomBarHeight - toastH - 10, toastW, toastH);
+    toastOverlay_.toFront(true);
 }
 
 } // namespace trami

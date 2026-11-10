@@ -106,6 +106,34 @@ TEST_CASE("Clips can be resized with custom length and offset")
     REQUIRE_FALSE(song.resizeClip(PatternId{99}, clipId, 0, 4, 0));
 }
 
+TEST_CASE("Clips support fractional steps for unconstrained resizing and positioning")
+{
+    Song song;
+    const auto sample = song.addSample(makeLoop(2.0, 1));
+    const auto pattern = song.addPattern("A", 1);
+
+    const auto clipId = *song.placeClip(pattern, 0, sample, 0.5, 3.25, 1.1);
+    const auto* p = song.findPattern(pattern);
+    REQUIRE(p != nullptr);
+    const auto& clip = p->tracks[0].clips.front();
+    REQUIRE(clip.startStep == Catch::Approx(0.5));
+    REQUIRE(clip.lengthSteps == Catch::Approx(3.25));
+    REQUIRE(clip.offsetSteps == Catch::Approx(1.1));
+
+    // Resize with fractional start, length, and offset
+    REQUIRE(song.resizeClip(pattern, clipId, 1.75, 0.5, 0.25));
+    const auto& resizedClip = p->tracks[0].clips.front();
+    REQUIRE(resizedClip.startStep == Catch::Approx(1.75));
+    REQUIRE(resizedClip.lengthSteps == Catch::Approx(0.5));
+    REQUIRE(resizedClip.offsetSteps == Catch::Approx(0.25));
+
+    // Move clip with fractional position
+    REQUIRE(song.moveClip(pattern, clipId, 1, 4.33));
+    const auto& movedClip = p->tracks[1].clips.front();
+    REQUIRE(movedClip.startStep == Catch::Approx(4.33));
+    REQUIRE(movedClip.lengthSteps == Catch::Approx(0.5));
+}
+
 TEST_CASE("Replacing track sample updates track and existing clips")
 {
     Song song;
@@ -370,4 +398,101 @@ TEST_CASE("Track kind toggle is independent per track")
     const auto* p = song.findPattern(patId);
     REQUIRE(p != nullptr);
     REQUIRE(p->tracks[0].clips.front().lengthSteps == 0);
+}
+
+TEST_CASE("Tracks can be rearranged in patterns and arrangement")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    song.addTrackToPattern(patId, s);
+    song.addTrackToPattern(patId, s);
+
+    song.renamePatternTrack(patId, 0, "Track A");
+    song.renamePatternTrack(patId, 1, "Track B");
+    song.renamePatternTrack(patId, 2, "Track C");
+
+    REQUIRE(song.movePatternTrack(patId, 0, 2));
+    REQUIRE(song.patternTrackName(patId, 0) == "Track B");
+    REQUIRE(song.patternTrackName(patId, 1) == "Track C");
+    REQUIRE(song.patternTrackName(patId, 2) == "Track A");
+
+    // Arranger track reordering
+    song.renameArrangerTrack(0, "Arr A");
+    song.renameArrangerTrack(1, "Arr B");
+    song.placeBlock(0, patId, 0);
+
+    REQUIRE(song.moveArrangerTrack(0, 1));
+    REQUIRE(song.arrangerTrackName(0) == "Arr B");
+    REQUIRE(song.arrangerTrackName(1) == "Arr A");
+    REQUIRE(song.arrangement()[1].blocks.size() == 1);
+}
+
+TEST_CASE("Arranger tracks can be deleted")
+{
+    Song song;
+    const auto patId = song.addPattern("P", 1);
+    song.renameArrangerTrack(0, "Track 0");
+    song.renameArrangerTrack(1, "Track 1");
+    song.placeBlock(0, patId, 0);
+    song.placeBlock(1, patId, 2);
+
+    REQUIRE(song.deleteArrangerTrack(0));
+    REQUIRE(song.arrangerTrackName(0) == "Track 1");
+    REQUIRE(song.arrangement()[0].blocks.size() == 1);
+    REQUIRE(song.arrangement()[0].blocks[0].startBar == 2);
+    REQUIRE(song.arrangement()[kArrangerTracks - 1].name.empty());
+    REQUIRE(song.arrangement()[kArrangerTracks - 1].blocks.empty());
+}
+
+TEST_CASE("Clip volume envelope gain and fades can be modified")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    const auto clipId = *song.placeClip(patId, 0, s, 0);
+
+    const auto* clip = song.findClip(patId, clipId);
+    REQUIRE(clip != nullptr);
+    REQUIRE(clip->gain == Catch::Approx(1.0f));
+    REQUIRE(clip->fadeInSteps == Catch::Approx(0.0f));
+    REQUIRE(clip->fadeOutSteps == Catch::Approx(0.0f));
+
+    REQUIRE(song.setClipEnvelope(patId, clipId, 1.5f, 2.0f, 4.0f));
+    REQUIRE(clip->gain == Catch::Approx(1.5f));
+    REQUIRE(clip->fadeInSteps == Catch::Approx(2.0f));
+    REQUIRE(clip->fadeOutSteps == Catch::Approx(4.0f));
+}
+
+TEST_CASE("Multiple clips can be resized and deleted together")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 2); // 64 steps
+    const auto c1 = *song.placeClip(patId, 0, s, 0);
+    const auto c2 = *song.placeClip(patId, 0, s, 16);
+    const auto c3 = *song.placeClip(patId, 1, s, 0);
+
+    REQUIRE(song.findPattern(patId)->tracks[0].clips.size() == 2);
+    REQUIRE(song.findPattern(patId)->tracks[1].clips.size() == 1);
+
+    // Resize a group together
+    REQUIRE(song.resizeClip(patId, c1, 0, 12, 0));
+    REQUIRE(song.resizeClip(patId, c2, 16, 12, 0));
+    REQUIRE(song.resizeClip(patId, c3, 0, 12, 0));
+
+    REQUIRE(song.findClip(patId, c1)->lengthSteps == 12);
+    REQUIRE(song.findClip(patId, c2)->lengthSteps == 12);
+    REQUIRE(song.findClip(patId, c3)->lengthSteps == 12);
+
+    // Delete a group together
+    std::vector<ClipId> toDelete = {c1, c3};
+    for (auto cid : toDelete)
+        REQUIRE(song.removeClip(patId, cid));
+
+    REQUIRE(song.findClip(patId, c1) == nullptr);
+    REQUIRE(song.findClip(patId, c2) != nullptr);
+    REQUIRE(song.findClip(patId, c3) == nullptr);
+    REQUIRE(song.findPattern(patId)->tracks[0].clips.size() == 1);
+    REQUIRE(song.findPattern(patId)->tracks[1].clips.empty());
 }

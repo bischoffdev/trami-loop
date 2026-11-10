@@ -46,11 +46,14 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     addAndMakeVisible(fileDetailsLabel_);
 
     autoPreviewToggle_.setColour(juce::ToggleButton::textColourId, Palette::textDim);
+    autoPreviewToggle_.setTooltip("Automatically play samples on selection");
     addAndMakeVisible(autoPreviewToggle_);
 
+    previewButton_.setTooltip("Preview selected sample (Space)");
     previewButton_.onClick = [this]() { previewCurrentSelection(); };
     addAndMakeVisible(previewButton_);
 
+    addLoopButton_.setTooltip("Add as Loop to New Track");
     addLoopButton_.onClick = [this]() {
         const auto file = fileTree_->getSelectedFile();
         if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
@@ -63,6 +66,7 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     };
     addAndMakeVisible(addLoopButton_);
 
+    addOneShotButton_.setTooltip("Add as One-Shot to New Track");
     addOneShotButton_.onClick = [this]() {
         const auto file = fileTree_->getSelectedFile();
         if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
@@ -419,13 +423,13 @@ void SampleBrowserPanel::resized()
     rightArea.removeFromTop(4);
 
     auto controlBar = rightArea.removeFromBottom(46);
-    previewButton_.setBounds(controlBar.removeFromLeft(80).reduced(0, 2));
+    previewButton_.setBounds(controlBar.removeFromLeft(80).reduced(0, 4));
     controlBar.removeFromLeft(10);
     autoPreviewToggle_.setBounds(controlBar.removeFromLeft(110).reduced(0, 8));
     controlBar.removeFromLeft(16);
-    addLoopButton_.setBounds(controlBar.removeFromLeft(115).reduced(0, 2));
-    controlBar.removeFromLeft(8);
-    addOneShotButton_.setBounds(controlBar.removeFromLeft(115).reduced(0, 2));
+    addLoopButton_.setBounds(controlBar.removeFromLeft(140).reduced(0, 4));
+    controlBar.removeFromLeft(10);
+    addOneShotButton_.setBounds(controlBar.removeFromLeft(160).reduced(0, 4));
 
     waveformRect_ = rightArea.reduced(0, 2);
 }

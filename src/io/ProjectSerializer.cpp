@@ -16,6 +16,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     root->setProperty("bpm", song.bpm());
     root->setProperty("swing", song.swing());
     root->setProperty("masterVolume", song.masterVolume());
+    root->setProperty("patternZoomX", song.patternZoomX());
+    root->setProperty("patternZoomY", song.patternZoomY());
+    root->setProperty("arrangerZoomX", song.arrangerZoomX());
+    root->setProperty("arrangerZoomY", song.arrangerZoomY());
 
     // 1. Samples
     juce::Array<juce::var> sampleList;
@@ -84,10 +88,16 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                 clipObj->setProperty("id", static_cast<juce::int64>(c.id.value));
                 clipObj->setProperty("sampleId", static_cast<juce::int64>(c.sampleId.value));
                 clipObj->setProperty("startStep", c.startStep);
-                if (c.lengthSteps > 0)
+                if (c.lengthSteps > 0.0)
                     clipObj->setProperty("lengthSteps", c.lengthSteps);
-                if (c.offsetSteps > 0)
+                if (c.offsetSteps > 0.0)
                     clipObj->setProperty("offsetSteps", c.offsetSteps);
+                if (c.gain != 1.0f)
+                    clipObj->setProperty("gain", c.gain);
+                if (c.fadeInSteps > 0.0f)
+                    clipObj->setProperty("fadeInSteps", c.fadeInSteps);
+                if (c.fadeOutSteps > 0.0f)
+                    clipObj->setProperty("fadeOutSteps", c.fadeOutSteps);
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
@@ -149,6 +159,14 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
     song.setBpm(json.getProperty("bpm", 120.0));
     song.setSwing(json.getProperty("swing", 0.0));
     song.setMasterVolume(static_cast<float>(json.getProperty("masterVolume", 1.0f)));
+
+    const float pzx = static_cast<float>(json.getProperty("patternZoomX", 1.0));
+    const float pzy = static_cast<float>(json.getProperty("patternZoomY", 1.0));
+    song.setPatternZoom(pzx > 0.05f ? pzx : 1.0f, pzy > 0.05f ? pzy : 1.0f);
+
+    const float azx = static_cast<float>(json.getProperty("arrangerZoomX", 1.0));
+    const float azy = static_cast<float>(json.getProperty("arrangerZoomY", 1.0));
+    song.setArrangerZoom(azx > 0.05f ? azx : 1.0f, azy > 0.05f ? azy : 1.0f);
 
     std::unordered_map<std::uint32_t, SampleId> sampleIdMap;
     std::unordered_map<std::uint32_t, PatternId> patternIdMap;
@@ -217,13 +235,20 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                         {
                             const auto oldSampleId =
                                 static_cast<std::uint32_t>(static_cast<juce::int64>(cVar["sampleId"]));
-                            const int startStep = cVar["startStep"];
-                            const int lengthSteps = static_cast<int>(cVar.getProperty("lengthSteps", 0));
-                            const int offsetSteps = static_cast<int>(cVar.getProperty("offsetSteps", 0));
+                            const double startStep = static_cast<double>(cVar.getProperty("startStep", 0.0));
+                            const double lengthSteps = static_cast<double>(cVar.getProperty("lengthSteps", 0.0));
+                            const double offsetSteps = static_cast<double>(cVar.getProperty("offsetSteps", 0.0));
 
                             if (sampleIdMap.contains(oldSampleId))
                             {
-                                song.placeClip(newPatId, trackIdx, sampleIdMap[oldSampleId], startStep, lengthSteps, offsetSteps);
+                                if (auto placedClipId = song.placeClip(newPatId, trackIdx, sampleIdMap[oldSampleId], startStep, lengthSteps, offsetSteps))
+                                {
+                                    const float gain = static_cast<float>(cVar.getProperty("gain", 1.0f));
+                                    const float fadeIn = static_cast<float>(cVar.getProperty("fadeInSteps", 0.0f));
+                                    const float fadeOut = static_cast<float>(cVar.getProperty("fadeOutSteps", 0.0f));
+                                    if (gain != 1.0f || fadeIn > 0.0f || fadeOut > 0.0f)
+                                        song.setClipEnvelope(newPatId, *placedClipId, gain, fadeIn, fadeOut);
+                                }
                             }
                         }
                     }

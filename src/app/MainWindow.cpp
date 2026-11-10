@@ -12,7 +12,7 @@ MainWindow::MainWindow(const juce::String& name, AudioEngine& engine, Song& song
     setUsingNativeTitleBar(true);
     setContentOwned(new MainContainer(song, engine, stretchCache), true);
     setResizable(true, true);
-    setResizeLimits(800, 600, 3840, 2160);
+    setResizeLimits(920, 600, 3840, 2160);
     centreWithSize(1200, 720);
     setVisible(true);
     getContentComponent()->grabKeyboardFocus();

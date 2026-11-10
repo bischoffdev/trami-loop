@@ -21,7 +21,8 @@ public:
     static std::unique_ptr<PlaybackSnapshot> buildPattern(const Song& song, PatternId pattern,
                                                           const SampleBank& bank, double sampleRate,
                                                           int loopStartStep = 0, int loopEndStep = 0,
-                                                          const SampleBank* rawBank = nullptr);
+                                                          const SampleBank* rawBank = nullptr,
+                                                          const std::vector<DragClipOverride>* overrides = nullptr);
 
     /// Song / Arrangement mode: plays all pattern blocks across the 8 arranger tracks.
     static std::unique_ptr<PlaybackSnapshot> buildArrangement(const Song& song, const SampleBank& bank,
