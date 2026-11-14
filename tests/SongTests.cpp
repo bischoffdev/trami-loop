@@ -496,3 +496,19 @@ TEST_CASE("Multiple clips can be resized and deleted together")
     REQUIRE(song.findPattern(patId)->tracks[0].clips.size() == 1);
     REQUIRE(song.findPattern(patId)->tracks[1].clips.empty());
 }
+
+TEST_CASE("Clip reverse flag can be set and toggled")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    const auto clipId = *song.placeClip(patId, 0, s, 0);
+
+    REQUIRE_FALSE(song.isClipReversed(patId, clipId));
+    REQUIRE(song.setClipReversed(patId, clipId, true));
+    REQUIRE(song.isClipReversed(patId, clipId));
+    REQUIRE(song.findClip(patId, clipId)->reversed == true);
+
+    REQUIRE(song.setClipReversed(patId, clipId, false));
+    REQUIRE_FALSE(song.isClipReversed(patId, clipId));
+}

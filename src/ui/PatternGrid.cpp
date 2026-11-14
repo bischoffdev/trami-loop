@@ -318,7 +318,14 @@ PatternGrid::DragMode PatternGrid::hitTestResize(juce::Point<int> pt) const
         if (!b.contains(pt))
             continue;
 
-        // 1. Top handles: Fade In / Fade Out
+        // 1. Left / Right edge resize (trim & horizontal loop rollout)
+        const int edgeMargin = std::clamp(b.getWidth() / 4, 4, 10);
+        if (pt.x <= b.getX() + edgeMargin)
+            return DragMode::ResizeLeft;
+        if (pt.x >= b.getRight() - edgeMargin)
+            return DragMode::ResizeRight;
+
+        // 2. Top handles: Fade In / Fade Out
         if (pt.y <= b.getY() + 14)
         {
             const int fadeInPx = juce::roundToInt(it->fadeInSteps * static_cast<float>(stepWidth_));
@@ -330,18 +337,11 @@ PatternGrid::DragMode PatternGrid::hitTestResize(juce::Point<int> pt) const
                 return DragMode::FadeOut;
         }
 
-        // 2. Volume Gain line and center handle
+        // 3. Volume Gain line and center handle
         const float gainNorm = std::clamp(it->gain, 0.0f, 2.0f) * 0.5f;
         const float gainY = static_cast<float>(b.getY()) + static_cast<float>(b.getHeight()) * (1.0f - gainNorm);
         if (std::abs(static_cast<float>(pt.y) - gainY) <= 6.0f && pt.x > b.getX() + 8 && pt.x < b.getRight() - 8)
             return DragMode::Gain;
-
-        // 3. Left / Right edge resize (trim)
-        const int edgeMargin = std::clamp(b.getWidth() / 4, 3, 8);
-        if (pt.x <= b.getX() + edgeMargin)
-            return DragMode::ResizeLeft;
-        if (pt.x >= b.getRight() - edgeMargin)
-            return DragMode::ResizeRight;
 
         return DragMode::Move;
     }
@@ -370,7 +370,9 @@ void PatternGrid::mouseMove(const juce::MouseEvent& e)
             setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
         else if (my <= 15 && mx > startX + 12 && mx < endX - 12)
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-        else if (isNearPlayhead || my > 15)
+        else if (my > 15)
+            setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
+        else if (isNearPlayhead)
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
         else
             setMouseCursor(juce::MouseCursor::NormalCursor);
@@ -710,11 +712,12 @@ void PatternGrid::paint(juce::Graphics& g)
 
                     for (int px = 0; px < w; ++px)
                     {
+                        const int samplePx = clip.reversed ? (w - 1 - px) : px;
                         const std::int64_t f0 =
-                            startFrame + (static_cast<std::int64_t>(px) * clipFrames) / w;
+                            startFrame + (static_cast<std::int64_t>(samplePx) * clipFrames) / w;
                         const std::int64_t f1 = std::min<std::int64_t>(
                             totalFrames,
-                            startFrame + (static_cast<std::int64_t>(px + 1) * clipFrames) / w);
+                            startFrame + (static_cast<std::int64_t>(samplePx + 1) * clipFrames) / w);
 
                         float minVal = 0.0f;
                         float maxVal = 0.0f;
@@ -770,21 +773,25 @@ void PatternGrid::paint(juce::Graphics& g)
                 g.fillRect(bounds.getRight() - 4, bounds.getY() + 4, 2, bounds.getHeight() - 8);
             }
 
-            // Kind badge: [L] or [1]
+            // Kind badge: [L] or [1], with REV indicator if reversed
             if (bounds.getWidth() >= 20 && trackHeight_ >= 18)
             {
                 const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.3f, 8.0f, 11.0f);
                 g.setFont(juce::FontOptions(fontSize).withStyle("Bold"));
-                if (isLoop)
-                {
+
+                juce::String badgeText;
+                if (clip.reversed)
+                    badgeText += "REV ";
+                badgeText += isLoop ? "[L]" : "[1]";
+
+                if (clip.reversed)
+                    g.setColour(juce::Colour(0xff38bdf8));
+                else if (isLoop)
                     g.setColour(juce::Colour(0xffffca28));
-                    g.drawText("[L]", bounds.reduced(6, 3), juce::Justification::topRight, false);
-                }
                 else
-                {
                     g.setColour(Palette::textDim.withAlpha(0.65f));
-                    g.drawText("[1]", bounds.reduced(6, 3), juce::Justification::topRight, false);
-                }
+
+                g.drawText(badgeText, bounds.reduced(6, 3), juce::Justification::topRight, false);
             }
 
             // Volume Envelope (Gain Line, Fade In/Out Curves & Handles)
@@ -1149,6 +1156,8 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
 
             const bool multi = (isClipSelected(cid) && selectedClips_.size() > 1);
             m.addSeparator();
+            m.addItem(5, "Reverse (R)", true, clip->reversed);
+            m.addSeparator();
             if (multi)
             {
                 m.addItem(2, juce::String::formatted("Cut %d Clips (Cmd+X)", static_cast<int>(selectedClips_.size())));
@@ -1177,6 +1186,13 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                 else if (res == 2) listener_.clipCutRequested(cid);
                                 else if (res == 3) listener_.clipCopyRequested(cid);
                                 else if (res == 4) listener_.clipDuplicateRequested(cid);
+                                else if (res == 5)
+                                {
+                                    if (isClipSelected(cid) && selectedClips_.size() > 1)
+                                        listener_.clipsReverseRequested(selectedClips_);
+                                    else
+                                        listener_.clipReverseRequested(cid);
+                                }
                                 else if (res == 101) listener_.clipEnvelopeChanged(cid, 1.0f, curFadeIn, curFadeOut);
                                 else if (res == 102) listener_.clipEnvelopeChanged(cid, 1.41f, curFadeIn, curFadeOut);
                                 else if (res == 103) listener_.clipEnvelopeChanged(cid, 2.0f, curFadeIn, curFadeOut);
@@ -1219,7 +1235,7 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
         if (e.mods.isPopupMenu())
         {
             juce::PopupMenu m;
-            m.addItem(1, "Loop Entire Pattern");
+            m.addItem(1, "Expand to Full Length");
             m.addItem(2, "Loop 1 Bar");
             m.addItem(3, "Loop 2 Bars");
             m.addItem(4, "Loop 4 Bars");
@@ -1280,14 +1296,14 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             else if (mx > startX && mx < endX)
             {
                 rulerDragMode_ = RulerDragMode::MoveRegion;
-                rulerDragAnchorStep_ = snapStep;
+                rulerDragRegionAnchorStep_ = snapStep;
                 rulerDragOriginalStart_ = loopStartStep_;
                 rulerDragOriginalEnd_ = loopEndStep_;
             }
             else
             {
                 rulerDragMode_ = RulerDragMode::SetRegion;
-                rulerDragAnchorStep_ = snapStep;
+                rulerDragRegionAnchorStep_ = snapStep;
                 loopStartStep_ = snapStep;
                 loopEndStep_ = std::min(totalSteps, snapStep + std::max(rasterSteps_, 2));
             }
@@ -1295,11 +1311,31 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             return;
         }
 
-        // Lower ruler area (y > 16): Scrub playhead
-        rulerDragMode_ = RulerDragMode::SeekPlayhead;
-        const int seekStep = std::clamp(snapStep, 0, totalSteps);
-        listener_.playheadSeekRequested(seekStep);
-        setPlayheadStep(static_cast<double>(seekStep));
+        // Lower ruler area (y > 16): Prepare for either Playhead seek or Up/Down zoom
+        rulerDragMode_ = RulerDragMode::RulerPending;
+        rulerDragStartScreenPos_ = e.getScreenPosition();
+        rulerDragStartZoomX_ = zoomX_;
+        rulerDragClickedStep_ = snapStep;
+
+        auto* vp = findParentComponentOfClass<juce::Viewport>();
+        const int vpX = vp != nullptr ? vp->getViewPositionX() : 0;
+        const int vpW = vp != nullptr ? vp->getViewWidth() : getWidth();
+
+        // Pin playhead if visible in viewport, so its relative position remains stable
+        const double phStep = playheadStep_;
+        const int phPixelX = phStep >= 0.0 ? juce::roundToInt(phStep * static_cast<double>(stepWidth_)) : -1;
+        const bool phVisible = (phStep >= 0.0 && phPixelX >= vpX && phPixelX <= vpX + vpW);
+
+        if (phVisible)
+        {
+            rulerDragAnchorStep_ = phStep;
+            rulerDragAnchorViewportX_ = phPixelX - vpX;
+        }
+        else
+        {
+            rulerDragAnchorStep_ = xToStep(e.getPosition().x);
+            rulerDragAnchorViewportX_ = vp != nullptr ? e.getEventRelativeTo(vp).getPosition().x : e.getPosition().x;
+        }
         return;
     }
 
@@ -1440,15 +1476,37 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         const int currentStep = std::clamp(juce::roundToInt(xToStep(e.getPosition().x)), 0, totalSteps);
         const int snapStep = (currentStep / rasterSteps_) * rasterSteps_;
 
+        if (rulerDragMode_ == RulerDragMode::RulerPending)
+        {
+            const int totalDx = std::abs(e.getScreenX() - rulerDragStartScreenPos_.x);
+            const int totalDy = std::abs(e.getScreenY() - rulerDragStartScreenPos_.y);
+            if (totalDx < 4 && totalDy < 4)
+                return;
+
+            if (totalDy > totalDx)
+            {
+                rulerDragMode_ = RulerDragMode::ZoomRuler;
+                setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+            }
+            else
+            {
+                rulerDragMode_ = RulerDragMode::SeekPlayhead;
+                setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            }
+        }
+
+        if (rulerDragMode_ == RulerDragMode::ZoomRuler)
+        {
+            // Only zoom horizontally, playhead NEVER moves
+            const int totalDy = e.getScreenY() - rulerDragStartScreenPos_.y;
+            const float targetZoomX = rulerDragStartZoomX_ * std::exp(static_cast<float>(totalDy) * 0.007f);
+            listener_.zoomToLevelRequested(targetZoomX, rulerDragAnchorStep_, rulerDragAnchorViewportX_);
+            return;
+        }
+
         if (rulerDragMode_ == RulerDragMode::SeekPlayhead)
         {
-            if (e.getPosition().y >= kRulerHeight && e.getDistanceFromDragStart() > 6)
-            {
-                rulerDragMode_ = RulerDragMode::None;
-                startMarquee(e.getMouseDownPosition(), e.mods);
-                updateMarquee(e.getPosition());
-                return;
-            }
+            // Only move playhead, NO zoom occurs
             listener_.playheadSeekRequested(snapStep);
             setPlayheadStep(static_cast<double>(snapStep));
             return;
@@ -1456,8 +1514,8 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
 
         if (rulerDragMode_ == RulerDragMode::SetRegion)
         {
-            loopStartStep_ = std::min(rulerDragAnchorStep_, snapStep);
-            loopEndStep_ = std::max(rulerDragAnchorStep_, snapStep);
+            loopStartStep_ = std::min(rulerDragRegionAnchorStep_, snapStep);
+            loopEndStep_ = std::max(rulerDragRegionAnchorStep_, snapStep);
             if (loopEndStep_ <= loopStartStep_)
                 loopEndStep_ = std::min(totalSteps, loopStartStep_ + std::max(rasterSteps_, 2));
         }
@@ -1471,7 +1529,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         }
         else if (rulerDragMode_ == RulerDragMode::MoveRegion)
         {
-            const int delta = snapStep - rulerDragAnchorStep_;
+            const int delta = snapStep - rulerDragRegionAnchorStep_;
             const int len = rulerDragOriginalEnd_ - rulerDragOriginalStart_;
             const int newStart = std::clamp(rulerDragOriginalStart_ + delta, 0, totalSteps - len);
             loopStartStep_ = newStart;
@@ -1778,8 +1836,17 @@ void PatternGrid::mouseUp(const juce::MouseEvent& e)
     {
         const auto mode = rulerDragMode_;
         rulerDragMode_ = RulerDragMode::None;
-        if (mode != RulerDragMode::SeekPlayhead)
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+
+        if (mode == RulerDragMode::RulerPending)
+        {
+            listener_.playheadSeekRequested(rulerDragClickedStep_);
+            setPlayheadStep(static_cast<double>(rulerDragClickedStep_));
+        }
+        else if (mode != RulerDragMode::SeekPlayhead && mode != RulerDragMode::ZoomRuler)
+        {
             listener_.loopRegionChanged(loopStartStep_, loopEndStep_);
+        }
         repaint();
         return;
     }
@@ -2270,6 +2337,15 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key)
                 return true;
             }
         }
+    }
+
+    if (!selectedClips_.empty() && (key.isKeyCode('R') || key.getKeyCode() == 'r' || key.getKeyCode() == 'R'))
+    {
+        if (selectedClips_.size() == 1)
+            listener_.clipReverseRequested(selectedClips_.front());
+        else
+            listener_.clipsReverseRequested(selectedClips_);
+        return true;
     }
 
     if (isCmdOrCtrl)

@@ -266,9 +266,13 @@ void ArrangerGrid::mouseMove(const juce::MouseEvent& e)
         {
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         }
-        else if (isNearPlayhead || my > 15)
+        else if (isNearPlayhead)
         {
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        }
+        else if (my > 15)
+        {
+            setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
         }
         else
         {
@@ -292,7 +296,7 @@ void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
         if (e.mods.isPopupMenu())
         {
             juce::PopupMenu m;
-            m.addItem(1, "Loop Entire Song");
+            m.addItem(1, "Expand to Full Length");
             m.addItem(2, "Loop 4 Bars");
             m.addItem(3, "Loop 8 Bars");
             m.addItem(4, "Loop 16 Bars");
@@ -353,14 +357,14 @@ void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
             else if (mx > startX && mx < endX)
             {
                 rulerDragMode_ = RulerDragMode::MoveRegion;
-                rulerDragAnchorBar_ = clickBar;
+                rulerDragRegionAnchorBar_ = clickBar;
                 rulerDragOriginalStart_ = loopStartBar_;
                 rulerDragOriginalEnd_ = loopEndBar_;
             }
             else
             {
                 rulerDragMode_ = RulerDragMode::SetRegion;
-                rulerDragAnchorBar_ = clickBar;
+                rulerDragRegionAnchorBar_ = clickBar;
                 loopStartBar_ = clickBar;
                 loopEndBar_ = std::min(totalBars, clickBar + 2);
             }
@@ -368,11 +372,31 @@ void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
             return;
         }
 
-        // Lower ruler area (y > 16): Scrub playhead
-        rulerDragMode_ = RulerDragMode::SeekPlayhead;
-        const double preciseBar = std::max(0.0, static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_));
-        listener_.playheadSeekRequested(preciseBar);
-        setPlayheadBar(preciseBar);
+        // Lower ruler area (y > 16): Prepare for either Playhead seek or Up/Down zoom
+        rulerDragMode_ = RulerDragMode::RulerPending;
+        rulerDragStartScreenPos_ = e.getScreenPosition();
+        rulerDragStartZoomX_ = zoomX_;
+        rulerDragClickedBar_ = std::max(0.0, static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_));
+
+        auto* vp = findParentComponentOfClass<juce::Viewport>();
+        const int vpX = vp != nullptr ? vp->getViewPositionX() : 0;
+        const int vpW = vp != nullptr ? vp->getViewWidth() : getWidth();
+
+        // Pin playhead if visible in viewport, so its relative position remains stable
+        const double phBar = playheadBar_;
+        const int phPixelX = phBar >= 0.0 ? juce::roundToInt(phBar * static_cast<double>(barWidth_)) : -1;
+        const bool phVisible = (phBar >= 0.0 && phPixelX >= vpX && phPixelX <= vpX + vpW);
+
+        if (phVisible)
+        {
+            rulerDragAnchorBar_ = phBar;
+            rulerDragAnchorViewportX_ = phPixelX - vpX;
+        }
+        else
+        {
+            rulerDragAnchorBar_ = std::max(0.0, static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_));
+            rulerDragAnchorViewportX_ = vp != nullptr ? e.getEventRelativeTo(vp).getPosition().x : e.getPosition().x;
+        }
         return;
     }
 
@@ -419,8 +443,37 @@ void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
 {
     if (rulerDragMode_ != RulerDragMode::None)
     {
+        if (rulerDragMode_ == RulerDragMode::RulerPending)
+        {
+            const int totalDx = std::abs(e.getScreenX() - rulerDragStartScreenPos_.x);
+            const int totalDy = std::abs(e.getScreenY() - rulerDragStartScreenPos_.y);
+            if (totalDx < 4 && totalDy < 4)
+                return;
+
+            if (totalDy > totalDx)
+            {
+                rulerDragMode_ = RulerDragMode::ZoomRuler;
+                setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+            }
+            else
+            {
+                rulerDragMode_ = RulerDragMode::SeekPlayhead;
+                setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            }
+        }
+
+        if (rulerDragMode_ == RulerDragMode::ZoomRuler)
+        {
+            // Only zoom horizontally, playhead NEVER moves
+            const int totalDy = e.getScreenY() - rulerDragStartScreenPos_.y;
+            const float targetZoomX = rulerDragStartZoomX_ * std::exp(static_cast<float>(totalDy) * 0.007f);
+            listener_.zoomToLevelRequested(targetZoomX, rulerDragAnchorBar_, rulerDragAnchorViewportX_);
+            return;
+        }
+
         if (rulerDragMode_ == RulerDragMode::SeekPlayhead)
         {
+            // Only move playhead, NO zoom occurs
             const double preciseBar = std::max(0.0, static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_));
             listener_.playheadSeekRequested(preciseBar);
             setPlayheadBar(preciseBar);
@@ -432,8 +485,8 @@ void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
 
         if (rulerDragMode_ == RulerDragMode::SetRegion)
         {
-            loopStartBar_ = std::min(rulerDragAnchorBar_, currentBar);
-            loopEndBar_ = std::max(rulerDragAnchorBar_, currentBar);
+            loopStartBar_ = std::min(rulerDragRegionAnchorBar_, currentBar);
+            loopEndBar_ = std::max(rulerDragRegionAnchorBar_, currentBar);
             if (loopEndBar_ <= loopStartBar_)
                 loopEndBar_ = std::min(totalBars, loopStartBar_ + 1);
         }
@@ -447,7 +500,7 @@ void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
         }
         else if (rulerDragMode_ == RulerDragMode::MoveRegion)
         {
-            const int delta = currentBar - rulerDragAnchorBar_;
+            const int delta = currentBar - rulerDragRegionAnchorBar_;
             const int len = rulerDragOriginalEnd_ - rulerDragOriginalStart_;
             const int newStart = std::clamp(rulerDragOriginalStart_ + delta, 0, totalBars - len);
             loopStartBar_ = newStart;
@@ -483,8 +536,17 @@ void ArrangerGrid::mouseUp(const juce::MouseEvent&)
     {
         const auto mode = rulerDragMode_;
         rulerDragMode_ = RulerDragMode::None;
-        if (mode != RulerDragMode::SeekPlayhead)
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+
+        if (mode == RulerDragMode::RulerPending)
+        {
+            listener_.playheadSeekRequested(rulerDragClickedBar_);
+            setPlayheadBar(rulerDragClickedBar_);
+        }
+        else if (mode != RulerDragMode::SeekPlayhead && mode != RulerDragMode::ZoomRuler)
+        {
             listener_.loopRegionChanged(loopStartBar_, loopEndBar_);
+        }
         repaint();
         return;
     }

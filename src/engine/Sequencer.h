@@ -106,6 +106,7 @@ private:
         std::int64_t fadeInSamples = 0;
         std::int64_t fadeOutSamples = 0;
         std::uint32_t clipId = 0;
+        bool reversed = false;
     };
 
     struct TrackMixState
@@ -129,7 +130,7 @@ private:
     void startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL, float gainR,
                     std::int64_t audioOffset = 0, std::int64_t maxFrames = -1, int track = -1,
                     std::int64_t fadeInSamples = 0, std::int64_t fadeOutSamples = 0,
-                    std::uint32_t clipId = 0) noexcept;
+                    std::uint32_t clipId = 0, bool reversed = false) noexcept;
     void renderVoices(float* left, float* right, int numSamples) noexcept;
     void renderPreview(float* left, float* right, int numSamples) noexcept;
     void stopAllVoices() noexcept;

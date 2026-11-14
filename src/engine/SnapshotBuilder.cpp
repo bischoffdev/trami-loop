@@ -73,6 +73,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             float gain = 1.0f;
             float fadeInSteps = 0.0f;
             float fadeOutSteps = 0.0f;
+            bool reversed = false;
         };
 
         std::vector<EffectiveClip> trackClips;
@@ -82,7 +83,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             for (const auto& clip : trk.clips)
             {
                 trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
-                                      clip.gain, clip.fadeInSteps, clip.fadeOutSteps});
+                                      clip.gain, clip.fadeInSteps, clip.fadeOutSteps, clip.reversed});
             }
         }
         else
@@ -103,12 +104,12 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                 if (ov == nullptr)
                 {
                     trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
-                                          clip.gain, clip.fadeInSteps, clip.fadeOutSteps});
+                                          clip.gain, clip.fadeInSteps, clip.fadeOutSteps, clip.reversed});
                 }
                 else if (ov->currentTrack == static_cast<int>(t))
                 {
                     trackClips.push_back({clip.id, clip.sampleId, ov->currentStartStep, ov->currentLengthSteps, ov->currentOffsetSteps,
-                                          ov->currentGain, ov->currentFadeIn, ov->currentFadeOut});
+                                          ov->currentGain, ov->currentFadeIn, ov->currentFadeOut, clip.reversed});
                 }
                 // If ov->currentTrack != t, the clip has been dragged away from track t; skip it here.
             }
@@ -118,25 +119,25 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             {
                 if (ov.currentTrack == static_cast<int>(t) && ov.originalTrack != static_cast<int>(t))
                 {
-                    SampleId sId;
+                    const Clip* origClip = nullptr;
                     for (const auto& otherTrack : p->tracks)
                     {
                         for (const auto& c : otherTrack.clips)
                         {
                             if (c.id == ov.clipId)
                             {
-                                sId = c.sampleId;
+                                origClip = &c;
                                 break;
                             }
                         }
-                        if (sId.isValid())
+                        if (origClip != nullptr)
                             break;
                     }
 
-                    if (sId.isValid())
+                    if (origClip != nullptr)
                     {
-                        trackClips.push_back({ov.clipId, sId, ov.currentStartStep, ov.currentLengthSteps, ov.currentOffsetSteps,
-                                              ov.currentGain, ov.currentFadeIn, ov.currentFadeOut});
+                        trackClips.push_back({ov.clipId, origClip->sampleId, ov.currentStartStep, ov.currentLengthSteps, ov.currentOffsetSteps,
+                                              ov.currentGain, ov.currentFadeIn, ov.currentFadeOut, origClip->reversed});
                     }
                 }
             }
@@ -216,7 +217,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
             snapshot->events.push_back({eventStartSample, found->second.get(), clipGainL,
                                         clipGainR, audioOffset, maxFrames, static_cast<int>(t),
-                                        fadeInSamples, fadeOutSamples, clip.id.value});
+                                        fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed});
             snapshot->keepAlive.push_back(found->second);
         }
     }
@@ -372,7 +373,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
                     const float clipGainR = combinedGainR * clip.gain;
 
                     snapshot->events.push_back({startSample, found->second.get(), clipGainL, clipGainR,
-                                                audioOffset, maxFrames, static_cast<int>(at), fadeInSamples, fadeOutSamples, clip.id.value});
+                                                audioOffset, maxFrames, static_cast<int>(at), fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed});
                     snapshot->keepAlive.push_back(found->second);
                 }
             }

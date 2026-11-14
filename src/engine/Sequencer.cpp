@@ -302,7 +302,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
     if (playing_.load() && current_ != nullptr && current_->lengthSamples > 0)
     {
-        const bool isLooping = loopingEnabled_.load() && current_->looping;
+        const bool isLooping = loopingEnabled_.load();
         const std::int64_t loopStart = (current_->loopEndSample > current_->loopStartSample && current_->loopStartSample >= 0)
                                           ? current_->loopStartSample : 0;
         const std::int64_t loopEnd = (current_->loopEndSample > current_->loopStartSample && current_->loopEndSample <= current_->lengthSamples)
@@ -614,7 +614,7 @@ void Sequencer::scheduleRange(std::int64_t from, std::int64_t to, int blockOffse
     for (; it != events.end() && it->startSample < to; ++it)
         startVoice(it->audio, current_, blockOffset + static_cast<int>(it->startSample - from), it->gainLeft,
                    it->gainRight, it->audioOffset, it->maxFrames, it->track, it->fadeInSamples, it->fadeOutSamples,
-                   it->clipId);
+                   it->clipId, it->reversed);
 }
 
 void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept
@@ -638,7 +638,8 @@ void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockO
 
 void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL,
                            float gainR, std::int64_t audioOffset, std::int64_t maxFrames, int track,
-                           std::int64_t fadeInSamples, std::int64_t fadeOutSamples, std::uint32_t clipId) noexcept
+                           std::int64_t fadeInSamples, std::int64_t fadeOutSamples, std::uint32_t clipId,
+                           bool reversed) noexcept
 {
     if (audio == nullptr || audio->numFrames() == 0)
         return;
@@ -686,7 +687,7 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
     }
 
     *target = Voice{audio, owner, startFrame, startFrame, endFrame, delay, gainL, gainR, effL, effR, true, track,
-                    std::max<std::int64_t>(0, fadeInSamples), std::max<std::int64_t>(0, fadeOutSamples), clipId};
+                    std::max<std::int64_t>(0, fadeInSamples), std::max<std::int64_t>(0, fadeOutSamples), clipId, reversed};
 }
 
 void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
@@ -737,8 +738,12 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
                     env *= static_cast<float>(remaining) / static_cast<float>(voice.fadeOutSamples);
             }
 
-            left[i] += srcL[voice.readPosition] * voice.gainLeft * env;
-            right[i] += srcR[voice.readPosition] * voice.gainRight * env;
+            const std::int64_t frameIdx = voice.reversed
+                ? (voice.endPosition - 1 - (voice.readPosition - voice.startPosition))
+                : voice.readPosition;
+
+            left[i] += srcL[frameIdx] * voice.gainLeft * env;
+            right[i] += srcR[frameIdx] * voice.gainRight * env;
             ++voice.readPosition;
         }
         voice.startDelay = 0;

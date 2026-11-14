@@ -25,6 +25,7 @@ struct Clip
     float gain = 1.0f;           ///< Linear gain multiplier, 0..2 (default 1.0 = 0 dB).
     float fadeInSteps = 0.0f;    ///< Fade-in duration in steps (0 = no fade).
     float fadeOutSteps = 0.0f;   ///< Fade-out duration in steps (0 = no fade).
+    bool reversed = false;       ///< When true, audio plays in reverse.
 };
 
 /// Temporary clip override state during real-time dragging, resizing, or envelope adjustments.

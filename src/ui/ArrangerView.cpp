@@ -550,6 +550,39 @@ void ArrangerView::zoomRequested(float deltaX, float deltaY, juce::Point<int> an
     applyZoom(zoomX_ * deltaX, zoomY_ * deltaY, anchorInGrid);
 }
 
+void ArrangerView::zoomToLevelRequested(float targetZoomX, double anchorBar, int anchorViewportX)
+{
+    applyZoomAtBar(targetZoomX, anchorBar, anchorViewportX);
+}
+
+void ArrangerView::applyZoomAtBar(float targetZoomX, double anchorBar, int anchorViewportX)
+{
+    const float newZoomX = std::clamp(targetZoomX, 0.2f, 4.0f);
+    song_.setArrangerZoom(newZoomX, zoomY_);
+
+    if (std::abs(newZoomX - zoomX_) < 0.0005f)
+        return;
+
+    zoomX_ = newZoomX;
+
+    if (gridViewport_ != nullptr)
+        gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+
+    if (grid_ != nullptr)
+        grid_->setZoom(zoomX_, zoomY_);
+    if (trackHeaders_ != nullptr)
+        trackHeaders_->setTrackHeight(grid_->trackHeight());
+
+    resized();
+
+    if (gridViewport_ != nullptr && grid_ != nullptr)
+    {
+        const int newBarW = grid_->barWidth();
+        const int newVpX = juce::roundToInt(anchorBar * static_cast<double>(newBarW) - static_cast<double>(anchorViewportX));
+        gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
+    }
+}
+
 void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
 {
     const float newZoomX = std::clamp(targetZoomX, 0.2f, 4.0f);
@@ -562,7 +595,9 @@ void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<i
 
     const double ratioX = static_cast<double>(newZoomX) / static_cast<double>(zoomX_);
     const int vpX = gridViewport_->getViewPositionX();
-    const int newVpX = juce::roundToInt((vpX + anchorInGrid.x) * ratioX - anchorInGrid.x);
+    const int newVpX = (anchorInGrid.x == 0 && anchorInGrid.y == 0)
+                           ? juce::roundToInt(static_cast<double>(vpX) * ratioX)
+                           : juce::roundToInt(static_cast<double>(vpX) + static_cast<double>(anchorInGrid.x) * (ratioX - 1.0));
 
     zoomX_ = newZoomX;
     zoomY_ = newZoomY;
@@ -595,8 +630,22 @@ void ArrangerView::zoomOut()
 
 void ArrangerView::resetZoom()
 {
-    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
-    applyZoom(1.0f, 1.0f, anchor);
+    const int totalBars = std::max(4, song_.lengthBars());
+    const int numTracks = std::max(1, song_.numArrangerTracks());
+
+    const int viewW = gridViewport_ != nullptr
+                          ? std::max(100, gridViewport_->getWidth() - StudioOneZoomCorner::kThickness - 4)
+                          : getWidth();
+    const int viewH = gridViewport_ != nullptr
+                          ? std::max(100, gridViewport_->getHeight() - ArrangerGrid::kRulerHeight - StudioOneZoomCorner::kThickness - 4)
+                          : getHeight();
+
+    const float fitX = static_cast<float>(viewW) / static_cast<float>(totalBars * ArrangerGrid::kDefaultBarWidth);
+    const float fitY = static_cast<float>(viewH) / static_cast<float>(numTracks * ArrangerGrid::kDefaultTrackHeight);
+
+    applyZoom(fitX, std::clamp(fitY, 0.6f, 2.0f), {0, 0});
+    if (gridViewport_ != nullptr)
+        gridViewport_->setViewPosition(0, 0);
 }
 
 void ArrangerView::trackHeightIn()
