@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             platform_name: macOS
           - os: windows-2022
             platform_name: Windows
@@ -44,6 +44,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: |
           cmake -B build -A x64 \
             -DCMAKE_BUILD_TYPE=Release \
