@@ -76,7 +76,7 @@ void StretchCache::requestUpdateAsync(const Song& song, double sampleRate, Compl
     cancelPending();
     const std::uint64_t jobId = ++currentJobId_;
 
-    workerThread_ = std::jthread([this, song, sampleRate, onComplete = std::move(onComplete), jobId]() {
+    workerThread_ = std::thread([this, song, sampleRate, onComplete = std::move(onComplete), jobId]() {
         SampleBank bank;
         for (const auto& sample : song.samples())
         {
