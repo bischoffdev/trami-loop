@@ -222,6 +222,22 @@ bool Song::setClipEnvelope(PatternId patternId, ClipId clipId, float gain, float
     return true;
 }
 
+bool Song::setClipReversed(PatternId patternId, ClipId clipId, bool reversed)
+{
+    Clip* clip = findClip(patternId, clipId);
+    if (clip == nullptr)
+        return false;
+
+    clip->reversed = reversed;
+    return true;
+}
+
+bool Song::isClipReversed(PatternId patternId, ClipId clipId) const noexcept
+{
+    const Clip* clip = findClip(patternId, clipId);
+    return clip != nullptr && clip->reversed;
+}
+
 const Clip* Song::findClip(PatternId patternId, ClipId clipId) const noexcept
 {
     const Pattern* pattern = findPattern(patternId);

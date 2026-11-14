@@ -256,6 +256,13 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     };
     addAndMakeVisible(gridViewport_.get());
 
+    const auto* initialPat = song_.findPattern(currentPattern_);
+    const int initialTotalSteps = initialPat != nullptr ? initialPat->lengthSteps() : 32;
+    loopStartStep_ = 0;
+    loopEndStep_ = initialTotalSteps;
+    if (grid_ != nullptr)
+        grid_->setLoopRegion(loopStartStep_, loopEndStep_);
+
     updateLengthSelector();
     updateSampleSelector();
     publishSnapshotQuick();
@@ -275,7 +282,11 @@ void PatternView::setPattern(PatternId patternId)
     pasteTargetStep_ = -1;
     const auto* pat = song_.findPattern(patternId);
     loopStartStep_ = 0;
-    loopEndStep_ = pat != nullptr ? pat->lengthSteps() : 16;
+    loopEndStep_ = pat != nullptr ? pat->lengthSteps() : 32;
+    if (grid_ != nullptr)
+        grid_->setLoopRegion(loopStartStep_, loopEndStep_);
+    if (onLoopRegionChanged_)
+        onLoopRegionChanged_(loopStartStep_, loopEndStep_);
     trackHeaders_->setPattern(patternId);
     grid_->setPattern(patternId);
     updateLengthSelector();
@@ -625,6 +636,43 @@ void PatternView::clipEnvelopeChanged(ClipId clipId, float gain, float fadeInSte
     grid_->repaint();
 }
 
+void PatternView::clipReverseRequested(ClipId clipId)
+{
+    clipsReverseRequested({clipId});
+}
+
+void PatternView::clipsReverseRequested(const std::vector<ClipId>& clipIds)
+{
+    if (clipIds.empty())
+        return;
+
+    if (onPushUndo_)
+        onPushUndo_();
+
+    bool anyReversed = false;
+    for (auto cid : clipIds)
+    {
+        const bool current = song_.isClipReversed(currentPattern_, cid);
+        song_.setClipReversed(currentPattern_, cid, !current);
+        if (!current)
+            anyReversed = true;
+    }
+
+    if (onShowToast_)
+    {
+        const int count = static_cast<int>(clipIds.size());
+        if (count == 1)
+            onShowToast_(anyReversed ? "Clip reversed" : "Clip restored to normal direction");
+        else
+            onShowToast_(juce::String::formatted("%d clips direction toggled", count));
+    }
+
+    publishSnapshotQuick();
+    republish();
+    if (grid_ != nullptr)
+        grid_->repaint();
+}
+
 void PatternView::clipDeleteRequested(ClipId clipId)
 {
     clipsDeleteRequested({clipId});
@@ -766,6 +814,7 @@ void PatternView::copySelectedClip()
                 item.gain = c.gain;
                 item.fadeInSteps = c.fadeInSteps;
                 item.fadeOutSteps = c.fadeOutSteps;
+                item.reversed = c.reversed;
                 item.originalStartStep = c.startStep;
                 item.span = span;
 
@@ -1035,6 +1084,8 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
         if (newClipId.has_value())
         {
             song_.setClipEnvelope(currentPattern_, *newClipId, item.gain, item.fadeInSteps, item.fadeOutSteps);
+            if (item.reversed)
+                song_.setClipReversed(currentPattern_, *newClipId, true);
             newClipIds.push_back(*newClipId);
             lastPastedTrack = destTrack;
             const double span = item.span > 0.0 ? item.span : (item.lengthSteps > 0.0 ? item.lengthSteps : 4.0);
@@ -1131,6 +1182,8 @@ void PatternView::duplicateSelectedClip()
         if (newClipId.has_value())
         {
             song_.setClipEnvelope(currentPattern_, *newClipId, item.gain, item.fadeInSteps, item.fadeOutSteps);
+            if (item.reversed)
+                song_.setClipReversed(currentPattern_, *newClipId, true);
             newClipIds.push_back(*newClipId);
         }
     }
@@ -1333,6 +1386,39 @@ void PatternView::zoomRequested(float deltaX, float deltaY, juce::Point<int> anc
     applyZoom(zoomX_ * deltaX, zoomY_ * deltaY, anchorInGrid);
 }
 
+void PatternView::zoomToLevelRequested(float targetZoomX, double anchorStep, int anchorViewportX)
+{
+    applyZoomAtStep(targetZoomX, anchorStep, anchorViewportX);
+}
+
+void PatternView::applyZoomAtStep(float targetZoomX, double anchorStep, int anchorViewportX)
+{
+    const float newZoomX = std::clamp(targetZoomX, 0.25f, 4.0f);
+    song_.setPatternZoom(newZoomX, zoomY_);
+
+    if (std::abs(newZoomX - zoomX_) < 0.0005f)
+        return;
+
+    zoomX_ = newZoomX;
+
+    if (gridViewport_ != nullptr)
+        gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+
+    if (grid_ != nullptr)
+        grid_->setZoom(zoomX_, zoomY_);
+    if (trackHeaders_ != nullptr)
+        trackHeaders_->setTrackHeight(grid_->trackHeight());
+
+    resized();
+
+    if (gridViewport_ != nullptr && grid_ != nullptr)
+    {
+        const int newStepW = grid_->stepWidth();
+        const int newVpX = juce::roundToInt(anchorStep * static_cast<double>(newStepW) - static_cast<double>(anchorViewportX));
+        gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
+    }
+}
+
 void PatternView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
 {
     const float newZoomX = std::clamp(targetZoomX, 0.25f, 4.0f);
@@ -1345,7 +1431,9 @@ void PatternView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<in
 
     const double ratioX = static_cast<double>(newZoomX) / static_cast<double>(zoomX_);
     const int vpX = gridViewport_->getViewPositionX();
-    const int newVpX = juce::roundToInt((vpX + anchorInGrid.x) * ratioX - anchorInGrid.x);
+    const int newVpX = (anchorInGrid.x == 0 && anchorInGrid.y == 0)
+                           ? juce::roundToInt(static_cast<double>(vpX) * ratioX)
+                           : juce::roundToInt(static_cast<double>(vpX) + static_cast<double>(anchorInGrid.x) * (ratioX - 1.0));
 
     zoomX_ = newZoomX;
     zoomY_ = newZoomY;
@@ -1378,8 +1466,23 @@ void PatternView::zoomOut()
 
 void PatternView::resetZoom()
 {
-    const auto anchor = gridViewport_ != nullptr ? gridViewport_->getViewArea().getCentre() : juce::Point<int>(0, 0);
-    applyZoom(1.0f, 1.0f, anchor);
+    const auto* pat = song_.findPattern(currentPattern_);
+    const int totalSteps = pat != nullptr ? std::max(1, pat->lengthSteps()) : kStepsPerBar;
+    const int numTracks = pat != nullptr ? std::max(1, static_cast<int>(pat->tracks.size())) : 1;
+
+    const int viewW = gridViewport_ != nullptr
+                          ? std::max(100, gridViewport_->getWidth() - StudioOneZoomCorner::kThickness - 4)
+                          : getWidth();
+    const int viewH = gridViewport_ != nullptr
+                          ? std::max(100, gridViewport_->getHeight() - PatternGrid::kRulerHeight - StudioOneZoomCorner::kThickness - 4)
+                          : getHeight();
+
+    const float fitX = static_cast<float>(viewW) / static_cast<float>(totalSteps * PatternGrid::kDefaultStepWidth);
+    const float fitY = static_cast<float>(viewH) / static_cast<float>(numTracks * PatternGrid::kDefaultTrackHeight);
+
+    applyZoom(fitX, std::clamp(fitY, 0.6f, 2.0f), {0, 0});
+    if (gridViewport_ != nullptr)
+        gridViewport_->setViewPosition(0, 0);
 }
 
 void PatternView::trackHeightIn()
@@ -1438,6 +1541,24 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
 
     const auto mods = key.getModifiers();
     const bool isCmdOrCtrl = mods.isCommandDown() || mods.isCtrlDown();
+
+    if (!key.getModifiers().isCommandDown() && (key.isKeyCode('R') || key.getKeyCode() == 'r' || key.getKeyCode() == 'R'))
+    {
+        if (grid_ != nullptr)
+        {
+            const auto& selected = grid_->selectedClips();
+            if (!selected.empty())
+            {
+                clipsReverseRequested(selected);
+                return true;
+            }
+            if (grid_->selectedClip().isValid())
+            {
+                clipReverseRequested(grid_->selectedClip());
+                return true;
+            }
+        }
+    }
 
     if (isCmdOrCtrl)
     {

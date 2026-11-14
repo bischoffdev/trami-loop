@@ -49,6 +49,8 @@ public:
                                     double lengthSteps = 0.0, double offsetSteps = 0.0);
     bool resizeClip(PatternId pattern, ClipId clip, double newStartStep, double newLengthSteps, double newOffsetSteps);
     bool setClipEnvelope(PatternId pattern, ClipId clip, float gain, float fadeInSteps, float fadeOutSteps);
+    bool setClipReversed(PatternId pattern, ClipId clip, bool reversed);
+    bool isClipReversed(PatternId pattern, ClipId clip) const noexcept;
     const Clip* findClip(PatternId pattern, ClipId clip) const noexcept;
     Clip* findClip(PatternId pattern, ClipId clip) noexcept;
     bool moveClip(PatternId pattern, ClipId clip, int newTrack, double newStartStep);

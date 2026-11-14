@@ -24,6 +24,7 @@ public:
         virtual void loopRegionChanged(int /*startBar*/, int /*endBar*/) {}
         virtual void playheadSeekRequested(double /*bar*/) {}
         virtual void zoomRequested(float /*deltaX*/, float /*deltaY*/, juce::Point<int> /*anchorInGrid*/) {}
+        virtual void zoomToLevelRequested(float /*targetZoomX*/, double /*anchorBar*/, int /*anchorViewportX*/) {}
     };
 
     ArrangerGrid(const Song& song, Listener& listener);
@@ -103,7 +104,9 @@ private:
     enum class RulerDragMode
     {
         None,
+        RulerPending,
         SeekPlayhead,
+        ZoomRuler,
         SetRegion,
         MoveRegion,
         ResizeStart,
@@ -113,7 +116,12 @@ private:
     int loopStartBar_ = 0;
     int loopEndBar_ = 4;
     RulerDragMode rulerDragMode_ = RulerDragMode::None;
-    int rulerDragAnchorBar_ = 0;
+    juce::Point<int> rulerDragStartScreenPos_;
+    float rulerDragStartZoomX_ = 1.0f;
+    double rulerDragAnchorBar_ = 0.0;
+    int rulerDragAnchorViewportX_ = 0;
+    double rulerDragClickedBar_ = 0.0;
+    int rulerDragRegionAnchorBar_ = 0;
     int rulerDragOriginalStart_ = 0;
     int rulerDragOriginalEnd_ = 4;
 };

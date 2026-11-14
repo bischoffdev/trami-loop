@@ -49,6 +49,8 @@ public:
                 clipResized(r.clipId, r.newStartStep, r.newLengthSteps, r.newOffsetSteps);
         }
         virtual void clipEnvelopeChanged(ClipId /*clipId*/, float /*gain*/, float /*fadeInSteps*/, float /*fadeOutSteps*/) {}
+        virtual void clipReverseRequested(ClipId /*clipId*/) {}
+        virtual void clipsReverseRequested(const std::vector<ClipId>& /*clipIds*/) {}
         virtual void clipDeleteRequested(ClipId clipId) = 0;
         virtual void clipsDeleteRequested(const std::vector<ClipId>& clipIds)
         {
@@ -66,6 +68,7 @@ public:
         virtual void loopRegionChanged(int /*startStep*/, int /*endStep*/) {}
         virtual void playheadSeekRequested(int /*step*/) {}
         virtual void zoomRequested(float /*deltaX*/, float /*deltaY*/, juce::Point<int> /*anchorInGrid*/) {}
+        virtual void zoomToLevelRequested(float /*targetZoomX*/, double /*anchorStep*/, int /*anchorViewportX*/) {}
         virtual void clipsDragging(const std::vector<DragClipOverride>& /*items*/) {}
         virtual void clipsDragEnded() {}
     };
@@ -211,7 +214,9 @@ private:
     enum class RulerDragMode
     {
         None,
+        RulerPending,
         SeekPlayhead,
+        ZoomRuler,
         SetRegion,
         MoveRegion,
         ResizeStart,
@@ -221,7 +226,12 @@ private:
     int loopStartStep_ = 0;
     int loopEndStep_ = 16;
     RulerDragMode rulerDragMode_ = RulerDragMode::None;
-    int rulerDragAnchorStep_ = 0;
+    juce::Point<int> rulerDragStartScreenPos_;
+    float rulerDragStartZoomX_ = 1.0f;
+    double rulerDragAnchorStep_ = 0.0;
+    int rulerDragAnchorViewportX_ = 0;
+    int rulerDragClickedStep_ = 0;
+    int rulerDragRegionAnchorStep_ = 0;
     int rulerDragOriginalStart_ = 0;
     int rulerDragOriginalEnd_ = 16;
     juce::String currentTooltip_;

@@ -906,7 +906,7 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
             menu.addItem(4, "Loop 8 Bars", true, (loopEnd_ - loopStart_) == 8);
             menu.addItem(5, "Loop 16 Bars", true, (loopEnd_ - loopStart_) == 16);
             menu.addSeparator();
-            menu.addItem(6, "Loop Entire Song", true, loopStart_ == 0 && loopEnd_ == std::max(2, song_.lengthBars()));
+            menu.addItem(6, "Expand to Full Length", true, loopStart_ == 0 && loopEnd_ == std::max(2, song_.lengthBars()));
             menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this), [this](int result) {
                 if (!onLoopRangeChanged_) return;
                 if (result == 1) onLoopRangeChanged_(0, 1);
@@ -923,7 +923,7 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
             menu.addItem(2, "Loop 2 Bars", true, (loopEnd_ - loopStart_) == kStepsPerBar * 2);
             menu.addItem(3, "Loop 4 Bars", true, (loopEnd_ - loopStart_) == kStepsPerBar * 4);
             menu.addSeparator();
-            menu.addItem(4, "Loop Entire Pattern");
+            menu.addItem(4, "Expand to Full Length");
             menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this), [this](int result) {
                 if (!onLoopRangeChanged_) return;
                 if (result == 1) onLoopRangeChanged_(0, kStepsPerBar);

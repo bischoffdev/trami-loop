@@ -98,6 +98,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                     clipObj->setProperty("fadeInSteps", c.fadeInSteps);
                 if (c.fadeOutSteps > 0.0f)
                     clipObj->setProperty("fadeOutSteps", c.fadeOutSteps);
+                if (c.reversed)
+                    clipObj->setProperty("reversed", true);
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
@@ -248,6 +250,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                                     const float fadeOut = static_cast<float>(cVar.getProperty("fadeOutSteps", 0.0f));
                                     if (gain != 1.0f || fadeIn > 0.0f || fadeOut > 0.0f)
                                         song.setClipEnvelope(newPatId, *placedClipId, gain, fadeIn, fadeOut);
+                                    if (static_cast<bool>(cVar.getProperty("reversed", false)))
+                                        song.setClipReversed(newPatId, *placedClipId, true);
                                 }
                             }
                         }

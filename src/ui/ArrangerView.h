@@ -54,6 +54,7 @@ public:
     void loopRegionChanged(int startBar, int endBar) override;
     void playheadSeekRequested(double bar) override;
     void zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid) override;
+    void zoomToLevelRequested(float targetZoomX, double anchorBar, int anchorViewportX) override;
 
     int loopStartBar() const noexcept { return loopStartBar_; }
     int loopEndBar() const noexcept { return loopEndBar_; }
@@ -65,6 +66,7 @@ public:
     void moveTrack(int from, int to);
     void setZoom(float x, float y);
     void applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid);
+    void applyZoomAtBar(float targetZoomX, double anchorBar, int anchorViewportX);
     void zoomIn();
     void zoomOut();
     void resetZoom();

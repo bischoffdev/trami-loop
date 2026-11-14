@@ -39,6 +39,8 @@ public:
     void clipResized(ClipId clipId, double newStartStep, double newLengthSteps, double newOffsetSteps) override;
     void clipsResized(const std::vector<PatternGrid::ClipResizeInfo>& resizes) override;
     void clipEnvelopeChanged(ClipId clipId, float gain, float fadeInSteps, float fadeOutSteps) override;
+    void clipReverseRequested(ClipId clipId) override;
+    void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
     void clipDeleteRequested(ClipId clipId) override;
     void clipsDeleteRequested(const std::vector<ClipId>& clipIds) override;
     void clipCutRequested(ClipId clipId) override;
@@ -53,6 +55,7 @@ public:
     void loopRegionChanged(int startStep, int endStep) override;
     void playheadSeekRequested(int step) override;
     void zoomRequested(float deltaX, float deltaY, juce::Point<int> anchorInGrid) override;
+    void zoomToLevelRequested(float targetZoomX, double anchorStep, int anchorViewportX) override;
     void clipsDragging(const std::vector<DragClipOverride>& items) override;
     void clipsDragEnded() override;
 
@@ -93,6 +96,7 @@ public:
 
     void setZoom(float x, float y);
     void applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid);
+    void applyZoomAtStep(float targetZoomX, double anchorStep, int anchorViewportX);
     void zoomIn();
     void zoomOut();
     void resetZoom();
@@ -111,6 +115,7 @@ public:
         float gain = 1.0f;
         float fadeInSteps = 0.0f;
         float fadeOutSteps = 0.0f;
+        bool reversed = false;
         double originalStartStep = 0.0;
         double span = 0.0;
     };
