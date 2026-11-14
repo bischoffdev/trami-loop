@@ -57,7 +57,7 @@ private:
     using CacheKey = std::tuple<std::uint32_t, int, int, int>;
     std::map<CacheKey, std::shared_ptr<const AudioData>> cache_;
 
-    std::jthread workerThread_;
+    std::thread workerThread_;
     std::atomic<bool> cancelRequested_{false};
     std::atomic<std::uint64_t> currentJobId_{0};
 };
