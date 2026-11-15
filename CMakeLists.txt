@@ -12,6 +12,10 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 endif()
 
+if(WIN32)
+    add_compile_definitions(NOMINMAX _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+endif()
+
 option(TRAMI_BUILD_TESTS "Build unit tests" ON)
 
 include(cmake/Dependencies.cmake)
