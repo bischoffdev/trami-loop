@@ -247,8 +247,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
     if (loopEndBar > loopStartBar && loopStartBar >= 0)
     {
-        snapshot->loopStartSample = timing.stepToSample(static_cast<std::int64_t>(loopStartBar) * kStepsPerBar);
-        snapshot->loopEndSample = timing.stepToSample(static_cast<std::int64_t>(loopEndBar) * kStepsPerBar);
+        snapshot->loopStartSample = timing.stepToSample(static_cast<double>(loopStartBar * kStepsPerBar));
+        snapshot->loopEndSample = timing.stepToSample(static_cast<double>(loopEndBar * kStepsPerBar));
     }
     else
     {
@@ -311,7 +311,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
                     const double globalStep = static_cast<double>(blockBaseStep) + clip.startStep;
                     const std::int64_t startSample = timing.stepToSample(globalStep);
-                    const std::int64_t blockEndSample = timing.stepToSample(blockBaseStep + pattern->lengthSteps());
+                    const std::int64_t blockEndSample = timing.stepToSample(static_cast<double>(blockBaseStep + pattern->lengthSteps()));
                     if (startSample >= blockEndSample)
                         continue;
 
@@ -343,7 +343,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
                     const double globalStep = static_cast<double>(blockBaseStep) + clip.startStep;
                     const std::int64_t startSample = timing.stepToSample(globalStep);
-                    const std::int64_t blockEndSample = timing.stepToSample(blockBaseStep + pattern->lengthSteps());
+                    const std::int64_t blockEndSample = timing.stepToSample(static_cast<double>(blockBaseStep + pattern->lengthSteps()));
                     if (startSample >= blockEndSample)
                         continue;
 
