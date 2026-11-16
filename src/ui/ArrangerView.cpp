@@ -167,6 +167,9 @@ ArrangerView::~ArrangerView()
 
 void ArrangerView::updatePatternList()
 {
+    if (!song_.findPattern(activePattern_) && !song_.patterns().empty())
+        activePattern_ = song_.patterns().front().id;
+
     patternCombo_.clear(juce::dontSendNotification);
     int selectedId = 1;
     int idx = 1;
@@ -202,7 +205,7 @@ void ArrangerView::publishSnapshotQuick()
     if (bankToUse.empty() && !song_.samples().empty())
         return;
     engine_.publish(SnapshotBuilder::buildArrangement(song_, bankToUse, engine_.sampleRate(),
-                                                     loopStartBar_, loopEndBar_, &rawBank));
+                                                     loopStartBar_, loopEndBar_, &rawBank, &stretchCache_));
 }
 
 void ArrangerView::republish()
@@ -213,7 +216,7 @@ void ArrangerView::republish()
             syncAllTrackMixes();
             const auto rawBank = stretchCache_.getRawBank();
             engine_.publish(SnapshotBuilder::buildArrangement(song_, activeBank_, engine_.sampleRate(),
-                                                             loopStartBar_, loopEndBar_, &rawBank));
+                                                             loopStartBar_, loopEndBar_, &rawBank, &stretchCache_));
             if (trackHeaders_ != nullptr)
                 trackHeaders_->updateFromModel();
             if (grid_ != nullptr)

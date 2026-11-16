@@ -25,6 +25,7 @@ public:
         ArrangerMode,
         Undo,
         Redo,
+        New,
         Save,
         Open,
         Export,

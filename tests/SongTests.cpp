@@ -58,8 +58,8 @@ TEST_CASE("Clips are validated against pattern, track, sample and length")
     const auto pattern = song.addPattern("Intro", 2);
 
     REQUIRE(song.placeClip(pattern, 0, sample, 0));
-    REQUIRE(song.placeClip(pattern, 15, sample, 63));
-    REQUIRE_FALSE(song.placeClip(pattern, 16, sample, 0));
+    REQUIRE(song.placeClip(pattern, kTracksPerPattern - 1, sample, 63));
+    REQUIRE_FALSE(song.placeClip(pattern, kTracksPerPattern, sample, 0));
     REQUIRE_FALSE(song.placeClip(pattern, 0, sample, 64));
     REQUIRE_FALSE(song.placeClip(pattern, 0, SampleId{99}, 0));
     REQUIRE_FALSE(song.placeClip(PatternId{99}, 0, sample, 0));
@@ -511,4 +511,53 @@ TEST_CASE("Clip reverse flag can be set and toggled")
 
     REQUIRE(song.setClipReversed(patId, clipId, false));
     REQUIRE_FALSE(song.isClipReversed(patId, clipId));
+}
+
+TEST_CASE("Clip transposition semitones can be set, clamped, and queried")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    const auto clipId = *song.placeClip(patId, 0, s, 0);
+
+    REQUIRE(song.clipTranspose(patId, clipId) == 0);
+
+    REQUIRE(song.setClipTranspose(patId, clipId, 7));
+    REQUIRE(song.clipTranspose(patId, clipId) == 7);
+    REQUIRE(song.findClip(patId, clipId)->transposeSemitones == 7);
+
+    // Negative semitones
+    REQUIRE(song.setClipTranspose(patId, clipId, -12));
+    REQUIRE(song.clipTranspose(patId, clipId) == -12);
+
+    // Clamping beyond [-48, 48]
+    REQUIRE(song.setClipTranspose(patId, clipId, 100));
+    REQUIRE(song.clipTranspose(patId, clipId) == 48);
+
+    REQUIRE(song.setClipTranspose(patId, clipId, -100));
+    REQUIRE(song.clipTranspose(patId, clipId) == -48);
+
+    // Invalid pattern or clip returns 0 and false
+    REQUIRE_FALSE(song.setClipTranspose(PatternId{999}, clipId, 5));
+    REQUIRE_FALSE(song.setClipTranspose(patId, ClipId{999}, 5));
+    REQUIRE(song.clipTranspose(patId, ClipId{999}) == 0);
+}
+
+TEST_CASE("SongHistory tracks clip transposition across undo and redo")
+{
+    Song song;
+    SongHistory history;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    const auto clipId = *song.placeClip(patId, 0, s, 0);
+
+    history.pushState(song);
+    song.setClipTranspose(patId, clipId, 5);
+    REQUIRE(song.clipTranspose(patId, clipId) == 5);
+
+    REQUIRE(history.undo(song));
+    REQUIRE(song.clipTranspose(patId, clipId) == 0);
+
+    REQUIRE(history.redo(song));
+    REQUIRE(song.clipTranspose(patId, clipId) == 5);
 }

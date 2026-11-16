@@ -220,7 +220,15 @@ double PatternGrid::clipSpan(const Clip& clip, int trackIndex) const
 
     if (kind == SampleKind::Loop)
     {
-        const int bars = std::max(1, sample->loopBars);
+        int bars = sample->loopBars;
+        if (bars <= 1 && sample->durationSeconds > 0.0)
+        {
+            const double secPerBar = (song_.bpm() > 0.0) ? (60.0 / song_.bpm()) * 4.0 : 2.0;
+            const int estBars = static_cast<int>(std::round(sample->durationSeconds / secPerBar));
+            if (estBars >= 1)
+                bars = estBars;
+        }
+        bars = std::max(1, bars);
         return static_cast<double>(bars * kStepsPerBar);
     }
 
@@ -782,6 +790,8 @@ void PatternGrid::paint(juce::Graphics& g)
                 juce::String badgeText;
                 if (clip.reversed)
                     badgeText += "REV ";
+                if (clip.transposeSemitones != 0)
+                    badgeText += (clip.transposeSemitones > 0 ? "+" : "") + juce::String(clip.transposeSemitones) + "st ";
                 badgeText += isLoop ? "[L]" : "[1]";
 
                 if (clip.reversed)
@@ -1121,9 +1131,16 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
         if (const Clip* clip = findClipAt(e.getPosition()))
         {
             const ClipId cid = clip->id;
+            if (!isClipSelected(cid))
+            {
+                setSelectedClip(cid);
+                listener_.clipClicked(cid);
+            }
+
             const float curGain = clip->gain;
             const float curFadeIn = clip->fadeInSteps;
             const float curFadeOut = clip->fadeOutSteps;
+            const int curTranspose = clip->transposeSemitones;
 
             juce::PopupMenu m;
             juce::PopupMenu volMenu;
@@ -1153,6 +1170,29 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             fadeOutMenu.addItem(305, "4 Steps (1/4)", true, std::abs(curFadeOut - 4.0f) < 0.1f);
             fadeOutMenu.addItem(306, "8 Steps (1/2 Bar)", true, std::abs(curFadeOut - 8.0f) < 0.1f);
             m.addSubMenu("Fade Out", fadeOutMenu);
+
+            juce::PopupMenu transposeMenu;
+            transposeMenu.addItem(401, "Transpose Up (+1 st) [+]", true, false);
+            transposeMenu.addItem(402, "Transpose Down (-1 st) [-]", true, false);
+            transposeMenu.addSeparator();
+            transposeMenu.addItem(412, "+12 st (Octave Up)", true, curTranspose == 12);
+            transposeMenu.addItem(407, "+7 st (Fifth Up)", true, curTranspose == 7);
+            transposeMenu.addItem(405, "+5 st (Fourth Up)", true, curTranspose == 5);
+            transposeMenu.addItem(404, "+4 st (Major 3rd)", true, curTranspose == 4);
+            transposeMenu.addItem(403, "+3 st (Minor 3rd)", true, curTranspose == 3);
+            transposeMenu.addItem(400, "0 st (Original Pitch)", true, curTranspose == 0);
+            transposeMenu.addItem(423, "-3 st (Minor 3rd)", true, curTranspose == -3);
+            transposeMenu.addItem(424, "-4 st (Major 3rd)", true, curTranspose == -4);
+            transposeMenu.addItem(425, "-5 st (Fourth Down)", true, curTranspose == -5);
+            transposeMenu.addItem(427, "-7 st (Fifth Down)", true, curTranspose == -7);
+            transposeMenu.addItem(432, "-12 st (Octave Down)", true, curTranspose == -12);
+            transposeMenu.addSeparator();
+            transposeMenu.addItem(450, "Reset Transpose (0 st)", true, false);
+
+            juce::String transposeHeader = "Transpose (Pitch)";
+            if (curTranspose != 0)
+                transposeHeader += juce::String::formatted(" [%+d st]", curTranspose);
+            m.addSubMenu(transposeHeader, transposeMenu);
 
             const bool multi = (isClipSelected(cid) && selectedClips_.size() > 1);
             m.addSeparator();
@@ -1212,6 +1252,71 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                 else if (res == 304) listener_.clipEnvelopeChanged(cid, curGain, curFadeIn, 2.0f);
                                 else if (res == 305) listener_.clipEnvelopeChanged(cid, curGain, curFadeIn, 4.0f);
                                 else if (res == 306) listener_.clipEnvelopeChanged(cid, curGain, curFadeIn, 8.0f);
+                                else if (res == 401)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeDelta(targets, 1);
+                                }
+                                else if (res == 402)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeDelta(targets, -1);
+                                }
+                                else if (res == 400 || res == 450)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 0);
+                                }
+                                else if (res == 412)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 12);
+                                }
+                                else if (res == 407)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 7);
+                                }
+                                else if (res == 405)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 5);
+                                }
+                                else if (res == 404)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 4);
+                                }
+                                else if (res == 403)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, 3);
+                                }
+                                else if (res == 423)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, -3);
+                                }
+                                else if (res == 424)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, -4);
+                                }
+                                else if (res == 425)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, -5);
+                                }
+                                else if (res == 427)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, -7);
+                                }
+                                else if (res == 432)
+                                {
+                                    const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1) ? selectedClips_ : std::vector<ClipId>{cid};
+                                    listener_.clipsTransposeSet(targets, -12);
+                                }
                             });
         }
         return;
@@ -2345,6 +2450,21 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key)
             listener_.clipReverseRequested(selectedClips_.front());
         else
             listener_.clipsReverseRequested(selectedClips_);
+        return true;
+    }
+
+    const bool isPlus = !isCmdOrCtrl && (key.getTextCharacter() == '+' ||
+                                         key.getKeyCode() == juce::KeyPress::numberPadAdd ||
+                                         key.isKeyCode('+') ||
+                                         (key.getKeyCode() == '=' && !mods.isAltDown()));
+    const bool isMinus = !isCmdOrCtrl && (key.getTextCharacter() == '-' ||
+                                          key.getKeyCode() == juce::KeyPress::numberPadSubtract ||
+                                          key.isKeyCode('-') ||
+                                          key.getKeyCode() == '-');
+
+    if (!selectedClips_.empty() && (isPlus || isMinus))
+    {
+        listener_.clipsTransposeDelta(selectedClips_, isPlus ? 1 : -1);
         return true;
     }
 

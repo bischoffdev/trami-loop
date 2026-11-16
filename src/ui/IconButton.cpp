@@ -272,6 +272,24 @@ void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::
         g.fillPath(ah);
         break;
     }
+    case Icon::New:
+    {
+        juce::Path p;
+        p.startNewSubPath(cx - 5.0f, cy - 6.0f);
+        p.lineTo(cx + 1.5f, cy - 6.0f);
+        p.lineTo(cx + 5.0f, cy - 2.5f);
+        p.lineTo(cx + 5.0f, cy + 6.0f);
+        p.lineTo(cx - 5.0f, cy + 6.0f);
+        p.closeSubPath();
+        g.strokePath(p, juce::PathStrokeType(1.4f));
+
+        juce::Path fold;
+        fold.startNewSubPath(cx + 1.5f, cy - 6.0f);
+        fold.lineTo(cx + 1.5f, cy - 2.5f);
+        fold.lineTo(cx + 5.0f, cy - 2.5f);
+        g.strokePath(fold, juce::PathStrokeType(1.2f));
+        break;
+    }
     case Icon::Save:
     {
         juce::Path p;

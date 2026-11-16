@@ -22,6 +22,8 @@ struct Sample
     double durationSeconds = 0.0;
     SampleKind kind = SampleKind::OneShot;
     int loopBars = 1;            ///< Only meaningful for loops.
+    int rootNote = -1;           ///< MIDI root note (0-127), or -1 if not set / unpitched.
+    double acidBpm = 0.0;        ///< Original tempo from ACID metadata, or 0.0 if not specified.
 
     /// Original tempo of the loop, derived from its duration and bar length.
     double originalBpm() const noexcept;

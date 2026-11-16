@@ -6,9 +6,12 @@ add_executable(trami_tests
     ImportTests.cpp
     ProjectSerializerTests.cpp
     ExportTests.cpp
+    AcidTests.cpp
     ../src/io/SampleImporter.cpp
     ../src/io/ProjectSerializer.cpp
     ../src/io/WavExporter.cpp
+    ../src/io/AcidChunkReader.cpp
+    ../src/io/AcidProjectReader.cpp
 )
 target_link_libraries(trami_tests PRIVATE trami_core juce::juce_audio_formats Catch2::Catch2WithMain)
 

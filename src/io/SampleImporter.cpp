@@ -1,4 +1,5 @@
 #include "io/SampleImporter.h"
+#include "io/AcidChunkReader.h"
 
 #include <cmath>
 
@@ -87,6 +88,22 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
     sample.kind = kind;
     sample.loopBars = std::max(1, loopBars);
     sample.durationSeconds = static_cast<double>(audioOpt->numFrames()) / targetSampleRate;
+
+    // Auto-detect ACID chunk metadata if present
+    if (auto acid = AcidChunkReader::readFromFile(sourceFile))
+    {
+        if (acid->isOneShot)
+        {
+            sample.kind = SampleKind::OneShot;
+        }
+        else
+        {
+            sample.kind = SampleKind::Loop;
+            sample.loopBars = acid->suggestedLoopBars;
+        }
+        sample.acidBpm = acid->tempo;
+        sample.rootNote = acid->rootNote;
+    }
 
     return ImportResult{std::move(sample), std::move(*audioOpt)};
 }

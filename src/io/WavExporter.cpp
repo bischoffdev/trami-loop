@@ -15,13 +15,31 @@ namespace trami
 bool WavExporter::exportMixdown(const Song& song, StretchCache& stretchCache, const ExportOptions& options,
                                 const std::filesystem::path& outputFile, ProgressCallback progress)
 {
-    if (song.lengthBars() == 0)
+    if (song.patterns().empty() && song.lengthBars() == 0)
         return false;
 
     auto bank = stretchCache.getOrUpdateSync(song, options.sampleRate);
-    auto snapshot = SnapshotBuilder::buildArrangement(song, bank, options.sampleRate);
+    std::unique_ptr<PlaybackSnapshot> snapshot;
+
+    bool hasArrangementBlocks = false;
+    for (const auto& track : song.arrangement())
+    {
+        if (!track.blocks.empty())
+        {
+            hasArrangementBlocks = true;
+            break;
+        }
+    }
+
+    if (hasArrangementBlocks)
+        snapshot = SnapshotBuilder::buildArrangement(song, bank, options.sampleRate, 0, 0, nullptr, &stretchCache);
+    else if (!song.patterns().empty())
+        snapshot = SnapshotBuilder::buildPattern(song, song.patterns().front().id, bank, options.sampleRate, 0, 0, nullptr, nullptr, &stretchCache);
+
     if (snapshot == nullptr || snapshot->lengthSamples <= 0)
         return false;
+
+    snapshot->looping = false;
 
     const std::int64_t totalFrames = snapshot->lengthSamples;
 
