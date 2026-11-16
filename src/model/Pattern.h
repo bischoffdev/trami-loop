@@ -12,7 +12,7 @@
 namespace trami
 {
 
-inline constexpr int kTracksPerPattern = 16;
+inline constexpr int kTracksPerPattern = 32;
 
 /// A sample placed on a pattern track at a grid step (supports fractional steps for unconstrained resizing/moving).
 struct Clip
@@ -26,6 +26,7 @@ struct Clip
     float fadeInSteps = 0.0f;    ///< Fade-in duration in steps (0 = no fade).
     float fadeOutSteps = 0.0f;   ///< Fade-out duration in steps (0 = no fade).
     bool reversed = false;       ///< When true, audio plays in reverse.
+    int transposeSemitones = 0;  ///< Transposition in semitones (-48 .. +48).
 };
 
 /// Temporary clip override state during real-time dragging, resizing, or envelope adjustments.

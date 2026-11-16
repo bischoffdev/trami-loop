@@ -9,7 +9,11 @@ namespace trami
 
 double Sample::originalBpm() const noexcept
 {
-    return kind == SampleKind::Loop ? Timing::loopBpm(durationSeconds, loopBars) : 0.0;
+    if (kind != SampleKind::Loop)
+        return 0.0;
+    if (acidBpm > 0.0)
+        return acidBpm;
+    return Timing::loopBpm(durationSeconds, loopBars);
 }
 
 float Sample::hue() const noexcept

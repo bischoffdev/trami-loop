@@ -32,6 +32,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
         obj->setProperty("durationSeconds", s.durationSeconds);
         obj->setProperty("kind", s.kind == SampleKind::Loop ? "loop" : "oneshot");
         obj->setProperty("loopBars", s.loopBars);
+        if (s.rootNote >= 0)
+            obj->setProperty("rootNote", s.rootNote);
+        if (s.acidBpm > 0.0)
+            obj->setProperty("acidBpm", s.acidBpm);
         sampleList.add(obj.get());
 
         // Save raw audio to samples/ folder if not already there
@@ -100,6 +104,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                     clipObj->setProperty("fadeOutSteps", c.fadeOutSteps);
                 if (c.reversed)
                     clipObj->setProperty("reversed", true);
+                if (c.transposeSemitones != 0)
+                    clipObj->setProperty("transposeSemitones", c.transposeSemitones);
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
@@ -148,7 +154,14 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                                                    StretchCache& stretchCache, SampleImporter& importer,
                                                    double sampleRate)
 {
-    const auto projectFile = projectDir / "project.trami";
+    auto baseDir = projectDir;
+    auto projectFile = projectDir / "project.trami";
+    if (std::filesystem::is_regular_file(projectDir))
+    {
+        projectFile = projectDir;
+        baseDir = projectDir.parent_path();
+    }
+
     const juce::File jFile(juce::String::fromUTF8(projectFile.string().c_str()));
     if (!jFile.existsAsFile())
         return std::nullopt;
@@ -185,12 +198,16 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
             s.durationSeconds = sVar["durationSeconds"];
             s.kind = (sVar["kind"].toString() == "loop") ? SampleKind::Loop : SampleKind::OneShot;
             s.loopBars = std::max(1, static_cast<int>(sVar["loopBars"]));
+            if (sVar.hasProperty("rootNote"))
+                s.rootNote = static_cast<int>(sVar["rootNote"]);
+            if (sVar.hasProperty("acidBpm"))
+                s.acidBpm = static_cast<double>(sVar["acidBpm"]);
 
             const auto newId = song.addSample(s);
             sampleIdMap[oldId] = newId;
 
             // Load decoded audio into stretchCache
-            const auto sampleFilePath = projectDir / "samples" / s.fileName;
+            const auto sampleFilePath = baseDir / "samples" / s.fileName;
             if (auto audioOpt = importer.loadAudioData(sampleFilePath, sampleRate))
                 stretchCache.setRawAudio(newId, std::make_shared<const AudioData>(std::move(*audioOpt)));
         }
@@ -218,6 +235,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
 
                     if (Pattern* pat = song.findPattern(newPatId))
                     {
+                        if (trackIdx >= static_cast<int>(pat->tracks.size()))
+                            pat->tracks.resize(static_cast<std::size_t>(trackIdx + 1));
                         auto& trk = pat->tracks[static_cast<std::size_t>(trackIdx)];
                         trk.mix.volume = static_cast<float>(tVar.getProperty("volume", 1.0f));
                         trk.mix.pan = static_cast<float>(tVar.getProperty("pan", 0.0f));
@@ -252,6 +271,9 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                                         song.setClipEnvelope(newPatId, *placedClipId, gain, fadeIn, fadeOut);
                                     if (static_cast<bool>(cVar.getProperty("reversed", false)))
                                         song.setClipReversed(newPatId, *placedClipId, true);
+                                    const int transpose = static_cast<int>(cVar.getProperty("transposeSemitones", 0));
+                                    if (transpose != 0)
+                                        song.setClipTranspose(newPatId, *placedClipId, transpose);
                                 }
                             }
                         }

@@ -141,3 +141,102 @@ TEST_CASE("StretchCache async update completes and delivers bank")
     REQUIRE(bank.contains(id));
     REQUIRE(bank[id] != nullptr);
 }
+
+TEST_CASE("TimeStretcher applies pitch scaling without changing duration")
+{
+    constexpr double rate = 48000.0;
+    const auto orig = makeSine(rate, 0.5, 440.0, false);
+    REQUIRE(orig.numFrames() == 24000);
+
+    // Shift up 12 semitones (pitchScale = 2.0, time ratio = 1.0)
+    const double pitchScale = std::pow(2.0, 12.0 / 12.0);
+    const auto out = TimeStretcher::stretch(orig, 1.0, rate, pitchScale);
+    REQUIRE(out.numFrames() > 0);
+    // Length in frames should be close to original length
+    const auto diff = std::abs(static_cast<long long>(out.numFrames()) - static_cast<long long>(orig.numFrames()));
+    REQUIRE(diff < 2000);
+}
+
+TEST_CASE("StretchCache caches and returns transposed audio")
+{
+    constexpr double rate = 48000.0;
+    Song song;
+    song.setBpm(120.0);
+
+    Sample s;
+    s.name = "loop";
+    s.kind = SampleKind::Loop;
+    s.loopBars = 1;
+    s.durationSeconds = 2.0;
+    const auto id = song.addSample(s);
+
+    auto raw = std::make_shared<const AudioData>(makeSine(rate, 2.0, 220.0, false));
+    StretchCache cache;
+    cache.setRawAudio(id, raw);
+
+    // Semitones 0 should match base bank audio
+    const auto* samplePtr = song.findSample(id);
+    REQUIRE(samplePtr != nullptr);
+    auto baseBank = cache.getOrUpdateSync(song, rate);
+    auto audio0 = cache.getAudio(*samplePtr, song.bpm(), rate, 0);
+    REQUIRE(audio0 == baseBank[id]);
+
+    // Transposed +2 semitones creates new audio
+    auto audioPlus2 = cache.getAudio(*samplePtr, song.bpm(), rate, 2);
+    REQUIRE(audioPlus2 != nullptr);
+    REQUIRE(audioPlus2 != baseBank[id]);
+
+    // Querying again returns the cached shared_ptr
+    auto audioPlus2Cached = cache.getAudio(*samplePtr, song.bpm(), rate, 2);
+    REQUIRE(audioPlus2Cached == audioPlus2);
+}
+
+TEST_CASE("TimeStretcher resample pitches one-shots cleanly via resampling")
+{
+    constexpr double rate = 48000.0;
+    const auto orig = makeSine(rate, 0.5, 440.0, true);
+    REQUIRE(orig.numFrames() == 24000);
+
+    // Shift up 12 semitones (pitchScale = 2.0 -> half length)
+    const auto pitchedUp = TimeStretcher::resample(orig, 2.0);
+    REQUIRE(pitchedUp.numChannels() == 2);
+    REQUIRE(pitchedUp.numFrames() == 12000);
+
+    // Shift down 12 semitones (pitchScale = 0.5 -> double length)
+    const auto pitchedDown = TimeStretcher::resample(orig, 0.5);
+    REQUIRE(pitchedDown.numChannels() == 2);
+    REQUIRE(pitchedDown.numFrames() == 48000);
+
+    // Transpose 0 semitones returns original frames
+    const auto unpitched = TimeStretcher::resample(orig, 1.0);
+    REQUIRE(unpitched.numFrames() == orig.numFrames());
+}
+
+TEST_CASE("StretchCache transposes one-shots using clean resampling without phase vocoder")
+{
+    constexpr double rate = 48000.0;
+    Song song;
+    song.setBpm(120.0);
+
+    Sample s;
+    s.name = "snare";
+    s.kind = SampleKind::OneShot;
+    s.durationSeconds = 0.25;
+    const auto id = song.addSample(s);
+
+    auto raw = std::make_shared<const AudioData>(makeSine(rate, 0.25, 440.0, false));
+    StretchCache cache;
+    cache.setRawAudio(id, raw);
+
+    const auto* samplePtr = song.findSample(id);
+    REQUIRE(samplePtr != nullptr);
+
+    // +7 semitones (pitchScale = 2^(7/12) ~= 1.4983)
+    auto transposed = cache.getAudio(*samplePtr, song.bpm(), rate, 7, SampleKind::OneShot);
+    REQUIRE(transposed != nullptr);
+    REQUIRE(transposed != raw);
+    // Length should be shorter due to faster resampled playback
+    REQUIRE(transposed->numFrames() < raw->numFrames());
+    const double expectedFrames = std::round(static_cast<double>(raw->numFrames()) / std::pow(2.0, 7.0 / 12.0));
+    REQUIRE(transposed->numFrames() == static_cast<std::int64_t>(expectedFrames));
+}

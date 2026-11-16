@@ -51,6 +51,8 @@ public:
     bool setClipEnvelope(PatternId pattern, ClipId clip, float gain, float fadeInSteps, float fadeOutSteps);
     bool setClipReversed(PatternId pattern, ClipId clip, bool reversed);
     bool isClipReversed(PatternId pattern, ClipId clip) const noexcept;
+    bool setClipTranspose(PatternId pattern, ClipId clip, int semitones);
+    int clipTranspose(PatternId pattern, ClipId clip) const noexcept;
     const Clip* findClip(PatternId pattern, ClipId clip) const noexcept;
     Clip* findClip(PatternId pattern, ClipId clip) noexcept;
     bool moveClip(PatternId pattern, ClipId clip, int newTrack, double newStartStep);

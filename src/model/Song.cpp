@@ -9,7 +9,7 @@ namespace
 
 constexpr double kMinBpm = 20.0;
 constexpr double kMaxBpm = 300.0;
-constexpr int kMaxPatternBars = 64;
+constexpr int kMaxPatternBars = 9999;
 
 bool isValidTrack(int index, int count) noexcept
 {
@@ -236,6 +236,22 @@ bool Song::isClipReversed(PatternId patternId, ClipId clipId) const noexcept
 {
     const Clip* clip = findClip(patternId, clipId);
     return clip != nullptr && clip->reversed;
+}
+
+bool Song::setClipTranspose(PatternId patternId, ClipId clipId, int semitones)
+{
+    Clip* clip = findClip(patternId, clipId);
+    if (clip == nullptr)
+        return false;
+
+    clip->transposeSemitones = std::clamp(semitones, -48, 48);
+    return true;
+}
+
+int Song::clipTranspose(PatternId patternId, ClipId clipId) const noexcept
+{
+    const Clip* clip = findClip(patternId, clipId);
+    return clip != nullptr ? clip->transposeSemitones : 0;
 }
 
 const Clip* Song::findClip(PatternId patternId, ClipId clipId) const noexcept
@@ -477,6 +493,25 @@ bool Song::setPatternTrackKind(PatternId patternId, int trackIndex, SampleKind k
         clip.lengthSteps = 0;
         clip.offsetSteps = 0;
     }
+
+    if (kind == SampleKind::Loop)
+    {
+        SampleId sid = track.sampleId;
+        if (!sid.isValid() && !track.clips.empty())
+            sid = track.clips.front().sampleId;
+        if (Sample* s = findSample(sid))
+        {
+            s->kind = SampleKind::Loop;
+            if (s->loopBars <= 1 && s->durationSeconds > 0.0)
+            {
+                const double refBpm = (s->acidBpm > 0.0) ? s->acidBpm : (bpm_ > 0.0 ? bpm_ : 120.0);
+                const double secPerBar = (60.0 / refBpm) * 4.0;
+                const int estBars = static_cast<int>(std::round(s->durationSeconds / secPerBar));
+                if (estBars >= 1)
+                    s->loopBars = estBars;
+            }
+        }
+    }
     return true;
 }
 
@@ -695,7 +730,11 @@ int Song::lengthBars() const noexcept
     for (const auto& track : arrangement_)
         for (const auto& block : track.blocks)
             end = std::max(end, block.startBar + patternLength(block.patternId));
-    return end;
+    if (end > 0)
+        return end;
+    if (!patterns_.empty())
+        return patterns_.front().lengthBars;
+    return 0;
 }
 
 // --- Helpers -----------------------------------------------------------------

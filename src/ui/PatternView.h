@@ -41,6 +41,8 @@ public:
     void clipEnvelopeChanged(ClipId clipId, float gain, float fadeInSteps, float fadeOutSteps) override;
     void clipReverseRequested(ClipId clipId) override;
     void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
+    void clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones) override;
+    void clipsTransposeSet(const std::vector<ClipId>& clipIds, int semitones) override;
     void clipDeleteRequested(ClipId clipId) override;
     void clipsDeleteRequested(const std::vector<ClipId>& clipIds) override;
     void clipCutRequested(ClipId clipId) override;

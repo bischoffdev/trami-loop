@@ -10,6 +10,8 @@
 namespace trami
 {
 
+class StretchCache;
+
 /// Decoded audio for each sample, at the engine sample rate.
 using SampleBank = std::unordered_map<SampleId, std::shared_ptr<const AudioData>>;
 
@@ -22,13 +24,15 @@ public:
                                                           const SampleBank& bank, double sampleRate,
                                                           int loopStartStep = 0, int loopEndStep = 0,
                                                           const SampleBank* rawBank = nullptr,
-                                                          const std::vector<DragClipOverride>* overrides = nullptr);
+                                                          const std::vector<DragClipOverride>* overrides = nullptr,
+                                                          StretchCache* stretchCache = nullptr);
 
     /// Song / Arrangement mode: plays all pattern blocks across the 8 arranger tracks.
     static std::unique_ptr<PlaybackSnapshot> buildArrangement(const Song& song, const SampleBank& bank,
                                                               double sampleRate,
                                                               int loopStartBar = 0, int loopEndBar = 0,
-                                                              const SampleBank* rawBank = nullptr);
+                                                              const SampleBank* rawBank = nullptr,
+                                                              StretchCache* stretchCache = nullptr);
 
     /// Constant-power pan with unity gain at centre. Returns {left, right}.
     static std::pair<float, float> panGains(float pan) noexcept;

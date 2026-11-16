@@ -40,6 +40,8 @@ public:
 
     void previewCurrentSelection();
     void importCurrentSelection(SampleKind kind, int loopBars = 1);
+    void refreshDrives();
+    void selectDirectory(const juce::File& dir);
 
 private:
     Song& song_;
@@ -50,9 +52,15 @@ private:
 
     SampleImporter importer_;
     juce::TimeSliceThread formatThread_{"AudioFormatThread"};
-    juce::WildcardFileFilter filter_{"*.wav;*.mp3;*.WAV;*.MP3", "*", "Audio Files"};
+    juce::WildcardFileFilter filter_{"*.wav;*.mp3;*.aif;*.aiff;*.ogg;*.flac;*.WAV;*.MP3;*.AIF;*.AIFF;*.OGG;*.FLAC", "*", "Audio Files"};
     std::unique_ptr<juce::DirectoryContentsList> directoryList_;
     std::unique_ptr<juce::FileTreeComponent> fileTree_;
+
+    juce::ComboBox driveSelector_;
+    IconButton upFolderButton_{"Up", IconButton::Icon::Undo, "Up one directory level"};
+    IconButton browseFolderButton_{"...", IconButton::Icon::Open, "Browse custom directory or drive..."};
+    std::unique_ptr<juce::FileChooser> folderChooser_;
+    std::vector<juce::File> driveList_;
 
     IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
     juce::ToggleButton autoPreviewToggle_{"Auto Preview"};

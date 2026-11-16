@@ -7,9 +7,7 @@
 #include "io/WavExporter.h"
 #include "model/Song.h"
 #include "model/UndoManager.h"
-#include "ui/ArrangerView.h"
 #include "ui/IconButton.h"
-#include "ui/PatternListPanel.h"
 #include "ui/PatternView.h"
 #include "ui/ToastOverlay.h"
 #include "ui/TransportBar.h"
@@ -22,22 +20,17 @@
 namespace trami
 {
 
-enum class ViewMode
-{
-    Pattern,
-    Arranger
-};
-
 class MainContainer : public juce::Component, public juce::DragAndDropContainer
 {
 public:
     MainContainer(Song& song, AudioEngine& engine, StretchCache& stretchCache);
     ~MainContainer() override;
 
-    void setViewMode(ViewMode mode);
-    void editPattern(PatternId patternId);
-
-    void saveProjectDialog();
+    void newProjectDialog();
+    void createNewProject();
+    void createNewProjectAt(const std::filesystem::path& dir);
+    void promptNewProjectLocation();
+    void saveProjectDialog(bool promptForNewLocation = false);
     void openProjectDialog();
     void showExportDialog();
     void showSettingsDialog();
@@ -62,21 +55,16 @@ private:
     SampleImporter importer_;
 
     std::optional<std::filesystem::path> currentProjectDir_;
-    ViewMode currentMode_ = ViewMode::Pattern;
 
-    IconButton patternModeButton_{"Pattern", IconButton::Icon::PatternMode, "Pattern"};
-    IconButton arrangerModeButton_{"Arranger", IconButton::Icon::ArrangerMode, "Arranger"};
+    IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo (Ctrl+Z)"};
+    IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo (Ctrl+Y)"};
+    IconButton newButton_{"New", IconButton::Icon::New, "New Project (Ctrl+N)"};
+    IconButton openButton_{"Open", IconButton::Icon::Open, "Open Project (Ctrl+O)"};
+    IconButton saveButton_{"Save", IconButton::Icon::Save, "Save Project (Ctrl+S)"};
+    IconButton exportButton_{"Export", IconButton::Icon::Export, "Export Mixdown WAV (Ctrl+E)"};
+    IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Audio Device Settings"};
 
-    IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo"};
-    IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo"};
-    IconButton saveButton_{"Save", IconButton::Icon::Save, "Save"};
-    IconButton openButton_{"Open", IconButton::Icon::Open, "Open"};
-    IconButton exportButton_{"Export", IconButton::Icon::Export, "Export"};
-    IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Audio"};
-
-    std::unique_ptr<PatternListPanel> patternListPanel_;
     std::unique_ptr<PatternView> patternView_;
-    std::unique_ptr<ArrangerView> arrangerView_;
     std::unique_ptr<TransportBar> transportBar_;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;

@@ -42,6 +42,7 @@ Combining tempo-synced time-stretching for audio loops and natural one-shots wit
 
 - **Project Bundles & Undo/Redo**:
   - Self-contained project folders (`project.trami` JSON + `samples/` audio folder).
+  - Create new projects (`Cmd+N`), open existing projects (`Cmd+O`), and save (`Cmd+S`).
   - Snapshot-based multi-level Undo (`Cmd+Z`) and Redo (`Cmd+Shift+Z`).
 
 - **Offline WAV Mixdown Export**:
@@ -58,6 +59,7 @@ Combining tempo-synced time-stretching for audio loops and natural one-shots wit
 | `Return` | Return to Start (Rewind) |
 | `Cmd + Z` / `Ctrl + Z` | Undo |
 | `Cmd + Shift + Z` / `Ctrl + Y` | Redo |
+| `Cmd + N` / `Ctrl + N` | New Project |
 | `Cmd + S` / `Ctrl + S` | Save Project Folder |
 | `Cmd + O` / `Ctrl + O` | Open Project Folder |
 | `M` | Metronome Click Toggle |

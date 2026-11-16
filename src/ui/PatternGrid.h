@@ -51,6 +51,8 @@ public:
         virtual void clipEnvelopeChanged(ClipId /*clipId*/, float /*gain*/, float /*fadeInSteps*/, float /*fadeOutSteps*/) {}
         virtual void clipReverseRequested(ClipId /*clipId*/) {}
         virtual void clipsReverseRequested(const std::vector<ClipId>& /*clipIds*/) {}
+        virtual void clipsTransposeDelta(const std::vector<ClipId>& /*clipIds*/, int /*deltaSemitones*/) {}
+        virtual void clipsTransposeSet(const std::vector<ClipId>& /*clipIds*/, int /*semitones*/) {}
         virtual void clipDeleteRequested(ClipId clipId) = 0;
         virtual void clipsDeleteRequested(const std::vector<ClipId>& clipIds)
         {

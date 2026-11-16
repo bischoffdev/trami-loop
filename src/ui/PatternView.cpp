@@ -97,14 +97,55 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     lengthCombo_.addItem("2 Bars", 2);
     lengthCombo_.addItem("4 Bars", 4);
     lengthCombo_.addItem("8 Bars", 8);
+    lengthCombo_.addItem("16 Bars", 16);
+    lengthCombo_.addItem("32 Bars", 32);
+    lengthCombo_.addItem("64 Bars", 64);
+    lengthCombo_.addItem("128 Bars", 128);
+    lengthCombo_.addItem("256 Bars", 256);
+    lengthCombo_.addSeparator();
+    lengthCombo_.addItem("Custom...", -1);
     lengthCombo_.onChange = [this]() {
         const int bars = lengthCombo_.getSelectedId();
+        if (bars == -1)
+        {
+            const auto* p = song_.findPattern(currentPattern_);
+            const int currentBars = p != nullptr ? p->lengthBars : 4;
+            auto* w = new juce::AlertWindow("Set Pattern Length", "Enter pattern length in bars (1 - 9999):",
+                                           juce::AlertWindow::QuestionIcon);
+            w->addTextEditor("bars", juce::String(currentBars));
+            w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+            w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result) {
+                if (result == 1)
+                {
+                    const int customBars = w->getTextEditorContents("bars").getIntValue();
+                    if (customBars >= 1 && customBars <= 9999)
+                    {
+                        if (onPushUndo_)
+                            onPushUndo_();
+                        if (song_.setPatternLength(currentPattern_, customBars))
+                        {
+                            updateLengthSelector();
+                            republish();
+                            resized();
+                        }
+                    }
+                }
+                else
+                {
+                    updateLengthSelector();
+                }
+            }), true);
+            return;
+        }
+
         if (bars > 0)
         {
             if (onPushUndo_)
                 onPushUndo_();
             if (song_.setPatternLength(currentPattern_, bars))
             {
+                updateLengthSelector();
                 republish();
                 resized();
             }
@@ -419,6 +460,10 @@ void PatternView::setTrackKind(int trackIndex, SampleKind newKind)
     if (onPushUndo_)
         onPushUndo_();
 
+    const auto sid = song_.patternTrackSample(currentPattern_, trackIndex);
+    if (sid.isValid())
+        stretchCache_.removeSample(sid);
+
     song_.setPatternTrackKind(currentPattern_, trackIndex, newKind);
 
     updateSampleSelector();
@@ -451,7 +496,7 @@ void PatternView::publishSnapshotQuick(const std::vector<DragClipOverride>* over
     if (bankToUse.empty() && !song_.samples().empty())
         return;
     engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, bankToUse, engine_.sampleRate(),
-                                                 loopStartStep_, loopEndStep_, &rawBank, overrides));
+                                                 loopStartStep_, loopEndStep_, &rawBank, overrides, &stretchCache_));
 }
 
 void PatternView::repaintGrid()
@@ -476,12 +521,30 @@ void PatternView::updateLengthSelector()
     if (p != nullptr)
     {
         patternTitle_.setText(p->name, juce::dontSendNotification);
+
+        // Ensure current length exists in combo
+        bool found = false;
+        for (int i = 0; i < lengthCombo_.getNumItems(); ++i)
+        {
+            if (lengthCombo_.getItemId(i) == p->lengthBars)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found && p->lengthBars > 0)
+        {
+            lengthCombo_.addItem(juce::String(p->lengthBars) + " Bars", p->lengthBars);
+        }
+
         lengthCombo_.setSelectedId(p->lengthBars, juce::dontSendNotification);
     }
 }
 
 void PatternView::updateSampleSelector()
 {
+    if (activeSample_.isValid() && song_.findSample(activeSample_) == nullptr)
+        activeSample_ = {};
     if (!activeSample_.isValid() && !song_.samples().empty())
         activeSample_ = song_.samples().front().id;
 }
@@ -494,7 +557,7 @@ void PatternView::republish()
             syncAllTrackMixes();
             const auto rawBank = stretchCache_.getRawBank();
             engine_.publish(SnapshotBuilder::buildPattern(song_, currentPattern_, activeBank_, engine_.sampleRate(),
-                                                         loopStartStep_, loopEndStep_, &rawBank));
+                                                         loopStartStep_, loopEndStep_, &rawBank, nullptr, &stretchCache_));
             if (trackHeaders_ != nullptr)
                 trackHeaders_->updateFromModel();
             if (grid_ != nullptr)
@@ -665,6 +728,65 @@ void PatternView::clipsReverseRequested(const std::vector<ClipId>& clipIds)
             onShowToast_(anyReversed ? "Clip reversed" : "Clip restored to normal direction");
         else
             onShowToast_(juce::String::formatted("%d clips direction toggled", count));
+    }
+
+    publishSnapshotQuick();
+    republish();
+    if (grid_ != nullptr)
+        grid_->repaint();
+}
+
+void PatternView::clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones)
+{
+    if (clipIds.empty())
+        return;
+
+    if (onPushUndo_)
+        onPushUndo_();
+
+    int lastTranspose = 0;
+    for (auto cid : clipIds)
+    {
+        const int cur = song_.clipTranspose(currentPattern_, cid);
+        const int next = std::clamp(cur + deltaSemitones, -48, 48);
+        song_.setClipTranspose(currentPattern_, cid, next);
+        lastTranspose = next;
+    }
+
+    if (onShowToast_)
+    {
+        const int count = static_cast<int>(clipIds.size());
+        if (count == 1)
+            onShowToast_(juce::String::formatted("Transpose: %+d st", lastTranspose));
+        else
+            onShowToast_(juce::String::formatted("Transposed %d clips (%+d st)", count, deltaSemitones));
+    }
+
+    publishSnapshotQuick();
+    republish();
+    if (grid_ != nullptr)
+        grid_->repaint();
+}
+
+void PatternView::clipsTransposeSet(const std::vector<ClipId>& clipIds, int semitones)
+{
+    if (clipIds.empty())
+        return;
+
+    if (onPushUndo_)
+        onPushUndo_();
+
+    const int target = std::clamp(semitones, -48, 48);
+    for (auto cid : clipIds)
+        song_.setClipTranspose(currentPattern_, cid, target);
+
+    if (onShowToast_)
+    {
+        const int count = static_cast<int>(clipIds.size());
+        if (count == 1)
+            onShowToast_(juce::String::formatted("Transpose: %+d st", target));
+        else
+            onShowToast_(juce::String::formatted("Set %d clips transpose: %+d st", count, target));
     }
 
     publishSnapshotQuick();
@@ -1605,6 +1727,33 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
         }
     }
 
+    const bool isPlus = !isCmdOrCtrl && (key.getTextCharacter() == '+' ||
+                                         key.getKeyCode() == juce::KeyPress::numberPadAdd ||
+                                         key.isKeyCode('+') ||
+                                         (key.getKeyCode() == '=' && !mods.isAltDown()));
+    const bool isMinus = !isCmdOrCtrl && (key.getTextCharacter() == '-' ||
+                                          key.getKeyCode() == juce::KeyPress::numberPadSubtract ||
+                                          key.isKeyCode('-') ||
+                                          key.getKeyCode() == '-');
+
+    if (grid_ != nullptr && (isPlus || isMinus))
+    {
+        const auto& selected = grid_->selectedClips();
+        if (!selected.empty())
+        {
+            clipsTransposeDelta(selected, isPlus ? 1 : -1);
+            return true;
+        }
+        if (grid_->selectedClip().isValid())
+        {
+            clipsTransposeDelta({grid_->selectedClip()}, isPlus ? 1 : -1);
+            return true;
+        }
+    }
+
+    if (grid_ != nullptr && grid_->keyPressed(key))
+        return true;
+
     return false;
 }
 
@@ -1630,7 +1779,7 @@ void PatternView::resized()
 
     patternTitle_.setBounds(toolbar.removeFromLeft(80));
     toolbar.removeFromLeft(4);
-    lengthCombo_.setBounds(toolbar.removeFromLeft(75));
+    lengthCombo_.setBounds(toolbar.removeFromLeft(90));
     toolbar.removeFromLeft(12);
 
     // Grid / Raster

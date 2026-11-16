@@ -47,14 +47,21 @@ public:
     /// Cancels and joins any active background worker.
     void cancelPending();
 
+    /// Retrieves or renders stretched and/or pitch-shifted audio for a specific sample and semitone transposition.
+    std::shared_ptr<const AudioData> getAudio(const Sample& sample, double targetBpm, double sampleRate, int semitones = 0,
+                                             std::optional<SampleKind> kindOverride = std::nullopt,
+                                             std::optional<int> loopBarsOverride = std::nullopt);
+
 private:
-    std::shared_ptr<const AudioData> getOrRender(const Sample& sample, double targetBpm, double sampleRate);
+    std::shared_ptr<const AudioData> getOrRender(const Sample& sample, double targetBpm, double sampleRate, int semitones = 0,
+                                                 std::optional<SampleKind> kindOverride = std::nullopt,
+                                                 std::optional<int> loopBarsOverride = std::nullopt);
 
     mutable std::mutex mutex_;
     std::unordered_map<SampleId, std::shared_ptr<const AudioData>> rawBank_;
 
-    // Key: (SampleId, roundedBpm x 10, loopBars, sampleRateInt)
-    using CacheKey = std::tuple<std::uint32_t, int, int, int>;
+    // Key: (SampleId, semitones, roundedBpm x 10, loopBars, sampleRateInt)
+    using CacheKey = std::tuple<std::uint32_t, int, int, int, int>;
     std::map<CacheKey, std::shared_ptr<const AudioData>> cache_;
 
     std::thread workerThread_;

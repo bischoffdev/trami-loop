@@ -30,6 +30,62 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     titleLabel_.setText("EXPLORER", juce::dontSendNotification);
     addAndMakeVisible(titleLabel_);
 
+    refreshDrives();
+    driveSelector_.setTooltip("Choose Drive or Folder (e.g. CD/DVD, USB, External Drives)");
+    driveSelector_.onChange = [this]() {
+        const int selectedId = driveSelector_.getSelectedId();
+        if (selectedId == 9999)
+        {
+            folderChooser_ = std::make_unique<juce::FileChooser>(
+                "Choose Directory or External Drive",
+                directoryList_ != nullptr ? directoryList_->getDirectory() : juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+                "*", true);
+
+            auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
+            folderChooser_->launchAsync(flags, [this](const juce::FileChooser& fc) {
+                const auto chosen = fc.getResult();
+                if (chosen.exists())
+                    selectDirectory(chosen);
+            });
+            return;
+        }
+
+        if (selectedId > 0 && selectedId <= static_cast<int>(driveList_.size()))
+        {
+            const auto& dir = driveList_[static_cast<std::size_t>(selectedId - 1)];
+            selectDirectory(dir);
+        }
+    };
+    addAndMakeVisible(driveSelector_);
+
+    upFolderButton_.setTooltip("Up one directory level");
+    upFolderButton_.onClick = [this]() {
+        if (directoryList_ != nullptr)
+        {
+            const auto current = directoryList_->getDirectory();
+            const auto parent = current.getParentDirectory();
+            if (parent != current && parent.exists())
+                selectDirectory(parent);
+        }
+    };
+    addAndMakeVisible(upFolderButton_);
+
+    browseFolderButton_.setTooltip("Browse custom directory or drive...");
+    browseFolderButton_.onClick = [this]() {
+        folderChooser_ = std::make_unique<juce::FileChooser>(
+            "Choose Directory or External Drive",
+            directoryList_ != nullptr ? directoryList_->getDirectory() : juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+            "*", true);
+
+        auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
+        folderChooser_->launchAsync(flags, [this](const juce::FileChooser& fc) {
+            const auto chosen = fc.getResult();
+            if (chosen.exists())
+                selectDirectory(chosen);
+        });
+    };
+    addAndMakeVisible(browseFolderButton_);
+
     pathLabel_.setFont(Typography::regular(11.5f));
     pathLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     pathLabel_.setText(root.getFullPathName(), juce::dontSendNotification);
@@ -214,6 +270,84 @@ void SampleBrowserPanel::fileDoubleClicked(const juce::File& file)
 void SampleBrowserPanel::browserRootChanged(const juce::File& newRoot)
 {
     pathLabel_.setText(newRoot.getFullPathName(), juce::dontSendNotification);
+}
+
+void SampleBrowserPanel::refreshDrives()
+{
+    driveSelector_.clear(juce::dontSendNotification);
+    driveList_.clear();
+
+    juce::Array<juce::File> roots;
+    juce::File::findFileSystemRoots(roots);
+
+    int id = 1;
+    for (const auto& root : roots)
+    {
+        juce::String name = root.getFullPathName();
+        juce::String vol = root.getVolumeLabel();
+        juce::String label = name;
+        if (vol.isNotEmpty())
+            label += " [" + vol + "]";
+        if (root.isOnCDRomDrive())
+            label += " (CD/DVD)";
+        else if (root.isOnRemovableDrive())
+            label += " (Removable/USB)";
+        else if (root.isOnHardDisk())
+            label += " (Drive)";
+
+        driveList_.push_back(root);
+        driveSelector_.addItem(label, id++);
+    }
+
+    driveSelector_.addSeparator();
+
+    auto home = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+    auto desktop = juce::File::getSpecialLocation(juce::File::userDesktopDirectory);
+    auto music = juce::File::getSpecialLocation(juce::File::userMusicDirectory);
+    auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+    if (home.exists())
+    {
+        driveList_.push_back(home);
+        driveSelector_.addItem("Home (" + home.getFileName() + ")", id++);
+    }
+    if (desktop.exists())
+    {
+        driveList_.push_back(desktop);
+        driveSelector_.addItem("Desktop", id++);
+    }
+    if (music.exists())
+    {
+        driveList_.push_back(music);
+        driveSelector_.addItem("Music", id++);
+    }
+    if (docs.exists())
+    {
+        driveList_.push_back(docs);
+        driveSelector_.addItem("Documents", id++);
+    }
+
+    driveSelector_.addSeparator();
+    driveSelector_.addItem("Browse Folder...", 9999);
+}
+
+void SampleBrowserPanel::selectDirectory(const juce::File& dir)
+{
+    if (dir.exists())
+    {
+        if (directoryList_ != nullptr)
+            directoryList_->setDirectory(dir, true, true);
+        pathLabel_.setText(dir.getFullPathName(), juce::dontSendNotification);
+
+        for (std::size_t i = 0; i < driveList_.size(); ++i)
+        {
+            if (driveList_[i] == dir)
+            {
+                driveSelector_.setSelectedId(static_cast<int>(i + 1), juce::dontSendNotification);
+                return;
+            }
+        }
+    }
 }
 
 void SampleBrowserPanel::previewCurrentSelection()
@@ -405,9 +539,12 @@ void SampleBrowserPanel::paint(juce::Graphics& g)
 
 void SampleBrowserPanel::resized()
 {
-    // Top bar
-    titleLabel_.setBounds(10, 2, 90, 24);
-    pathLabel_.setBounds(105, 2, getWidth() - 115, 24);
+    // Top bar: [EXPLORER] [Drive Selector] [Up] [...] [Path Label]
+    titleLabel_.setBounds(10, 2, 70, 24);
+    driveSelector_.setBounds(85, 2, 175, 24);
+    upFolderButton_.setBounds(264, 2, 26, 24);
+    browseFolderButton_.setBounds(294, 2, 26, 24);
+    pathLabel_.setBounds(326, 2, std::max(50, getWidth() - 336), 24);
 
     const int contentY = 28;
     const int contentH = getHeight() - contentY;

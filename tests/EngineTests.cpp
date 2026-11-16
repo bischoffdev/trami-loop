@@ -1,6 +1,7 @@
 #include "engine/Sequencer.h"
 #include "engine/SnapshotBuilder.h"
 #include "engine/SnapshotExchange.h"
+#include "engine/StretchCache.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -826,4 +827,53 @@ TEST_CASE("Swing changes are reflected in real time during active playback")
     REQUIRE(fracSnap->events.size() == 1);
     // Continuous swing scaling for fractional steps (1.98 * (2.0 + 0.5) / 2.0 * 3000 = 7425 samples)
     REQUIRE(fracSnap->events[0].startSample == 7425);
+}
+
+TEST_CASE("Converting a one-shot track to a loop track stretches and loops the audio")
+{
+    Fixture f;
+    // Sample duration = 2.0s (1 bar at 120 BPM, 32 steps)
+    Sample oneShotSample;
+    oneShotSample.name = "one_shot_loop";
+    oneShotSample.kind = SampleKind::OneShot;
+    oneShotSample.loopBars = 1;
+    oneShotSample.durationSeconds = 2.0;
+
+    auto rawAudio = std::make_shared<AudioData>();
+    rawAudio->channels.resize(2);
+    const int numFrames = static_cast<int>(2.0 * kRate); // 96000 frames
+    rawAudio->channels[0].assign(numFrames, 0.5f);
+    rawAudio->channels[1].assign(numFrames, 0.5f);
+
+    auto sid = f.song.addSample(oneShotSample);
+    f.bank[sid] = rawAudio;
+
+    StretchCache cache;
+    cache.setRawAudio(sid, rawAudio);
+
+    // Track 0 starts with the one-shot sample
+    f.song.replaceTrackSample(f.pattern, 0, sid);
+    auto clipId = f.song.placeClip(f.pattern, 0, sid, 0);
+    REQUIRE(clipId.has_value());
+
+    // Before conversion: track kind is OneShot
+    REQUIRE(f.song.patternTrackKind(f.pattern, 0) == SampleKind::OneShot);
+
+    // Grow pattern to 2 bars so 64 steps fit
+    REQUIRE(f.song.setPatternLength(f.pattern, 2));
+
+    // Convert track to Loop
+    REQUIRE(f.song.setPatternTrackKind(f.pattern, 0, SampleKind::Loop));
+    REQUIRE(f.song.patternTrackKind(f.pattern, 0) == SampleKind::Loop);
+
+    // Resize clip to 64 steps (2 bars = 2 loop cycles)
+    REQUIRE(f.song.resizeClip(f.pattern, *clipId, 0.0, 64.0, 0.0));
+
+    // Build snapshot with StretchCache
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate, -1, -1, nullptr, nullptr, &cache);
+    REQUIRE(snap != nullptr);
+    // Should have tiled 2 loop cycles: at step 0 and step 32
+    REQUIRE(snap->events.size() == 2);
+    REQUIRE(snap->events[0].startSample == 0);
+    REQUIRE(snap->events[1].startSample == 96000); // 32 steps * 3000 samples = 96000
 }

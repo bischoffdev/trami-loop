@@ -3,7 +3,11 @@
 namespace trami
 {
 
-AudioEngine::AudioEngine() = default;
+AudioEngine::AudioEngine()
+    : sampleRate_(44100.0)
+    , sequencer_(std::make_unique<Sequencer>(exchange_, sampleRate_))
+{
+}
 
 AudioEngine::~AudioEngine()
 {

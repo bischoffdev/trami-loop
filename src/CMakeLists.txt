@@ -32,6 +32,8 @@ target_sources(TramiLoop PRIVATE
     io/SampleImporter.cpp
     io/ProjectSerializer.cpp
     io/WavExporter.cpp
+    io/AcidChunkReader.cpp
+    io/AcidProjectReader.cpp
     ui/TramiLookAndFeel.cpp
     ui/IconButton.cpp
     ui/PatternGrid.cpp
