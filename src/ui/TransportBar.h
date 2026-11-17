@@ -89,7 +89,7 @@ private:
     ActionCallback onModelModified_;
     ActionCallback onRecordToggle_;
 
-    bool isLooping_ = true;
+    bool isLooping_ = false;
     bool isCountIn_ = false;
     bool showSeconds_ = false;
 
@@ -130,12 +130,6 @@ private:
     std::unique_ptr<SwingLabel> swingLabel_;
     class SwingSlider;
     std::unique_ptr<SwingSlider> swingSlider_;
-
-    // Master volume & loudness meter
-    class MasterMeter;
-    std::unique_ptr<MasterMeter> masterMeter_;
-    class MasterSlider;
-    std::unique_ptr<MasterSlider> masterSlider_;
 };
 
 } // namespace trami

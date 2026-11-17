@@ -60,9 +60,13 @@ public:
     void zoomToLevelRequested(float targetZoomX, double anchorStep, int anchorViewportX) override;
     void clipsDragging(const std::vector<DragClipOverride>& items) override;
     void clipsDragEnded() override;
+    void patternLengthExtensionRequested(int minBars) override;
 
     int loopStartStep() const noexcept { return loopStartStep_; }
     int loopEndStep() const noexcept { return loopEndStep_; }
+
+    bool isFollowPlayhead() const noexcept { return followPlayhead_; }
+    void setFollowPlayhead(bool enabled);
     void setLoopRegion(int startStep, int endStep);
     void setOnLoopRegionChanged(std::function<void(int, int)> cb) { onLoopRegionChanged_ = std::move(cb); }
 
@@ -79,6 +83,7 @@ public:
     void setOnShowToast(std::function<void(const juce::String&)> cb) { onShowToast_ = std::move(cb); }
 
     void updateSampleSelector();
+    void autoAdjustPatternLength();
     void updateLengthSelector();
     void updateTrackHeaders();
     void republish();
@@ -102,6 +107,7 @@ public:
     void zoomIn();
     void zoomOut();
     void resetZoom();
+    void resetPlayhead();
     void trackHeightIn();
     void trackHeightOut();
 
@@ -147,7 +153,10 @@ public:
 
 private:
     class SyncViewport;
+    class HeaderCorner;
+    class PatternRuler;
     void timerCallback() override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
     Song& song_;
     AudioEngine& engine_;
@@ -171,21 +180,25 @@ private:
     // Toolbar controls
     IconButton browserToggle_{"Browser", IconButton::Icon::Browser, "Browser"};
     juce::Label patternTitle_;
-    juce::ComboBox lengthCombo_;
 
     juce::Label rasterLabel_{"Raster:", "Grid:"};
     juce::ComboBox rasterCombo_;
 
     IconButton addTrackButton_{"AddTrack", IconButton::Icon::Plus, "+ Track"};
+    IconButton followToggle_{"Follow", IconButton::Icon::Follow, "Follow"};
 
+    bool followPlayhead_ = true;
     bool showBrowser_ = true;
     std::function<void(const juce::String&)> onShowToast_;
     std::unique_ptr<SampleBrowserPanel> browserPanel_;
+    std::unique_ptr<HeaderCorner> headerCorner_;
+    std::unique_ptr<PatternRuler> ruler_;
     std::unique_ptr<TrackHeaderList> trackHeaders_;
     std::unique_ptr<juce::Viewport> trackHeadersViewport_;
     std::unique_ptr<PatternGrid> grid_;
     std::unique_ptr<SyncViewport> gridViewport_;
 
+    void scrollToPlayheadIfNeeded(double phStep);
     void handleFileDrop(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep);
     void importAndAssignToTrack(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep,
                                 std::optional<SampleKind> explicitKind = std::nullopt);

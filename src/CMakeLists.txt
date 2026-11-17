@@ -47,6 +47,7 @@ target_sources(TramiLoop PRIVATE
     ui/DAWTrackControls.cpp
     ui/PatternListPanel.cpp
     ui/TransportBar.cpp
+    ui/MasterChannelStrip.cpp
     ui/MainContainer.cpp
 )
 

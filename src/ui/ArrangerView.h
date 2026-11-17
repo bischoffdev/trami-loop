@@ -75,7 +75,10 @@ public:
 
 private:
     class SyncViewport;
+    class ArrangerHeaderCorner;
+    class ArrangerRuler;
     void timerCallback() override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
     Song& song_;
     AudioEngine& engine_;
@@ -97,11 +100,19 @@ private:
     IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "+ Pattern"};
     IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Pattern"};
     IconButton addTrackButton_{"AddTrack", IconButton::Icon::Plus, "+ Track"};
+    IconButton followToggle_{"Follow", IconButton::Icon::Follow, "Follow"};
 
+    bool followPlayhead_ = true;
+
+    std::unique_ptr<ArrangerHeaderCorner> headerCorner_;
+    std::unique_ptr<ArrangerRuler> ruler_;
     std::unique_ptr<ArrangerTrackHeaderList> trackHeaders_;
     std::unique_ptr<juce::Viewport> trackHeadersViewport_;
     std::unique_ptr<ArrangerGrid> grid_;
     std::unique_ptr<SyncViewport> gridViewport_;
+
+    void setFollowPlayhead(bool enabled);
+    void scrollToPlayheadIfNeeded(double bar);
 };
 
 } // namespace trami

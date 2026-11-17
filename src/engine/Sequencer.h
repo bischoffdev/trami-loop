@@ -27,9 +27,26 @@ public:
     Sequencer& operator=(const Sequencer&) = delete;
 
     // --- Any thread ----------------------------------------------------------
-    void requestPlaying(bool shouldPlay) noexcept { playRequested_.store(shouldPlay); }
-    void requestRewind() noexcept { rewindRequested_.store(true); }
+    void requestPlaying(bool shouldPlay) noexcept
+    {
+        playRequested_.store(shouldPlay);
+        if (!shouldPlay)
+        {
+            stopVoicesRequested_.store(true);
+            stopPreviewRequested_.store(true);
+            playing_.store(false);
+        }
+    }
+    void requestRewind() noexcept
+    {
+        rewindRequested_.store(true);
+        publishedPosition_.store(0);
+    }
     void requestSeek(std::int64_t samplePosition) noexcept;
+    void requestStop() noexcept
+    {
+        requestPlaying(false);
+    }
     void setMetronomeEnabled(bool enabled) noexcept { metronomeEnabled_.store(enabled); }
     void setLoopingEnabled(bool enabled) noexcept { loopingEnabled_.store(enabled); }
 
@@ -125,14 +142,17 @@ private:
     void adoptPendingSnapshot() noexcept;
     void handleTransportRequests() noexcept;
     void handlePreviewRequests() noexcept;
+    void chaseActiveEvents(std::int64_t pos) noexcept;
     void scheduleRange(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
+    void startMetronomeVoice(const AudioData* audio, int delay, float gainL, float gainR) noexcept;
     void startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL, float gainR,
                     std::int64_t audioOffset = 0, std::int64_t maxFrames = -1, int track = -1,
                     std::int64_t fadeInSamples = 0, std::int64_t fadeOutSamples = 0,
                     std::uint32_t clipId = 0, bool reversed = false) noexcept;
     void renderVoices(float* left, float* right, int numSamples) noexcept;
     void renderPreview(float* left, float* right, int numSamples) noexcept;
+    void renderMetronome(float* left, float* right, int numSamples) noexcept;
     void stopAllVoices() noexcept;
     void stopTrackVoicesAt(int offsetInBlock) noexcept;
     bool hasVoicesFrom(const PlaybackSnapshot* snapshot) const noexcept;
@@ -151,6 +171,7 @@ private:
 
     AudioData click_;
     AudioData accentClick_;
+    std::array<Voice, 8> metronomeVoices_{};
 
     // Dedicated preview state
     Voice previewVoice_{};
@@ -165,6 +186,7 @@ private:
     std::atomic<std::size_t> retiredRead_{0};
 
     std::atomic<bool> playRequested_{false};
+    std::atomic<bool> stopVoicesRequested_{false};
     std::atomic<bool> rewindRequested_{false};
     std::atomic<bool> seekRequested_{false};
     std::atomic<std::int64_t> seekRequestedPosition_{0};

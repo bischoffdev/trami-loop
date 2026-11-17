@@ -80,11 +80,16 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
 
     engine_.sequencer().setMasterVolume(song_.masterVolume());
 
+    masterChannelStrip_ = std::make_unique<MasterChannelStrip>(song_, engine_, [this]() {
+        pushUndoState();
+    });
+    addAndMakeVisible(masterChannelStrip_.get());
+
     addAndMakeVisible(transportBar_.get());
     addAndMakeVisible(toastOverlay_);
 
     if (song_.patterns().empty())
-        song_.addPattern("Song", 32);
+        song_.addPattern("Song", 1);
 
     patternView_->setPattern(song_.patterns().front().id);
     patternView_->setZoom(song_.patternZoomX(), song_.patternZoomY());
@@ -191,14 +196,11 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
     if (engine_.recorder().state() != RecordState::Idle)
         engine_.recorder().stop();
 
-    if (engine_.sequencer().isPlaying())
-    {
-        engine_.sequencer().requestPlaying(false);
-        engine_.sequencer().requestRewind();
-    }
+    engine_.sequencer().requestPlaying(false);
+    engine_.sequencer().requestRewind();
 
     song_ = Song{};
-    const auto songPattern = song_.addPattern(dir.stem().string().empty() ? "Song" : dir.stem().string(), 32);
+    const auto songPattern = song_.addPattern(dir.stem().string().empty() ? "Song" : dir.stem().string(), 1);
 
     stretchCache_.clear();
     currentProjectDir_ = dir;
@@ -209,6 +211,7 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
     ProjectSerializer::saveProject(song_, stretchCache_, dir);
 
     patternView_->setPattern(songPattern);
+    patternView_->resetPlayhead();
     updateAllViews();
     showToast("New Project Created: " + juce::String(dir.filename().string()));
 }
@@ -295,10 +298,10 @@ void MainContainer::openProjectDialog()
         initialLoc = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
 
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        "Open project (*.trami, *.acd, *.acd-zip)", initialLoc, "*.trami;*.acd;*.acd-zip;project.trami;*", true);
+        "Open project (*.trami, *.acd, *.acd-zip)", initialLoc, "*.trami;*.acd;*.acd-zip", true);
 
     fileChooser_->launchAsync(
-        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectDirectories,
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
         [this](const juce::FileChooser& fc) {
             const auto result = fc.getResult();
             if (result != juce::File{})
@@ -311,12 +314,40 @@ void MainContainer::openProjectDialog()
                     std::filesystem::path extractedDir;
                     if (auto loaded = AcidProjectReader::loadProject(chosen, stretchCache_, importer_, engine_.sampleRate(), &extractedDir))
                     {
+                        if (engine_.recorder().state() != RecordState::Idle)
+                            engine_.recorder().stop();
+
+                        engine_.sequencer().requestPlaying(false);
+                        engine_.sequencer().requestRewind();
+
                         song_ = std::move(*loaded);
                         currentProjectDir_ = extractedDir.empty() ? chosen.parent_path() : extractedDir;
                         history_.clear();
                         engine_.sequencer().setMasterVolume(song_.masterVolume());
+                        if (patternView_ != nullptr)
+                        {
+                            if (!song_.patterns().empty())
+                                patternView_->setPattern(song_.patterns().front().id);
+                            patternView_->resetPlayhead();
+                        }
                         updateAllViews();
-                        showToast("Opened ACID project: " + juce::String(chosen.stem().string()));
+                        int missingAudio = 0;
+                        if (!song_.patterns().empty())
+                        {
+                            const auto& pat = song_.patterns().front();
+                            for (const auto& trk : pat.tracks)
+                            {
+                                if (const auto* s = song_.findSample(trk.sampleId))
+                                {
+                                    if (s->durationSeconds <= 0.0)
+                                        missingAudio++;
+                                }
+                            }
+                        }
+                        if (missingAudio > 0)
+                            showToast("Opened ACID project: " + juce::String(chosen.stem().string()) + " (" + juce::String(missingAudio) + " missing samples)");
+                        else
+                            showToast("Opened ACID project: " + juce::String(chosen.stem().string()));
                         return;
                     }
                     else
@@ -326,28 +357,40 @@ void MainContainer::openProjectDialog()
                     }
                 }
 
-                std::filesystem::path dir;
+                std::filesystem::path projectPath;
                 if (std::filesystem::is_directory(chosen))
                 {
-                    dir = chosen;
+                    projectPath = chosen;
                 }
                 else if (chosen.filename() == "project.trami")
                 {
-                    dir = chosen.parent_path();
+                    projectPath = chosen.parent_path();
                 }
                 else
                 {
-                    dir = chosen.parent_path();
+                    projectPath = chosen;
                 }
 
-                if (auto loaded = ProjectSerializer::loadProject(dir, stretchCache_, importer_, engine_.sampleRate()))
+                if (auto loaded = ProjectSerializer::loadProject(projectPath, stretchCache_, importer_, engine_.sampleRate()))
                 {
+                    if (engine_.recorder().state() != RecordState::Idle)
+                        engine_.recorder().stop();
+
+                    engine_.sequencer().requestPlaying(false);
+                    engine_.sequencer().requestRewind();
+
                     song_ = std::move(*loaded);
-                    currentProjectDir_ = dir;
+                    currentProjectDir_ = std::filesystem::is_directory(projectPath) ? projectPath : projectPath.parent_path();
                     history_.clear();
                     engine_.sequencer().setMasterVolume(song_.masterVolume());
+                    if (patternView_ != nullptr)
+                    {
+                        if (!song_.patterns().empty())
+                            patternView_->setPattern(song_.patterns().front().id);
+                        patternView_->resetPlayhead();
+                    }
                     updateAllViews();
-                    showToast("Project loaded: " + juce::String(dir.filename().string()));
+                    showToast("Project loaded: " + juce::String(chosen.stem().string()));
                 }
                 else
                 {
@@ -444,6 +487,9 @@ void MainContainer::updateAllViews()
             transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
         transportBar_->updateDisplay();
     }
+
+    if (masterChannelStrip_ != nullptr)
+        masterChannelStrip_->updateFromModel();
 }
 
 bool MainContainer::keyPressed(const juce::KeyPress& key)
@@ -495,10 +541,13 @@ void MainContainer::paint(juce::Graphics& g)
     g.fillAll(Palette::background);
 
     constexpr int kTopBarHeight = 44;
+    const int masterW = MasterChannelStrip::kWidth;
+    const int mainW = getWidth() - masterW;
+
     g.setColour(Palette::surface.darker(0.3f));
-    g.fillRect(0, 0, getWidth(), kTopBarHeight);
+    g.fillRect(0, 0, mainW, kTopBarHeight);
     g.setColour(Palette::gridLine);
-    g.drawHorizontalLine(kTopBarHeight, 0.0f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(kTopBarHeight, 0.0f, static_cast<float>(mainW));
 
     g.setColour(Palette::accent);
     g.setFont(Typography::bold(17.0f));
@@ -509,41 +558,47 @@ void MainContainer::resized()
 {
     constexpr int kTopBarHeight = 44;
     constexpr int kBottomBarHeight = 44;
+    constexpr int masterW = MasterChannelStrip::kWidth;
+    const int mainW = std::max(0, getWidth() - masterW);
 
-    auto topArea = juce::Rectangle<int>(0, 0, getWidth(), kTopBarHeight).reduced(8, 4);
+    auto topArea = juce::Rectangle<int>(0, 0, mainW, kTopBarHeight).reduced(8, 4);
     topArea.removeFromLeft(125);
 
-    undoButton_.setBounds(topArea.removeFromLeft(48));
+    undoButton_.setBounds(topArea.removeFromLeft(50));
     topArea.removeFromLeft(4);
-    redoButton_.setBounds(topArea.removeFromLeft(48));
+    redoButton_.setBounds(topArea.removeFromLeft(50));
     topArea.removeFromLeft(16);
 
-    newButton_.setBounds(topArea.removeFromLeft(48));
+    newButton_.setBounds(topArea.removeFromLeft(50));
     topArea.removeFromLeft(4);
-    openButton_.setBounds(topArea.removeFromLeft(48));
+    openButton_.setBounds(topArea.removeFromLeft(50));
     topArea.removeFromLeft(4);
-    saveButton_.setBounds(topArea.removeFromLeft(48));
+    saveButton_.setBounds(topArea.removeFromLeft(50));
     topArea.removeFromLeft(16);
 
-    exportButton_.setBounds(topArea.removeFromLeft(54));
+    exportButton_.setBounds(topArea.removeFromLeft(56));
     topArea.removeFromLeft(6);
-    settingsButton_.setBounds(topArea.removeFromLeft(48));
+    settingsButton_.setBounds(topArea.removeFromLeft(56));
 
     // Bottom transport bar
     if (transportBar_ != nullptr)
-        transportBar_->setBounds(0, getHeight() - kBottomBarHeight, getWidth(), kBottomBarHeight);
+        transportBar_->setBounds(0, getHeight() - kBottomBarHeight, mainW, kBottomBarHeight);
 
-    // Main workspace area: full width for multitrack song!
+    // Main workspace area
     const int contentY = kTopBarHeight;
     const int contentH = getHeight() - kTopBarHeight - kBottomBarHeight;
 
     if (patternView_ != nullptr)
-        patternView_->setBounds(0, contentY, getWidth(), contentH);
+        patternView_->setBounds(0, contentY, mainW, contentH);
+
+    // Master volume indicator and control along the right side of the application
+    if (masterChannelStrip_ != nullptr)
+        masterChannelStrip_->setBounds(mainW, 0, masterW, getHeight());
 
     // Toast notification overlay (floating above transport bar)
-    const int toastW = std::clamp(320, 200, getWidth() - 40);
+    const int toastW = std::clamp(320, 200, std::max(200, mainW - 40));
     constexpr int toastH = 34;
-    toastOverlay_.setBounds((getWidth() - toastW) / 2, getHeight() - kBottomBarHeight - toastH - 10, toastW, toastH);
+    toastOverlay_.setBounds((mainW - toastW) / 2, getHeight() - kBottomBarHeight - toastH - 10, toastW, toastH);
     toastOverlay_.toFront(true);
 }
 

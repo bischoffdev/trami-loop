@@ -32,22 +32,132 @@ bool hasAudioExtension(const std::string& path)
 
 bool isValidPathChar(char c)
 {
-    return c >= 0x20 && c != '"' && c != '<' && c != '>' && c != '|' && c != '?' && c != '*' && c != '\r' && c != '\n';
+    const unsigned char uc = static_cast<unsigned char>(c);
+    return uc >= 0x20 && c != '"' && c != '<' && c != '>' && c != '|' && c != '?' && c != '*' && c != '\r' && c != '\n';
+}
+
+std::string cleanFilename(std::string pathOrName)
+{
+    if (pathOrName.empty())
+        return {};
+    std::replace(pathOrName.begin(), pathOrName.end(), '\\', '/');
+    while (pathOrName.size() > 1 && pathOrName.back() == '/')
+        pathOrName.pop_back();
+    const auto pos = pathOrName.find_last_of('/');
+    if (pos != std::string::npos)
+        pathOrName = pathOrName.substr(pos + 1);
+    while (!pathOrName.empty() && static_cast<unsigned char>(pathOrName.front()) <= 0x20)
+        pathOrName.erase(pathOrName.begin());
+    while (!pathOrName.empty() && static_cast<unsigned char>(pathOrName.back()) <= 0x20)
+        pathOrName.pop_back();
+    return pathOrName;
+}
+
+std::string cleanStem(const std::string& pathOrName)
+{
+    const std::string fn = cleanFilename(pathOrName);
+    const auto dot = fn.find_last_of('.');
+    if (dot != std::string::npos && dot > 0)
+        return fn.substr(0, dot);
+    return fn;
+}
+
+bool filenamesMatch(const std::string& a, const std::string& b)
+{
+    if (toLower(a) == toLower(b))
+        return true;
+    return juce::String::fromUTF8(a.c_str()).equalsIgnoreCase(juce::String::fromUTF8(b.c_str()));
+}
+
+std::string findAudioReferenceInBytes(const std::uint8_t* data, std::size_t size)
+{
+    if (size < 4)
+        return {};
+
+    // 1. Search for ASCII audio extensions
+    static const char* kExts[] = {".wav", ".WAV", ".mp3", ".MP3", ".aif", ".aiff", ".AIFF", ".ogg", ".flac"};
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        for (const char* ext : kExts)
+        {
+            const std::size_t extLen = std::strlen(ext);
+            if (i + extLen <= size && std::memcmp(data + i, ext, extLen) == 0)
+            {
+                std::size_t start = i;
+                while (start > 0 && isValidPathChar(static_cast<char>(data[start - 1])))
+                {
+                    --start;
+                    if (i - start > 512)
+                        break;
+                }
+                std::size_t end = i + extLen;
+                while (end < size && isValidPathChar(static_cast<char>(data[end])))
+                {
+                    ++end;
+                    if (end - i > 64)
+                        break;
+                }
+                std::string s(reinterpret_cast<const char*>(data + start), end - start);
+                if (hasAudioExtension(s))
+                    return s;
+            }
+        }
+    }
+
+    // 2. Search for UTF-16LE audio extensions
+    for (std::size_t i = 0; i + 8 <= size; i += 2)
+    {
+        const auto* b = data + i;
+        if (b[0] == '.' && b[1] == 0 &&
+            (b[2] == 'w' || b[2] == 'W') && b[3] == 0 &&
+            (b[4] == 'a' || b[4] == 'A') && b[5] == 0 &&
+            (b[6] == 'v' || b[6] == 'V') && b[7] == 0)
+        {
+            std::size_t start = i;
+            while (start >= 2 && data[start - 1] == 0 && isValidPathChar(static_cast<char>(data[start - 2])))
+            {
+                start -= 2;
+                if (i - start > 1024)
+                    break;
+            }
+            std::string utf8;
+            for (std::size_t u = start; u < i + 8; u += 2)
+            {
+                if (data[u + 1] != 0) break;
+                utf8.push_back(static_cast<char>(data[u]));
+            }
+            if (hasAudioExtension(utf8))
+                return utf8;
+        }
+    }
+
+    return {};
 }
 
 std::filesystem::path findFileCaseInsensitive(const std::filesystem::path& dir, const std::string& targetName)
 {
-    const auto lowerTarget = toLower(targetName);
+    const auto target = cleanFilename(targetName);
+    if (target.empty())
+        return {};
     std::error_code ec;
 
     if (!std::filesystem::exists(dir, ec))
         return {};
 
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (entry.is_regular_file(ec))
+        {
+            if (filenamesMatch(entry.path().filename().string(), target))
+                return entry.path();
+        }
+    }
+
     for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, std::filesystem::directory_options::skip_permission_denied, ec))
     {
         if (entry.is_regular_file(ec))
         {
-            if (toLower(entry.path().filename().string()) == lowerTarget)
+            if (filenamesMatch(entry.path().filename().string(), target))
                 return entry.path();
         }
     }
@@ -56,21 +166,71 @@ std::filesystem::path findFileCaseInsensitive(const std::filesystem::path& dir, 
 
 std::filesystem::path findFileStemCaseInsensitive(const std::filesystem::path& dir, const std::string& stem)
 {
-    const auto lowerStem = toLower(stem);
+    const auto targetStem = cleanStem(stem);
+    if (targetStem.empty())
+        return {};
     std::error_code ec;
 
     if (!std::filesystem::exists(dir, ec))
         return {};
 
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (entry.is_regular_file(ec) && hasAudioExtension(entry.path().string()))
+        {
+            if (filenamesMatch(entry.path().stem().string(), targetStem))
+                return entry.path();
+        }
+    }
+
     for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, std::filesystem::directory_options::skip_permission_denied, ec))
     {
         if (entry.is_regular_file(ec) && hasAudioExtension(entry.path().string()))
         {
-            if (toLower(entry.path().stem().string()) == lowerStem)
+            if (filenamesMatch(entry.path().stem().string(), targetStem))
                 return entry.path();
         }
     }
     return {};
+}
+
+std::filesystem::path findFileFuzzyCaseInsensitive(const std::filesystem::path& dir, const std::string& stem)
+{
+    const auto clean = toLower(cleanStem(stem));
+    if (clean.length() < 3)
+        return {};
+
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec))
+        return {};
+
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (entry.is_regular_file(ec) && hasAudioExtension(entry.path().string()))
+        {
+            const auto entryStem = toLower(entry.path().stem().string());
+            if (entryStem.find(clean) != std::string::npos || clean.find(entryStem) != std::string::npos)
+                return entry.path();
+        }
+    }
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, std::filesystem::directory_options::skip_permission_denied, ec))
+    {
+        if (entry.is_regular_file(ec) && hasAudioExtension(entry.path().string()))
+        {
+            const auto entryStem = toLower(entry.path().stem().string());
+            if (entryStem.find(clean) != std::string::npos || clean.find(entryStem) != std::string::npos)
+                return entry.path();
+        }
+    }
+    return {};
+}
+
+void logAcid(const std::string& msg)
+{
+    std::ofstream out("/private/tmp/trami_acid_load.log", std::ios::app);
+    if (out.is_open())
+        out << msg << "\n";
 }
 
 struct RiffChunk
@@ -113,6 +273,8 @@ std::vector<std::string> extractTrkhStrings(const std::uint8_t* payload, std::si
     if (size < 4)
         return result;
 
+    const std::string directAudioRef = findAudioReferenceInBytes(payload, size);
+
     std::uint32_t hdrSize = 0;
     std::memcpy(&hdrSize, payload, 4);
     if (hdrSize < 36 || hdrSize >= size)
@@ -126,6 +288,7 @@ std::vector<std::string> extractTrkhStrings(const std::uint8_t* payload, std::si
         while (ptr + 2 <= end)
         {
             std::u16string u16;
+            bool looksLikePackedAscii = false;
             while (ptr + 2 <= end)
             {
                 char16_t ch = 0;
@@ -133,32 +296,50 @@ std::vector<std::string> extractTrkhStrings(const std::uint8_t* payload, std::si
                 ptr += 2;
                 if (ch == 0)
                     break;
+                uint8_t low = ch & 0xFF;
+                uint8_t high = (ch >> 8) & 0xFF;
+                if (high >= 0x20 && high <= 0x7E && low >= 0x20 && low <= 0x7E)
+                    looksLikePackedAscii = true;
                 u16.push_back(ch);
             }
-            if (!u16.empty())
+            if (!u16.empty() && !looksLikePackedAscii)
             {
                 juce::String jstr(juce::CharPointer_UTF16(reinterpret_cast<const juce::CharPointer_UTF16::CharType*>(u16.c_str())));
-                result.push_back(jstr.toStdString());
+                const std::string s = jstr.toStdString();
+                if (!s.empty())
+                    result.push_back(s);
             }
         }
     }
 
-    // Fallback: If no UTF-16 strings were found, scan for ASCII audio file names
+    // Fallback: If no valid UTF-16 strings were found, extract null-terminated ASCII strings
     if (result.empty())
     {
-        for (std::size_t i = 0; i + 4 <= size; ++i)
+        if (hdrSize < size)
         {
-            const char* cptr = reinterpret_cast<const char*>(payload + i);
-            if (std::memcmp(cptr, ".wav", 4) == 0 || std::memcmp(cptr, ".WAV", 4) == 0 ||
-                std::memcmp(cptr, ".mp3", 4) == 0 || std::memcmp(cptr, ".MP3", 4) == 0 ||
-                std::memcmp(cptr, ".aif", 4) == 0 || std::memcmp(cptr, ".ogg", 4) == 0)
+            const std::uint8_t* ptr = payload + hdrSize;
+            const std::uint8_t* end = payload + size;
+            while (ptr < end)
             {
-                std::size_t s = i;
-                while (s > 0 && isValidPathChar(static_cast<char>(payload[s - 1])))
-                    --s;
-                result.push_back(std::string(reinterpret_cast<const char*>(payload + s), (i + 4) - s));
-                break;
+                std::string asciiStr;
+                while (ptr < end && *ptr != 0 && isValidPathChar(static_cast<char>(*ptr)))
+                {
+                    asciiStr.push_back(static_cast<char>(*ptr));
+                    ptr++;
+                }
+                if (ptr < end && *ptr == 0)
+                    ptr++;
+                if (!asciiStr.empty())
+                    result.push_back(asciiStr);
             }
+        }
+    }
+
+    if (!directAudioRef.empty())
+    {
+        if (result.empty() || (!hasAudioExtension(result[0]) && hasAudioExtension(directAudioRef)))
+        {
+            result.insert(result.begin(), directAudioRef);
         }
     }
 
@@ -240,11 +421,11 @@ ParsedAcidProject parseRiffAcid(const std::vector<std::uint8_t>& buffer)
                         if (!strings.empty())
                         {
                             acidTrack.samplePath = strings[0];
-                            acidTrack.sampleFileName = std::filesystem::path(strings[0]).filename().string();
+                            acidTrack.sampleFileName = cleanFilename(strings[0]);
                             if (strings.size() >= 2 && !strings[1].empty())
-                                acidTrack.trackName = strings[1];
+                                acidTrack.trackName = cleanFilename(strings[1]);
                             else
-                                acidTrack.trackName = std::filesystem::path(acidTrack.sampleFileName).stem().string();
+                                acidTrack.trackName = cleanStem(acidTrack.sampleFileName);
                         }
                     }
                     else if (tc.id == "acid" && tc.size >= 24)
@@ -259,10 +440,11 @@ ParsedAcidProject parseRiffAcid(const std::vector<std::uint8_t>& buffer)
                         float tempo = 120.0f;
                         std::memcpy(&tempo, p + 20, 4);
 
+                        acidTrack.hasAcidChunk = true;
                         acidTrack.isOneShot = (flags & 0x01) != 0;
                         acidTrack.rootNote = (flags & 0x02) ? static_cast<int>(rootNote) : -1;
                         acidTrack.beatCount = (beats > 0) ? beats : 4;
-                        acidTrack.originalBpm = tempo;
+                        acidTrack.originalBpm = (tempo > 20.0f && tempo < 999.0f) ? tempo : 0.0f;
                     }
                     else if (tc.id == "LIST" && tc.subType == "rlst")
                     {
@@ -294,7 +476,7 @@ ParsedAcidProject parseRiffAcid(const std::vector<std::uint8_t>& buffer)
                                         AcidTimelineClip clip;
                                         clip.startTicks = startTicks;
                                         clip.endTicks = endTicks;
-                                        clip.sampleOffsetTicks = std::max(0, sampleOffset);
+                                        clip.sampleOffsetTicks = (sampleOffset > 0 && sampleOffset < (endTicks - startTicks)) ? sampleOffset : 0;
                                         clip.transposeSemitones = std::clamp(transpose, -48, 48);
                                         acidTrack.clips.push_back(clip);
                                     }
@@ -303,6 +485,23 @@ ParsedAcidProject parseRiffAcid(const std::vector<std::uint8_t>& buffer)
                         }
                     }
                 }
+
+                if (acidTrack.sampleFileName.empty() || !hasAudioExtension(acidTrack.sampleFileName))
+                {
+                    const auto foundInTrak = findAudioReferenceInBytes(buffer.data() + trak.offset, trak.size);
+                    if (!foundInTrak.empty())
+                    {
+                        acidTrack.samplePath = foundInTrak;
+                        acidTrack.sampleFileName = cleanFilename(foundInTrak);
+                        if (acidTrack.trackName.empty())
+                            acidTrack.trackName = cleanStem(acidTrack.sampleFileName);
+                    }
+                }
+                acidTrack.sampleFileName = cleanFilename(acidTrack.sampleFileName);
+                if (acidTrack.trackName.empty())
+                    acidTrack.trackName = cleanStem(acidTrack.sampleFileName);
+                else
+                    acidTrack.trackName = cleanFilename(acidTrack.trackName);
 
                 proj.tracks.push_back(std::move(acidTrack));
             }
@@ -350,6 +549,12 @@ std::optional<Song> AcidProjectReader::loadProject(const std::filesystem::path& 
                                                    double sampleRate,
                                                    std::filesystem::path* outExtractedDir)
 {
+    {
+        std::ofstream out("/private/tmp/trami_acid_load.log", std::ios::trunc);
+        out << "=== Loading ACID Project ===\n";
+        out << "Project file: " << projectFile.string() << "\n";
+    }
+
     std::error_code ec;
     if (!std::filesystem::exists(projectFile, ec))
         return std::nullopt;
@@ -422,12 +627,31 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
     if (buffer.empty())
         return std::nullopt;
 
+    logAcid("ACID file: " + acdFile.string());
+    logAcid("mediaSearchDir: " + mediaSearchDir.string());
+    logAcid("Files in mediaSearchDir:");
+    int audioFileCount = 0;
+    std::error_code dirEc;
+    if (std::filesystem::exists(mediaSearchDir, dirEc))
+    {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(mediaSearchDir, std::filesystem::directory_options::skip_permission_denied, dirEc))
+        {
+            if (entry.is_regular_file(dirEc) && hasAudioExtension(entry.path().string()))
+            {
+                logAcid("  [audio on disk] " + entry.path().filename().string() + "  ->  " + entry.path().string());
+                audioFileCount++;
+            }
+        }
+    }
+    logAcid("Total audio files found on disk: " + std::to_string(audioFileCount));
+
     // 1. Try parsing full RIFF ACID project structure
     auto riffProj = parseRiffAcid(buffer);
 
     // If RIFF structure had tracks with clips or samples, use the authentic arrangement
     if (!riffProj.tracks.empty())
     {
+        logAcid("Tracks found in RIFF ACID project: " + std::to_string(riffProj.tracks.size()));
         std::unordered_set<std::string> loadedFileNames;
         std::error_code ec;
 
@@ -476,47 +700,202 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
             // Resolve sample audio file
             std::filesystem::path resolved;
 
-            if (!track.samplePath.empty() && std::filesystem::exists(track.samplePath, ec))
-                resolved = track.samplePath;
+            std::vector<std::string> candidates;
+            auto addCandidate = [&](const std::string& raw) {
+                if (raw.empty()) return;
+                std::string fn = cleanFilename(raw);
+                if (!fn.empty()) {
+                    candidates.push_back(fn);
+                    std::string st = cleanStem(fn);
+                    if (!st.empty() && st != fn) {
+                        candidates.push_back(st + ".wav");
+                        candidates.push_back(st + ".WAV");
+                    }
+                }
+            };
 
-            if (resolved.empty() && !track.sampleFileName.empty())
+            addCandidate(track.sampleFileName);
+            addCandidate(track.samplePath);
+            addCandidate(track.trackName);
+
+            // 1. Direct match in mediaSearchDir
+            for (const auto& cand : candidates)
             {
-                const auto cand = mediaSearchDir / track.sampleFileName;
-                if (std::filesystem::exists(cand, ec))
-                    resolved = cand;
+                const auto candidateDirect = mediaSearchDir / cand;
+                if (std::filesystem::exists(candidateDirect, ec) && std::filesystem::is_regular_file(candidateDirect, ec))
+                {
+                    resolved = candidateDirect;
+                    break;
+                }
             }
 
-            if (resolved.empty() && !track.sampleFileName.empty())
+            // 2. Direct match in mediaSearchDir / "samples"
+            if (resolved.empty())
             {
-                const auto cand = mediaSearchDir / "samples" / track.sampleFileName;
-                if (std::filesystem::exists(cand, ec))
-                    resolved = cand;
+                for (const auto& cand : candidates)
+                {
+                    const auto candidateSamples = mediaSearchDir / "samples" / cand;
+                    if (std::filesystem::exists(candidateSamples, ec) && std::filesystem::is_regular_file(candidateSamples, ec))
+                    {
+                        resolved = candidateSamples;
+                        break;
+                    }
+                }
             }
 
-            if (resolved.empty() && !track.sampleFileName.empty())
-                resolved = findFileCaseInsensitive(mediaSearchDir, track.sampleFileName);
+            // 3. Case-insensitive search directly in mediaSearchDir (non-recursive)
+            if (resolved.empty() && std::filesystem::exists(mediaSearchDir, ec))
+            {
+                for (const auto& cand : candidates)
+                {
+                    const auto lowerCand = toLower(cand);
+                    for (const auto& entry : std::filesystem::directory_iterator(mediaSearchDir, ec))
+                    {
+                        if (entry.is_regular_file(ec) && toLower(entry.path().filename().string()) == lowerCand)
+                        {
+                            resolved = entry.path();
+                            break;
+                        }
+                    }
+                    if (!resolved.empty())
+                        break;
+                }
+            }
 
-            if (resolved.empty() && !track.sampleFileName.empty())
-                resolved = findFileStemCaseInsensitive(mediaSearchDir, std::filesystem::path(track.sampleFileName).stem().string());
+            // 4. Stem match directly in mediaSearchDir (non-recursive)
+            if (resolved.empty() && std::filesystem::exists(mediaSearchDir, ec))
+            {
+                for (const auto& cand : candidates)
+                {
+                    const auto lowerStem = toLower(cleanStem(cand));
+                    if (lowerStem.empty()) continue;
+                    for (const auto& entry : std::filesystem::directory_iterator(mediaSearchDir, ec))
+                    {
+                        if (entry.is_regular_file(ec) && hasAudioExtension(entry.path().string()) &&
+                            toLower(entry.path().stem().string()) == lowerStem)
+                        {
+                            resolved = entry.path();
+                            break;
+                        }
+                    }
+                    if (!resolved.empty())
+                        break;
+                }
+            }
+
+            // 5. Recursive search in mediaSearchDir (by filename and stem)
+            if (resolved.empty())
+            {
+                for (const auto& cand : candidates)
+                {
+                    resolved = findFileCaseInsensitive(mediaSearchDir, cand);
+                    if (!resolved.empty())
+                        break;
+                    resolved = findFileStemCaseInsensitive(mediaSearchDir, cleanStem(cand));
+                    if (!resolved.empty())
+                        break;
+                }
+            }
+
+            // 6. Direct samplePath if it exists on disk
+            if (resolved.empty() && !track.samplePath.empty())
+            {
+                if (std::filesystem::exists(track.samplePath, ec) && std::filesystem::is_regular_file(track.samplePath, ec))
+                    resolved = track.samplePath;
+            }
+
+            // 7. Search in parent directory of mediaSearchDir (e.g. if project is in a subfolder)
+            if (resolved.empty())
+            {
+                const auto parentDir = mediaSearchDir.parent_path();
+                if (std::filesystem::exists(parentDir, ec) && parentDir != mediaSearchDir)
+                {
+                    for (const auto& cand : candidates)
+                    {
+                        resolved = findFileCaseInsensitive(parentDir, cand);
+                        if (!resolved.empty())
+                            break;
+                        resolved = findFileStemCaseInsensitive(parentDir, cleanStem(cand));
+                        if (!resolved.empty())
+                            break;
+                    }
+                }
+            }
+
+            // 8. Fuzzy / substring match on stem
+            if (resolved.empty())
+            {
+                for (const auto& cand : candidates)
+                {
+                    resolved = findFileFuzzyCaseInsensitive(mediaSearchDir, cleanStem(cand));
+                    if (!resolved.empty())
+                        break;
+                }
+            }
+
+            logAcid("  Track " + std::to_string(track.trackIndex) + " ['" + track.trackName + "'] (sampleFileName: '" + track.sampleFileName + "', samplePath: '" + track.samplePath + "')");
+            if (!resolved.empty())
+                logAcid("    -> MATCHED: " + resolved.string());
+            else
+                logAcid("    -> MISSING (placeholder created)");
 
             SampleId sampleId;
 
             if (!resolved.empty())
             {
-                const int loopBarsHint = std::max(1, static_cast<int>(track.beatCount / 4));
-                auto importRes = importer.importFile(resolved, sampleRate,
-                                                     track.isOneShot ? SampleKind::OneShot : SampleKind::Loop,
-                                                     loopBarsHint);
+                const int loopBarsHint = (track.beatCount > 0) ? std::max(1, static_cast<int>(track.beatCount / 4)) : 1;
+                const SampleKind initialKind = track.hasAcidChunk
+                    ? (track.isOneShot ? SampleKind::OneShot : SampleKind::Loop)
+                    : SampleKind::Loop;
+
+                auto importRes = importer.importFile(resolved, sampleRate, initialKind, loopBarsHint, std::nullopt, riffProj.bpm);
                 if (importRes.has_value())
                 {
                     Sample s = importRes->sample;
-                    s.kind = track.isOneShot ? SampleKind::OneShot : SampleKind::Loop;
-                    if (track.beatCount > 0)
-                        s.loopBars = std::max(1, static_cast<int>(track.beatCount / 4));
-                    if (track.originalBpm > 20.0f)
-                        s.acidBpm = track.originalBpm;
-                    if (track.rootNote >= 0)
-                        s.rootNote = track.rootNote;
+                    if (track.hasAcidChunk)
+                    {
+                        s.kind = track.isOneShot ? SampleKind::OneShot : SampleKind::Loop;
+                        if (track.beatCount > 0)
+                        {
+                            s.loopBeats = static_cast<double>(track.beatCount);
+                            s.loopBars = std::max(1, static_cast<int>(track.beatCount / 4));
+                        }
+                        if (track.originalBpm > 20.0f)
+                            s.acidBpm = track.originalBpm;
+                        if (track.rootNote >= 0)
+                            s.rootNote = track.rootNote;
+                    }
+
+                    // For loops: always ensure loopBars, loopBeats and acidBpm are consistent with duration
+                    if (s.kind == SampleKind::Loop && s.durationSeconds > 0.0)
+                    {
+                        if (s.loopBeats > 0.0)
+                        {
+                            const double calcBpm = (s.loopBeats * 60.0) / s.durationSeconds;
+                            // If stored acidBpm was calculated assuming 4 beats while loopBeats is sub-bar (e.g. 2 beats),
+                            // or if acidBpm was not specified, use authentic BPM from beats and duration
+                            if (s.acidBpm <= 0.0 || (s.loopBeats < 4.0 && std::abs(s.acidBpm - calcBpm * (4.0 / s.loopBeats)) < 1.0))
+                            {
+                                s.acidBpm = calcBpm;
+                            }
+                        }
+                        else
+                        {
+                            const double effectiveTempo = (s.acidBpm > 20.0) ? s.acidBpm : riffProj.bpm;
+                            if (effectiveTempo > 20.0)
+                            {
+                                const double secPerBar = (60.0 / effectiveTempo) * 4.0;
+                                const int estBars = std::max(1, static_cast<int>(std::round(s.durationSeconds / secPerBar)));
+                                if (s.loopBars <= 1 && estBars > 1)
+                                    s.loopBars = estBars;
+                            }
+
+                            if (s.acidBpm <= 0.0 && s.loopBars > 0)
+                            {
+                                s.acidBpm = Timing::loopBpm(s.durationSeconds, s.loopBars);
+                            }
+                        }
+                    }
 
                     sampleId = song.addSample(s);
                     stretchCache.setRawAudio(sampleId, std::make_shared<AudioData>(std::move(importRes->audio)));
@@ -530,12 +909,24 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
                 Sample s;
                 s.name = !track.trackName.empty() ? track.trackName : track.sampleFileName;
                 s.fileName = !track.sampleFileName.empty() ? track.sampleFileName : (s.name + ".wav");
-                s.kind = track.isOneShot ? SampleKind::OneShot : SampleKind::Loop;
-                s.loopBars = std::max(1, static_cast<int>(track.beatCount / 4));
+                s.kind = track.hasAcidChunk ? (track.isOneShot ? SampleKind::OneShot : SampleKind::Loop) : SampleKind::Loop;
+                if (track.beatCount > 0)
+                {
+                    s.loopBeats = static_cast<double>(track.beatCount);
+                    s.loopBars = std::max(1, static_cast<int>(track.beatCount / 4));
+                }
+                else
+                {
+                    s.loopBars = 1;
+                }
                 s.acidBpm = (track.originalBpm > 20.0f) ? track.originalBpm : riffProj.bpm;
+                if (s.loopBeats > 0.0 && s.loopBeats < 4.0 && s.acidBpm > 20.0f)
+                {
+                    s.acidBpm = s.acidBpm * (s.loopBeats / 4.0);
+                }
                 s.rootNote = track.rootNote;
 
-                const int numFrames = static_cast<int>(std::round(sampleRate * (60.0 / riffProj.bpm) * 4.0 * s.loopBars));
+                const int numFrames = static_cast<int>(std::round(sampleRate * (60.0 / riffProj.bpm) * s.loopCycleBeats()));
                 auto silent = std::make_shared<AudioData>();
                 silent->channels.resize(2, std::vector<float>(static_cast<std::size_t>(std::max(1024, numFrames)), 0.0f));
 
@@ -552,7 +943,17 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
 
                 const std::string displayName = !track.trackName.empty() ? track.trackName : track.sampleFileName;
                 song.renamePatternTrack(patternId, patternTrackIdx, displayName);
-                song.setPatternTrackKind(patternId, patternTrackIdx, track.isOneShot ? SampleKind::OneShot : SampleKind::Loop);
+
+                SampleKind effectiveKind = SampleKind::Loop;
+                if (track.hasAcidChunk)
+                {
+                    effectiveKind = track.isOneShot ? SampleKind::OneShot : SampleKind::Loop;
+                }
+                else if (const auto* s = song.findSample(sampleId))
+                {
+                    effectiveKind = s->kind;
+                }
+                song.setPatternTrackKind(patternId, patternTrackIdx, effectiveKind);
 
                 const double totalSteps = static_cast<double>(arrangementBars * kStepsPerBar);
 
@@ -673,7 +1074,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
                 const std::string foundStr(reinterpret_cast<const char*>(buffer.data() + start), end - start);
                 if (foundStr.length() >= 4 && hasAudioExtension(foundStr))
                 {
-                    const auto base = std::filesystem::path(foundStr).filename().string();
+                    const auto base = cleanFilename(foundStr);
                     if (!base.empty() && !seenBasenames.contains(toLower(base)))
                     {
                         seenBasenames.insert(toLower(base));
@@ -703,7 +1104,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
 
                 if (hasAudioExtension(utf8Str))
                 {
-                    const auto base = std::filesystem::path(utf8Str).filename().string();
+                    const auto base = cleanFilename(utf8Str);
                     if (!base.empty() && !seenBasenames.contains(toLower(base)))
                     {
                         seenBasenames.insert(toLower(base));

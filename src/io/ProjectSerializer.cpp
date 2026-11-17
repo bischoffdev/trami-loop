@@ -32,6 +32,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
         obj->setProperty("durationSeconds", s.durationSeconds);
         obj->setProperty("kind", s.kind == SampleKind::Loop ? "loop" : "oneshot");
         obj->setProperty("loopBars", s.loopBars);
+        if (s.loopBeats > 0.0)
+            obj->setProperty("loopBeats", s.loopBeats);
         if (s.rootNote >= 0)
             obj->setProperty("rootNote", s.rootNote);
         if (s.acidBpm > 0.0)
@@ -198,6 +200,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
             s.durationSeconds = sVar["durationSeconds"];
             s.kind = (sVar["kind"].toString() == "loop") ? SampleKind::Loop : SampleKind::OneShot;
             s.loopBars = std::max(1, static_cast<int>(sVar["loopBars"]));
+            if (sVar.hasProperty("loopBeats"))
+                s.loopBeats = static_cast<double>(sVar["loopBeats"]);
             if (sVar.hasProperty("rootNote"))
                 s.rootNote = static_cast<int>(sVar["rootNote"]);
             if (sVar.hasProperty("acidBpm"))

@@ -173,8 +173,8 @@ void PatternGrid::setZoom(float zoomX, float zoomY)
 {
     zoomX_ = zoomX;
     zoomY_ = zoomY;
-    stepWidth_ = std::max(6, juce::roundToInt(static_cast<float>(kDefaultStepWidth) * zoomX_));
-    trackHeight_ = std::max(20, juce::roundToInt(static_cast<float>(kDefaultTrackHeight) * zoomY_));
+    stepWidth_ = std::max(0.01, static_cast<double>(kDefaultStepWidth) * static_cast<double>(zoomX_));
+    trackHeight_ = std::max(kMinTrackHeight, juce::roundToInt(static_cast<float>(kDefaultTrackHeight) * zoomY_));
     repaint();
 }
 
@@ -221,9 +221,10 @@ double PatternGrid::clipSpan(const Clip& clip, int trackIndex) const
     if (kind == SampleKind::Loop)
     {
         int bars = sample->loopBars;
-        if (bars <= 1 && sample->durationSeconds > 0.0)
+        if (bars <= 0 && sample->durationSeconds > 0.0)
         {
-            const double secPerBar = (song_.bpm() > 0.0) ? (60.0 / song_.bpm()) * 4.0 : 2.0;
+            const double refBpm = (sample->acidBpm > 20.0f) ? sample->acidBpm : song_.bpm();
+            const double secPerBar = (refBpm > 0.0) ? (60.0 / refBpm) * 4.0 : 2.0;
             const int estBars = static_cast<int>(std::round(sample->durationSeconds / secPerBar));
             if (estBars >= 1)
                 bars = estBars;
@@ -241,12 +242,12 @@ int PatternGrid::stepToX(double step) const
 {
     const Timing timing(song_.bpm(), 48000.0, song_.swing());
     const double swungStep = timing.stepToSwungStep(step);
-    return juce::roundToInt(swungStep * static_cast<double>(stepWidth_));
+    return juce::roundToInt(swungStep * stepWidth_);
 }
 
 double PatternGrid::xToStep(int x) const
 {
-    const double rawSwungStep = static_cast<double>(x) / static_cast<double>(stepWidth_);
+    const double rawSwungStep = static_cast<double>(x) / stepWidth_;
     const Timing timing(song_.bpm(), 48000.0, song_.swing());
     return timing.swungStepToStep(rawSwungStep);
 }
@@ -436,6 +437,72 @@ void PatternGrid::mouseExit(const juce::MouseEvent&)
         setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 
+void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
+{
+    const auto* pat = song_.findPattern(patternId_);
+    const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+
+    // 1. Ruler
+    g.setColour(juce::Colour(0xff23272d));
+    g.fillRect(0, 0, renderWidth, kRulerHeight);
+    g.setColour(juce::Colour(0xff181a1f));
+    g.drawHorizontalLine(kRulerHeight - 1, 0.0f, static_cast<float>(renderWidth));
+    g.setFont(Typography::bold(11.0f));
+
+    const double barWidthPx = stepWidth_ * static_cast<double>(kStepsPerBar);
+    const int barInterval = (barWidthPx < 12.0) ? 16 : ((barWidthPx < 25.0) ? 8 : ((barWidthPx < 45.0) ? 4 : ((barWidthPx < 70.0) ? 2 : 1)));
+
+    for (int step = 0; step < totalSteps; ++step)
+    {
+        const int x = stepToX(step);
+        const bool isBar = (step % kStepsPerBar == 0);
+        const bool isBeat = (step % kStepsPerBeat == 0);
+        const bool isRaster = (step % rasterSteps_ == 0);
+
+        if (isBar)
+        {
+            const int barNum = step / kStepsPerBar + 1;
+            if ((barNum - 1) % barInterval == 0)
+            {
+                g.setColour(Palette::text);
+                const int labelW = std::max(24, juce::roundToInt(barWidthPx * static_cast<double>(barInterval)));
+                g.drawText(juce::String(barNum) + ".1", x + 4, 7, labelW, kRulerHeight - 8,
+                           juce::Justification::centredLeft);
+            }
+            g.setColour(Palette::gridBarLine);
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 5), static_cast<float>(kRulerHeight));
+        }
+        else if (isBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 12.0))
+        {
+            g.setColour(Palette::gridBeatLine);
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 4), static_cast<float>(kRulerHeight));
+        }
+        else if (isRaster && stepWidth_ >= 5.0)
+        {
+            g.setColour(Palette::gridLine);
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 3), static_cast<float>(kRulerHeight));
+        }
+    }
+
+    // Studio One cycle indicator at the top of the ruler
+    const int loopStartX = stepToX(loopStartStep_);
+    const int loopEndX = stepToX(loopEndStep_);
+    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, kRulerHeight);
+
+    // Playhead cap
+    if (playheadStep_ >= 0.0)
+    {
+        const int px = stepToX(playheadStep_);
+        g.setColour(Palette::accent);
+        juce::Path cap;
+        cap.startNewSubPath(static_cast<float>(px - 6), 0.0f);
+        cap.lineTo(static_cast<float>(px + 6), 0.0f);
+        cap.lineTo(static_cast<float>(px), static_cast<float>(kRulerHeight));
+        cap.closeSubPath();
+        g.fillPath(cap);
+    }
+}
+
 void PatternGrid::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
@@ -449,42 +516,9 @@ void PatternGrid::paint(juce::Graphics& g)
     const int totalHeight = kRulerHeight + std::max(1, numTracks) * trackHeight_;
 
     // 1. Ruler
-    g.setColour(juce::Colour(0xff23272d));
-    g.fillRect(0, 0, renderWidth, kRulerHeight);
-    g.setColour(juce::Colour(0xff181a1f));
-    g.drawHorizontalLine(kRulerHeight - 1, 0.0f, static_cast<float>(renderWidth));
-    g.setFont(Typography::bold(11.0f));
+    paintRuler(g, renderWidth);
 
-    for (int step = 0; step < totalSteps; ++step)
-    {
-        const int x = stepToX(step);
-        const bool isBar = (step % kStepsPerBar == 0);
-        const bool isBeat = (step % kStepsPerBeat == 0);
-        const bool isRaster = (step % rasterSteps_ == 0);
-
-        if (isBar)
-        {
-            const int barNum = step / kStepsPerBar + 1;
-            g.setColour(Palette::text);
-            const int labelW = std::max(stepWidth_ * 2, stepWidth_ * kStepsPerBar);
-            g.drawText(juce::String(barNum) + ".1", x + 4, 7, labelW, kRulerHeight - 8,
-                       juce::Justification::centredLeft);
-            g.setColour(Palette::gridBarLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 5), static_cast<float>(kRulerHeight));
-        }
-        else if (isBeat)
-        {
-            g.setColour(Palette::gridBeatLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 4), static_cast<float>(kRulerHeight));
-        }
-        else if (isRaster && stepWidth_ >= 6)
-        {
-            g.setColour(Palette::gridLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 3), static_cast<float>(kRulerHeight));
-        }
-    }
-
-    // 2. Loop region highlight (down tracks and Studio One banner in ruler)
+    // 2. Loop region highlight (down tracks)
     const int loopStartX = stepToX(loopStartStep_);
     const int loopEndX = stepToX(loopEndStep_);
     const int loopW = std::max(4, loopEndX - loopStartX);
@@ -495,9 +529,6 @@ void PatternGrid::paint(juce::Graphics& g)
     g.setColour(Palette::loopRegion.withAlpha(0.35f));
     g.drawVerticalLine(loopStartX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     g.drawVerticalLine(loopEndX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
-
-    // Studio One cycle indicator at the top of the ruler
-    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, kRulerHeight);
 
     // 3. Tracks & Grid lines
     for (int t = 0; t < numTracks; ++t)
@@ -521,13 +552,20 @@ void PatternGrid::paint(juce::Graphics& g)
             continue;
 
         if (isBar)
+        {
             g.setColour(Palette::gridBarLine);
-        else if (isBeat)
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+        }
+        else if (isBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 12.0))
+        {
             g.setColour(Palette::gridBeatLine);
-        else
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+        }
+        else if (isRaster && stepWidth_ >= 5.0)
+        {
             g.setColour(Palette::gridLine);
-
-        g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+        }
     }
 
     // 3. Clips & Overlap Representation
@@ -676,8 +714,7 @@ void PatternGrid::paint(juce::Graphics& g)
                 {
                     if (isLoop)
                     {
-                        const int loopBars = std::max(1, sample->loopBars);
-                        fullSampleSteps = static_cast<double>(loopBars * kStepsPerBar);
+                        fullSampleSteps = sample->loopCycleSteps();
                     }
                     else
                     {
@@ -757,14 +794,13 @@ void PatternGrid::paint(juce::Graphics& g)
             const Sample* s = song_.findSample(clip.sampleId);
             if (isLoop && s != nullptr)
             {
-                const int loopBars = std::max(1, s->loopBars);
-                const int loopSteps = loopBars * kStepsPerBar;
-                if (loopSteps > 0 && span > loopSteps)
+                const double loopSteps = s->loopCycleSteps();
+                if (loopSteps > 0.0 && span > loopSteps)
                 {
                     g.setColour(col.brighter(0.7f));
-                    for (int st = loopSteps; st < span; st += loopSteps)
+                    for (double st = loopSteps; st < span - 0.01; st += loopSteps)
                     {
-                        const int notchX = bounds.getX() + st * stepWidth_;
+                        const int notchX = bounds.getX() + static_cast<int>(std::round(st * stepWidth_));
                         g.drawVerticalLine(notchX, static_cast<float>(bounds.getY() + 3),
                                            static_cast<float>(bounds.getY() + 8));
                         g.drawVerticalLine(notchX, static_cast<float>(bounds.getBottom() - 6),
@@ -1041,10 +1077,10 @@ void PatternGrid::paint(juce::Graphics& g)
     {
         const int px = stepToX(playheadStep_);
         g.setColour(Palette::accent.withAlpha(0.4f));
-        g.drawVerticalLine(px, 0.0f, static_cast<float>(totalHeight));
+        g.drawVerticalLine(px, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         g.setColour(Palette::accent);
-        g.drawVerticalLine(px - 1, 0.0f, static_cast<float>(totalHeight));
-        g.drawVerticalLine(px + 1, 0.0f, static_cast<float>(totalHeight));
+        g.drawVerticalLine(px - 1, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+        g.drawVerticalLine(px + 1, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
 
         juce::Path cap;
         cap.startNewSubPath(static_cast<float>(px - 6), 0.0f);
@@ -1068,7 +1104,7 @@ void PatternGrid::paint(juce::Graphics& g)
             if (dragHoverStep_ >= 0)
             {
                 const int hx = stepToX(dragHoverStep_);
-                const int hw = std::max(stepToX(dragHoverStep_ + rasterSteps_) - hx, stepWidth_);
+                const int hw = std::max(stepToX(dragHoverStep_ + rasterSteps_) - hx, stepWidth());
                 auto dropBox = juce::Rectangle<int>(hx + 2, y + 3, hw - 4, trackHeight_ - 6);
                 g.setColour(Palette::accent.withAlpha(0.35f));
                 g.fillRoundedRectangle(dropBox.toFloat(), 4.0f);
@@ -1499,7 +1535,7 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                        [selId](const Clip& c) { return c.id == selId; });
                 if (it != tr.clips.end())
                 {
-                    const int span = clipSpan(*it, t);
+                    const double span = clipSpan(*it, t);
                     DragClipItem item;
                     item.clipId = it->id;
                     item.originalTrack = t;
@@ -1694,12 +1730,32 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         }
 
         double minDelta = -100000.0;
-        double maxDelta = 100000.0;
+        for (const auto& item : drag_.items)
+            minDelta = std::max(minDelta, -item.originalStartStep);
+
+        const double effectiveDeltaLeft = std::max(minDelta, effectiveDelta);
+
+        // Check if dragging outside current pattern boundaries -> automatically add bar(s)
+        double maxTargetEnd = 0.0;
         for (const auto& item : drag_.items)
         {
-            minDelta = std::max(minDelta, -item.originalStartStep);
-            maxDelta = std::min(maxDelta, static_cast<double>(pat->lengthSteps()) - item.originalLengthSteps - item.originalStartStep);
+            const double targetStep = item.originalStartStep + effectiveDeltaLeft;
+            maxTargetEnd = std::max(maxTargetEnd, targetStep + item.originalLengthSteps);
         }
+
+        if (maxTargetEnd > static_cast<double>(pat->lengthSteps()))
+        {
+            const int neededBars = std::max(pat->lengthBars + 1,
+                                            static_cast<int>(std::ceil(maxTargetEnd / static_cast<double>(kStepsPerBar))));
+            listener_.patternLengthExtensionRequested(neededBars);
+            pat = song_.findPattern(patternId_);
+        }
+
+        const double maxAllowedStep = pat != nullptr ? static_cast<double>(pat->lengthSteps()) : 100000.0;
+        double maxDelta = 100000.0;
+        for (const auto& item : drag_.items)
+            maxDelta = std::min(maxDelta, maxAllowedStep - item.originalLengthSteps - item.originalStartStep);
+
         const double clampedDelta = std::clamp(effectiveDelta, minDelta, maxDelta);
 
         bool anyChanged = false;
@@ -1708,13 +1764,9 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
             double newStep = item.originalStartStep + clampedDelta;
             if (!disableSnap)
             {
-                newStep = std::clamp(std::round(newStep / raster) * raster, 0.0,
-                                     static_cast<double>(pat->lengthSteps()) - item.originalLengthSteps);
+                newStep = std::round(newStep / raster) * raster;
             }
-            else
-            {
-                newStep = std::clamp(newStep, 0.0, static_cast<double>(pat->lengthSteps()) - item.originalLengthSteps);
-            }
+            newStep = std::clamp(newStep, 0.0, static_cast<double>(pat->lengthSteps()) - item.originalLengthSteps);
 
             if (std::abs(newStep - item.currentStartStep) > 0.001)
             {
@@ -1787,6 +1839,19 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         const bool disableSnap = e.mods.isShiftDown();
         const double raster = static_cast<double>(std::max(1, rasterSteps_));
 
+        // Check if resizing outside current pattern boundaries -> automatically add bar(s)
+        double maxTargetEnd = 0.0;
+        for (const auto& item : drag_.items)
+            maxTargetEnd = std::max(maxTargetEnd, item.originalStartStep + item.originalLengthSteps + deltaStepsRaw);
+
+        if (maxTargetEnd > static_cast<double>(pat->lengthSteps()))
+        {
+            const int neededBars = std::max(pat->lengthBars + 1,
+                                            static_cast<int>(std::ceil(maxTargetEnd / static_cast<double>(kStepsPerBar))));
+            listener_.patternLengthExtensionRequested(neededBars);
+            pat = song_.findPattern(patternId_);
+        }
+
         bool anyChanged = false;
         for (auto& item : drag_.items)
         {
@@ -1794,12 +1859,13 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
             double newLen = item.originalLengthSteps;
             if (disableSnap)
             {
-                // Without snapping: make them exactly as small or big as user wants!
+                // Without snapping: make them exactly as small or big as user wants (sub grid)!
                 const double maxLen = std::max(0.05, patLen - item.originalStartStep);
                 newLen = std::clamp(item.originalLengthSteps + deltaStepsRaw, 0.05, maxLen);
             }
             else
             {
+                // When resizing right: snap right edge to grid!
                 const double targetEnd = item.originalStartStep + item.originalLengthSteps + deltaStepsRaw;
                 const double snappedEnd = std::round(targetEnd / raster) * raster;
                 const double maxLen = std::max(raster, patLen - item.originalStartStep);
@@ -1845,21 +1911,23 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         {
             const double originalEndStep = item.originalStartStep + item.originalLengthSteps;
             double newStart = item.originalStartStep;
+            double newLen = item.originalLengthSteps;
+            double newOffset = item.originalOffsetSteps;
             if (disableSnap)
             {
-                // Without snapping: make them exactly as small or big as user wants!
+                // Without snapping: sub grid placement!
                 newStart = std::clamp(item.originalStartStep + deltaStepsRaw, 0.0, originalEndStep - 0.05);
             }
             else
             {
+                // Snap start to the grid!
                 const double targetStart = item.originalStartStep + deltaStepsRaw;
                 const double snappedStart = std::round(targetStart / raster) * raster;
                 newStart = std::clamp(snappedStart, 0.0, originalEndStep - raster);
             }
-
             const double delta = newStart - item.originalStartStep;
-            const double newOffset = std::max(0.0, item.originalOffsetSteps + delta);
-            const double newLen = originalEndStep - newStart;
+            newOffset = std::max(0.0, item.originalOffsetSteps + delta);
+            newLen = originalEndStep - newStart;
 
             if (std::abs(newStart - item.currentStartStep) > 0.001 ||
                 std::abs(newLen - item.currentLengthSteps) > 0.001 ||

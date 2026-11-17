@@ -39,7 +39,7 @@ void ArrangerGrid::setZoom(float zoomX, float zoomY)
     zoomX_ = zoomX;
     zoomY_ = zoomY;
     barWidth_ = std::max(16, juce::roundToInt(static_cast<float>(kDefaultBarWidth) * zoomX_));
-    trackHeight_ = std::max(22, juce::roundToInt(static_cast<float>(kDefaultTrackHeight) * zoomY_));
+    trackHeight_ = std::max(kMinTrackHeight, juce::roundToInt(static_cast<float>(kDefaultTrackHeight) * zoomY_));
     repaint();
 }
 
@@ -88,17 +88,11 @@ const PatternBlock* ArrangerGrid::findBlockAt(juce::Point<int> pt) const
     return nullptr;
 }
 
-void ArrangerGrid::paint(juce::Graphics& g)
+void ArrangerGrid::paintRuler(juce::Graphics& g, int renderWidth)
 {
-    g.fillAll(Palette::background);
-
     const int totalBars = std::max(16, song_.lengthBars() + 4);
-    const int gridWidth = totalBars * barWidth_;
-    const int renderWidth = std::max(getWidth(), gridWidth);
-    const int numTracks = song_.numArrangerTracks();
-    const int totalHeight = kRulerHeight + numTracks * trackHeight_;
 
-    // 1. Ruler
+    // 1. Ruler background & border
     g.setColour(juce::Colour(0xff23272d));
     g.fillRect(0, 0, renderWidth, kRulerHeight);
     g.setColour(juce::Colour(0xff181a1f));
@@ -120,7 +114,44 @@ void ArrangerGrid::paint(juce::Graphics& g)
         g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 5), static_cast<float>(kRulerHeight));
     }
 
-    // 2. Loop region highlight (down arranger tracks and Studio One banner in ruler)
+    // Studio One cycle indicator at the top of the ruler
+    const int loopStartX = loopStartBar_ * barWidth_;
+    const int loopEndX = loopEndBar_ * barWidth_;
+    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, kRulerHeight);
+
+    // Playhead pointer in the ruler
+    if (playheadBar_ >= 0.0 && playheadBar_ <= static_cast<double>(totalBars))
+    {
+        const float px = static_cast<float>(playheadBar_ * barWidth_);
+        juce::Path p;
+        p.startNewSubPath(px - 6.0f, 1.0f);
+        p.lineTo(px + 6.0f, 1.0f);
+        p.lineTo(px + 6.0f, static_cast<float>(kRulerHeight - 6));
+        p.lineTo(px, static_cast<float>(kRulerHeight));
+        p.lineTo(px - 6.0f, static_cast<float>(kRulerHeight - 6));
+        p.closeSubPath();
+
+        g.setColour(Palette::accent);
+        g.fillPath(p);
+        g.setColour(juce::Colours::white);
+        g.strokePath(p, juce::PathStrokeType(1.2f));
+    }
+}
+
+void ArrangerGrid::paint(juce::Graphics& g)
+{
+    g.fillAll(Palette::background);
+
+    const int totalBars = std::max(16, song_.lengthBars() + 4);
+    const int gridWidth = totalBars * barWidth_;
+    const int renderWidth = std::max(getWidth(), gridWidth);
+    const int numTracks = song_.numArrangerTracks();
+    const int totalHeight = kRulerHeight + numTracks * trackHeight_;
+
+    // 1. Ruler
+    paintRuler(g, renderWidth);
+
+    // 2. Loop region highlight (down arranger tracks)
     const int loopStartX = loopStartBar_ * barWidth_;
     const int loopEndX = loopEndBar_ * barWidth_;
     const int loopW = std::max(4, loopEndX - loopStartX);
@@ -131,9 +162,6 @@ void ArrangerGrid::paint(juce::Graphics& g)
     g.setColour(Palette::loopRegion.withAlpha(0.35f));
     g.drawVerticalLine(loopStartX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     g.drawVerticalLine(loopEndX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
-
-    // Studio One cycle indicator at the top of the ruler
-    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, kRulerHeight);
 
     // 3. Tracks & Grid lines
     for (int t = 0; t < numTracks; ++t)

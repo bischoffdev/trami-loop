@@ -163,33 +163,51 @@ void TramiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& but
     auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
     juce::Colour fill = backgroundColour;
 
+    if (fill == Palette::surface || fill == Palette::surface.brighter(0.04f))
+        fill = juce::Colour(0xff222832);
+
     if (shouldDrawButtonAsDown)
         fill = fill.darker(0.2f);
     else if (shouldDrawButtonAsHighlighted)
-        fill = fill.brighter(0.15f);
+        fill = fill.brighter(0.18f);
 
     g.setColour(fill);
     g.fillRoundedRectangle(bounds, 4.0f);
 
     juce::Colour border = button.getToggleState()
                               ? (fill.getBrightness() > 0.4f ? fill.brighter(0.25f) : Palette::accent)
-                              : Palette::gridLine;
+                              : (shouldDrawButtonAsHighlighted ? Palette::accent.withAlpha(0.6f) : juce::Colour(0xff3f4b5c));
     g.setColour(border);
     g.drawRoundedRectangle(bounds, 4.0f, button.getToggleState() ? 1.5f : 1.0f);
 }
 
 void TramiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
-                                      bool /*shouldDrawButtonAsHighlighted*/, bool /*shouldDrawButtonAsDown*/)
+                                      bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     const int h = button.getHeight();
     const int w = button.getWidth();
-    const float fontSz = (h <= 20 || w <= 26) ? 11.0f : 12.5f;
-    g.setFont(Typography::bold(fontSz));
-    g.setColour(button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
-                                                          : juce::TextButton::textColourOffId)
-                    .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+    float fontSz = (h <= 20 || w <= 26) ? 10.5f : 12.0f;
+    auto font = juce::Font(Typography::bold(fontSz));
 
-    g.drawText(button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
+    const float textW = static_cast<float>(font.getStringWidth(button.getButtonText()));
+    const float maxW = static_cast<float>(w) - 6.0f;
+    if (textW > maxW && maxW > 10.0f)
+    {
+        fontSz = std::max(8.0f, fontSz * (maxW / textW));
+        font = juce::Font(Typography::bold(fontSz));
+    }
+    g.setFont(font);
+
+    auto textCol = button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
+                                                            : juce::TextButton::textColourOffId);
+    if (shouldDrawButtonAsHighlighted)
+        textCol = textCol.brighter(0.2f);
+
+    g.setColour(textCol.withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+    auto r = button.getLocalBounds().toFloat();
+    if (shouldDrawButtonAsDown)
+        r.translate(0.0f, 1.0f);
+    g.drawText(button.getButtonText(), r.toNearestInt(), juce::Justification::centred, false);
 }
 
 void TramiLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar& /*scrollbar*/,

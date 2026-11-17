@@ -32,6 +32,7 @@ public:
     void setSelectedBlock(BlockId blockId);
     BlockId selectedBlock() const noexcept { return selectedBlock_; }
     void setPlayheadBar(double bar);
+    double playheadBar() const noexcept { return playheadBar_; }
     int loopStartBar() const noexcept { return loopStartBar_; }
     int loopEndBar() const noexcept { return loopEndBar_; }
     void setLoopRegion(int startBar, int endBar);
@@ -42,6 +43,7 @@ public:
     int barWidth() const noexcept { return barWidth_; }
     int trackHeight() const noexcept { return trackHeight_; }
 
+    void paintRuler(juce::Graphics& g, int renderWidth);
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -62,7 +64,8 @@ public:
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kRulerHeight = 28;
-    static constexpr int kDefaultTrackHeight = 44;
+    static constexpr int kDefaultTrackHeight = 48;
+    static constexpr int kMinTrackHeight = 48;
     static constexpr int kDefaultBarWidth = 64;
     static constexpr int kTrackHeight = kDefaultTrackHeight;
     static constexpr int kBarWidth = kDefaultBarWidth;

@@ -496,207 +496,6 @@ private:
 };
 
 // ==============================================================================
-// MasterSlider & MasterMeter Implementation
-// ==============================================================================
-class TransportBar::MasterSlider : public juce::Slider
-{
-public:
-    MasterSlider() : juce::Slider(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox)
-    {
-        setDoubleClickReturnValue(true, 1.0);
-        setRange(0.0, 2.0, 0.01);
-        textFromValueFunction = [](double val) {
-            if (val <= 0.001)
-                return juce::String("-inf dB");
-            const double db = juce::Decibels::gainToDecibels(val);
-            return juce::String::formatted("%+.1f dB", db);
-        };
-    }
-
-    void mouseDown(const juce::MouseEvent& e) override
-    {
-        if (e.mods.isPopupMenu())
-        {
-            showPresetMenu(e);
-            return;
-        }
-        juce::Slider::mouseDown(e);
-    }
-
-private:
-    void showPresetMenu(const juce::MouseEvent& e)
-    {
-        juce::PopupMenu m;
-        m.addItem(1, "Unity Gain (0.0 dB / 100%)", true, std::abs(getValue() - 1.0) < 0.01);
-        m.addSeparator();
-        m.addItem(2, "+3.0 dB", true, std::abs(getValue() - juce::Decibels::decibelsToGain(3.0f)) < 0.05);
-        m.addItem(3, "-3.0 dB", true, std::abs(getValue() - juce::Decibels::decibelsToGain(-3.0f)) < 0.05);
-        m.addItem(4, "-6.0 dB", true, std::abs(getValue() - juce::Decibels::decibelsToGain(-6.0f)) < 0.05);
-        m.addItem(5, "-12.0 dB", true, std::abs(getValue() - juce::Decibels::decibelsToGain(-12.0f)) < 0.05);
-        m.addSeparator();
-        m.addItem(6, "Mute (-inf dB)", true, getValue() <= 0.001);
-
-        m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this).withTargetScreenArea(
-                            juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
-                        [this](int res) {
-                            if (res == 1) setValue(1.0);
-                            else if (res == 2) setValue(juce::Decibels::decibelsToGain(3.0f));
-                            else if (res == 3) setValue(juce::Decibels::decibelsToGain(-3.0f));
-                            else if (res == 4) setValue(juce::Decibels::decibelsToGain(-6.0f));
-                            else if (res == 5) setValue(juce::Decibels::decibelsToGain(-12.0f));
-                            else if (res == 6) setValue(0.0);
-                        });
-    }
-};
-
-class TransportBar::MasterMeter : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    explicit MasterMeter(std::function<void()> onResetClip)
-        : onResetClip_(std::move(onResetClip))
-    {
-        setTooltip("Master Loudness Indicator (L/R Peak & Clip). Click to reset clip.");
-    }
-
-    void updateLevels(float peakL, float peakR, float rmsL, float rmsR, bool clipped)
-    {
-        constexpr float decay = 0.82f;
-        displayPeakL_ = std::max(peakL, displayPeakL_ * decay);
-        displayPeakR_ = std::max(peakR, displayPeakR_ * decay);
-        displayRmsL_ = std::max(rmsL, displayRmsL_ * decay);
-        displayRmsR_ = std::max(rmsR, displayRmsR_ * decay);
-
-        if (clipped)
-            isClipped_ = true;
-
-        if (displayPeakL_ > peakHoldL_)
-        {
-            peakHoldL_ = displayPeakL_;
-            peakHoldCounterL_ = 36;
-        }
-        else if (peakHoldCounterL_ > 0)
-        {
-            --peakHoldCounterL_;
-        }
-        else
-        {
-            peakHoldL_ = std::max(displayPeakL_, peakHoldL_ * decay);
-        }
-
-        if (displayPeakR_ > peakHoldR_)
-        {
-            peakHoldR_ = displayPeakR_;
-            peakHoldCounterR_ = 36;
-        }
-        else if (peakHoldCounterR_ > 0)
-        {
-            --peakHoldCounterR_;
-        }
-        else
-        {
-            peakHoldR_ = std::max(displayPeakR_, peakHoldR_ * decay);
-        }
-
-        const float maxP = std::max(displayPeakL_, displayPeakR_);
-        if (maxP <= 0.001f)
-            setTooltip("Master Loudness: -inf dB (Click to reset clip)");
-        else
-        {
-            const float dbL = juce::Decibels::gainToDecibels(displayPeakL_, -60.0f);
-            const float dbR = juce::Decibels::gainToDecibels(displayPeakR_, -60.0f);
-            setTooltip(juce::String::formatted("Master Output: L: %+.1f dB | R: %+.1f dB %s(Click to reset clip)",
-                                               dbL, dbR, isClipped_ ? "[CLIPPED] " : ""));
-        }
-
-        repaint();
-    }
-
-    void resetClipped()
-    {
-        isClipped_ = false;
-        repaint();
-    }
-
-    void mouseDown(const juce::MouseEvent&) override
-    {
-        resetClipped();
-        if (onResetClip_)
-            onResetClip_();
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        constexpr int barW = 8;
-        constexpr int barGap = 2;
-        constexpr int totalW = barW * 2 + barGap;
-        const int startX = (getWidth() - totalW) / 2;
-
-        constexpr int clipH = 3;
-        constexpr int troughY = clipH + 2;
-        const int troughH = getHeight() - troughY - 1;
-
-        // Clip LEDs
-        const auto clipColour = isClipped_ ? juce::Colour(0xffef4444) : juce::Colour(0xff3f1b1b);
-        g.setColour(clipColour);
-        g.fillRect(startX, 0, barW, clipH);
-        g.fillRect(startX + barW + barGap, 0, barW, clipH);
-
-        const auto drawChannel = [&](int x, float peakVal, float peakHoldVal) {
-            // Trough background
-            g.setColour(juce::Colour(0xff16191d));
-            g.fillRect(x, troughY, barW, troughH);
-            g.setColour(juce::Colour(0xff2d323b));
-            g.drawRect(x, troughY, barW, troughH, 1);
-
-            // Compute fill height from dB [-48, 0]
-            if (peakVal > 0.0001f)
-            {
-                const float db = juce::Decibels::gainToDecibels(peakVal, -48.0f);
-                const float norm = std::clamp((db + 48.0f) / 48.0f, 0.0f, 1.0f);
-                const int fillH = static_cast<int>(std::round(norm * static_cast<float>(troughH - 2)));
-                if (fillH > 0)
-                {
-                    const int fillY = troughY + (troughH - 1) - fillH;
-
-                    // Gradient: Green (bottom) -> Yellow (mid) -> Red (top)
-                    juce::ColourGradient grad(juce::Colour(0xffef4444), static_cast<float>(x), static_cast<float>(troughY),
-                                              juce::Colour(0xff22c55e), static_cast<float>(x), static_cast<float>(troughY + troughH),
-                                              false);
-                    grad.addColour(0.35, juce::Colour(0xffeab308));
-                    g.setGradientFill(grad);
-                    g.fillRect(x + 1, fillY, barW - 2, fillH);
-                }
-            }
-
-            // Peak hold line
-            if (peakHoldVal > 0.001f)
-            {
-                const float holdDb = juce::Decibels::gainToDecibels(peakHoldVal, -48.0f);
-                const float holdNorm = std::clamp((holdDb + 48.0f) / 48.0f, 0.0f, 1.0f);
-                const int holdY = troughY + (troughH - 2) - static_cast<int>(std::round(holdNorm * static_cast<float>(troughH - 2)));
-                g.setColour(peakHoldVal >= 1.0f ? juce::Colour(0xffff5555) : juce::Colour(0xffe2e8f0));
-                g.drawHorizontalLine(holdY, static_cast<float>(x + 1), static_cast<float>(x + barW - 1));
-            }
-        };
-
-        drawChannel(startX, displayPeakL_, peakHoldL_);
-        drawChannel(startX + barW + barGap, displayPeakR_, peakHoldR_);
-    }
-
-private:
-    std::function<void()> onResetClip_;
-    float displayPeakL_ = 0.0f;
-    float displayPeakR_ = 0.0f;
-    float displayRmsL_ = 0.0f;
-    float displayRmsR_ = 0.0f;
-    float peakHoldL_ = 0.0f;
-    float peakHoldR_ = 0.0f;
-    int peakHoldCounterL_ = 0;
-    int peakHoldCounterR_ = 0;
-    bool isClipped_ = false;
-};
-
-// ==============================================================================
 // TransportBar Implementation
 // ==============================================================================
 TransportBar::TransportBar(Song& song, AudioEngine& engine,
@@ -728,13 +527,15 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
 
     // Stop
     stopButton_.onClick = [this]() {
+        if (engine_.recorder().state() != RecordState::Idle)
+            engine_.recorder().stop();
         engine_.sequencer().requestPlaying(false);
     };
     addAndMakeVisible(stopButton_);
 
     // Loop
     loopButton_.setClickingTogglesState(true);
-    loopButton_.setToggleState(isLooping_, juce::dontSendNotification);
+    setLooping(isLooping_);
     loopButton_.onClick = [this]() {
         setLooping(loopButton_.getToggleState());
     };
@@ -840,25 +641,6 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
         });
     };
 
-    // Master Volume & Loudness Meter
-    masterSlider_ = std::make_unique<MasterSlider>();
-    masterSlider_->setValue(song_.masterVolume(), juce::dontSendNotification);
-    masterSlider_->setTooltip("Master Volume: " + masterSlider_->getTextFromValue(song_.masterVolume()) + " (Double-click: 0 dB, Right-click: Presets)");
-    masterSlider_->onValueChange = [this]() {
-        const float val = static_cast<float>(masterSlider_->getValue());
-        song_.setMasterVolume(val);
-        engine_.sequencer().setMasterVolume(val);
-        masterSlider_->setTooltip("Master Volume: " + masterSlider_->getTextFromValue(val) + " (Double-click: 0 dB, Right-click: Presets)");
-        if (onModelModified_)
-            onModelModified_();
-    };
-    addAndMakeVisible(masterSlider_.get());
-
-    masterMeter_ = std::make_unique<MasterMeter>([this]() {
-        engine_.sequencer().resetClipped();
-    });
-    addAndMakeVisible(masterMeter_.get());
-
     updateDisplay();
     startTimerHz(30);
 }
@@ -963,11 +745,6 @@ void TransportBar::updateDisplay()
         swingSlider_->setTooltip("Swing Groove: " + pctStr + " (Double-click: 0%, Right-click: Presets)");
     }
     metroButton_.setToggleState(engine_.sequencer().isMetronomeEnabled(), juce::dontSendNotification);
-    if (masterSlider_ != nullptr && !masterSlider_->isMouseButtonDown())
-    {
-        masterSlider_->setValue(song_.masterVolume(), juce::dontSendNotification);
-        masterSlider_->setTooltip("Master Volume: " + masterSlider_->getTextFromValue(song_.masterVolume()) + " (Double-click: 0 dB, Right-click: Presets)");
-    }
     repaint();
 }
 
@@ -981,24 +758,14 @@ void TransportBar::paint(juce::Graphics& g)
     g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
 
     constexpr int totalW = 848;
-    constexpr int masterW = 160;
     constexpr int barY = 6;
     constexpr int barH = 32;
 
     int startX = 6;
-    int masterX = getWidth() - masterW - 12;
-
-    const int avail = getWidth() - masterW - 24;
-    if (avail >= totalW)
-    {
-        startX = std::max(12, (avail - totalW) / 2);
-        masterX = getWidth() - masterW - 12;
-    }
+    if (getWidth() >= totalW + 24)
+        startX = std::max(12, (getWidth() - totalW) / 2);
     else
-    {
         startX = 6;
-        masterX = std::max(startX + totalW + 6, getWidth() - masterW - 6);
-    }
 
     const auto drawBox = [&g](juce::Rectangle<int> box) {
         g.setColour(juce::Colour(0xff24282e));
@@ -1128,57 +895,19 @@ void TransportBar::paint(juce::Graphics& g)
     // Vertical divider between text field and slider
     g.setColour(juce::Colour(0xff393e46));
     g.drawVerticalLine(swingBoxX + 50, static_cast<float>(barY + 1), static_cast<float>(barY + barH - 1));
-
-    // 9. Master Volume & Loudness Meter box
-    const auto masterBox = juce::Rectangle<int>(masterX, barY, masterW, barH);
-    drawBox(masterBox);
-
-    // Mini speaker / "MSTR" label
-    g.setFont(Typography::bold(9.0f));
-    g.setColour(Palette::textDim);
-    g.drawText("MSTR", masterX + 4, barY + 3, 28, 12, juce::Justification::centred);
-
-    {
-        const float spkX = static_cast<float>(masterX + 18);
-        const float spkY = static_cast<float>(barY + 21);
-        juce::Path spk;
-        spk.startNewSubPath(spkX - 4.5f, spkY - 2.0f);
-        spk.lineTo(spkX - 2.0f, spkY - 2.0f);
-        spk.lineTo(spkX + 1.5f, spkY - 4.5f);
-        spk.lineTo(spkX + 1.5f, spkY + 4.5f);
-        spk.lineTo(spkX - 2.0f, spkY + 2.0f);
-        spk.lineTo(spkX - 4.5f, spkY + 2.0f);
-        spk.closeSubPath();
-        g.setColour(Palette::textDim);
-        g.fillPath(spk);
-    }
-
-    // Vertical divider between slider and meter
-    g.setColour(juce::Colour(0xff393e46));
-    g.drawVerticalLine(masterX + masterW - 28, static_cast<float>(barY + 1), static_cast<float>(barY + barH - 1));
 }
 
 void TransportBar::resized()
 {
     constexpr int totalW = 848;
-    constexpr int masterW = 160;
     constexpr int barY = 6;
     constexpr int barH = 32;
 
     int startX = 6;
-    int masterX = getWidth() - masterW - 12;
-
-    const int avail = getWidth() - masterW - 24;
-    if (avail >= totalW)
-    {
-        startX = std::max(12, (avail - totalW) / 2);
-        masterX = getWidth() - masterW - 12;
-    }
+    if (getWidth() >= totalW + 24)
+        startX = std::max(12, (getWidth() - totalW) / 2);
     else
-    {
         startX = 6;
-        masterX = std::max(startX + totalW + 6, getWidth() - masterW - 6);
-    }
 
     // Transport buttons inside 216px container
     int btnX = startX + 1;
@@ -1234,22 +963,10 @@ void TransportBar::resized()
         swingLabel_->setBounds(swingBoxX + 2, barY + 12, 46, barH - 14);
     if (swingSlider_ != nullptr)
         swingSlider_->setBounds(swingBoxX + 53, barY + 6, 62, barH - 12);
-
-    // Master controls
-    if (masterSlider_ != nullptr)
-        masterSlider_->setBounds(masterX + 32, barY + 6, masterW - 32 - 32, barH - 12);
-    if (masterMeter_ != nullptr)
-        masterMeter_->setBounds(masterX + masterW - 26, barY + 3, 24, barH - 6);
 }
 
 void TransportBar::timerCallback()
 {
-    if (masterMeter_ != nullptr)
-    {
-        const auto levels = engine_.sequencer().outputLevels();
-        masterMeter_->updateLevels(levels.peakL, levels.peakR, levels.rmsL, levels.rmsR, levels.clipped);
-    }
-
     const bool isPlaying = engine_.sequencer().isPlaying();
     playButton_.setToggleState(isPlaying, juce::dontSendNotification);
 

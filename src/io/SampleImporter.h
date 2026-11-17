@@ -27,7 +27,8 @@ public:
     /// and optionally copies it into targetFolder/samples/.
     std::optional<ImportResult> importFile(const std::filesystem::path& sourceFile, double targetSampleRate,
                                           SampleKind kind, int loopBars = 1,
-                                          const std::optional<std::filesystem::path>& projectDir = std::nullopt);
+                                          const std::optional<std::filesystem::path>& projectDir = std::nullopt,
+                                          double refBpm = 120.0);
 
     /// Decodes an audio file into an AudioData buffer at targetSampleRate without copying.
     std::optional<AudioData> loadAudioData(const std::filesystem::path& file, double targetSampleRate);
