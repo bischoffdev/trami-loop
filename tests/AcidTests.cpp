@@ -1,6 +1,9 @@
 #include "io/AcidChunkReader.h"
 #include "io/AcidProjectReader.h"
 #include "io/SampleImporter.h"
+#include "engine/SnapshotBuilder.h"
+#include "engine/Sequencer.h"
+#include "model/Timing.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -25,16 +28,16 @@ void createSyntheticAcidWav(const std::filesystem::path& destFile,
                             int meterNumer,
                             int meterDenom,
                             float tempoBpm,
-                            uint16_t rootNote)
+                            uint16_t rootNote,
+                            uint32_t numSamples = 22050)
 {
     std::ofstream out(destFile, std::ios::binary);
 
-    // 16-bit mono PCM, 44100 Hz, 0.5 seconds (22050 samples)
+    // 16-bit mono PCM, 44100 Hz
     constexpr uint32_t sampleRate = 44100;
     constexpr uint16_t numChannels = 1;
     constexpr uint16_t bitsPerSample = 16;
-    constexpr uint32_t numSamples = 22050;
-    constexpr uint32_t dataBytes = numSamples * numChannels * (bitsPerSample / 8);
+    const uint32_t dataBytes = numSamples * numChannels * (bitsPerSample / 8);
 
     // 24 bytes acid chunk payload
     constexpr uint32_t acidPayloadSize = 24;
@@ -104,6 +107,25 @@ void createSyntheticAcidWav(const std::filesystem::path& destFile,
         const int16_t val = static_cast<int16_t>(std::sin(2.0 * 3.1415926535 * 440.0 * t) * 16000.0);
         out.write(reinterpret_cast<const char*>(&val), 2);
     }
+}
+
+void writeChunk(std::vector<uint8_t>& buf, const char* id, const std::vector<uint8_t>& payload)
+{
+    buf.insert(buf.end(), id, id + 4);
+    uint32_t sz = static_cast<uint32_t>(payload.size());
+    const uint8_t* szP = reinterpret_cast<const uint8_t*>(&sz);
+    buf.insert(buf.end(), szP, szP + 4);
+    buf.insert(buf.end(), payload.begin(), payload.end());
+    if (sz % 2 != 0)
+        buf.push_back(0); // pad
+}
+
+void writeList(std::vector<uint8_t>& buf, const char* listType, const std::vector<uint8_t>& payload)
+{
+    std::vector<uint8_t> fullPayload;
+    fullPayload.insert(fullPayload.end(), listType, listType + 4);
+    fullPayload.insert(fullPayload.end(), payload.begin(), payload.end());
+    writeChunk(buf, "LIST", fullPayload);
 }
 
 } // namespace
@@ -329,25 +351,6 @@ TEST_CASE("AcidProjectReader reconstructs authentic ACID arrangements from RIFF 
 
     const auto acdFile = testDir / "song.acd";
 
-    // Helper lambda to write a chunk
-    auto writeChunk = [](std::vector<uint8_t>& buf, const char* id, const std::vector<uint8_t>& payload) {
-        buf.insert(buf.end(), id, id + 4);
-        uint32_t sz = static_cast<uint32_t>(payload.size());
-        const uint8_t* szP = reinterpret_cast<const uint8_t*>(&sz);
-        buf.insert(buf.end(), szP, szP + 4);
-        buf.insert(buf.end(), payload.begin(), payload.end());
-        if (sz % 2 != 0)
-            buf.push_back(0); // pad
-    };
-
-    // Helper lambda to write a LIST chunk
-    auto writeList = [&writeChunk](std::vector<uint8_t>& buf, const char* listType, const std::vector<uint8_t>& payload) {
-        std::vector<uint8_t> fullPayload;
-        fullPayload.insert(fullPayload.end(), listType, listType + 4);
-        fullPayload.insert(fullPayload.end(), payload.begin(), payload.end());
-        writeChunk(buf, "LIST", fullPayload);
-    };
-
     // 1. Build tmap payload (20 bytes, 600,000 us/beat = 100 BPM)
     std::vector<uint8_t> tmapPayload(20, 0);
     uint32_t tmapSize = 20;
@@ -507,50 +510,492 @@ TEST_CASE("AcidProjectReader reconstructs authentic ACID arrangements from RIFF 
     std::filesystem::remove_all(testDir);
 }
 
-TEST_CASE("AcidProjectReader loads real-world aldi.acd if present on disk")
+TEST_CASE("AcidProjectReader resolves Windows backslash paths to local WAV files in the same directory")
 {
-    const std::filesystem::path aldiAcd = "C:/Users/Kessler Heinz/Desktop/aldi/aldi.acd";
-    std::error_code ec;
-    if (!std::filesystem::exists(aldiAcd, ec))
-        return;
+    const auto testDir = std::filesystem::temp_directory_path() / "trami_acid_winpath_test";
+    std::filesystem::create_directories(testDir);
+
+    const auto wavFile = testDir / "loop.wav";
+    createSyntheticAcidWav(wavFile, false, 4, 4, 4, 120.0f, 60);
+
+    const auto acdFile = testDir / "project.acd";
+
+    // Build Track 0 with Windows path: "C:\\SonicFoundry\\Loops\\Rock\\loop.wav"
+    std::vector<uint8_t> trak0Payload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        std::memcpy(trkhPayload.data(), &hdrSz, 4);
+        std::u16string s1 = u"C:\\SonicFoundry\\Loops\\Rock\\loop.wav";
+        std::u16string s2 = u"RockLoop";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trak0Payload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> acidPayload(24, 0);
+        float bpm = 120.0f;
+        uint32_t beats = 4;
+        std::memcpy(acidPayload.data() + 12, &beats, 4);
+        std::memcpy(acidPayload.data() + 20, &bpm, 4);
+        writeChunk(trak0Payload, "acid", acidPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgn0Payload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36;
+        int32_t startTicks = 0;
+        int32_t endTicks = 1536;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgn0Payload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgn0Payload);
+        writeList(trak0Payload, "rlst", rlstPayload);
+    }
+
+    std::vector<uint8_t> tlstPayload;
+    writeList(tlstPayload, "trak", trak0Payload);
+
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    uint32_t usPerBeat = 500000;
+    std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
+    {
+        std::ofstream out(acdFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
+    }
 
     StretchCache cache;
     SampleImporter importer;
-    auto songOpt = AcidProjectReader::loadProject(aldiAcd, cache, importer, 44100.0);
+    auto songOpt = AcidProjectReader::loadProject(acdFile, cache, importer, 44100.0);
     REQUIRE(songOpt.has_value());
 
     const auto& song = *songOpt;
-    REQUIRE(song.bpm() == Catch::Approx(100.0));
-    REQUIRE(song.patterns().size() == 1);
+    REQUIRE(song.samples().size() == 1);
+    REQUIRE(song.samples().front().fileName == "loop.wav");
 
     const auto& pat = song.patterns().front();
-    // 294912 ticks / 1536 = 192 bars
-    REQUIRE(pat.lengthBars == 192);
+    REQUIRE(pat.tracks.size() == 1);
+    REQUIRE(pat.tracks[0].clips.size() == 1);
 
-    // Verify track names and clips exist
-    bool foundGongOneShot = false;
-    bool foundPulseRingerTranspose = false;
+    std::filesystem::remove_all(testDir);
+}
 
-    for (std::size_t t = 0; t < pat.tracks.size(); ++t)
+TEST_CASE("AcidProjectReader accurately calculates loop bars and tempo for loops of varying durations")
+{
+    const auto testDir = std::filesystem::temp_directory_path() / "acid_multibar_tempo_test";
+    std::filesystem::remove_all(testDir);
+    std::filesystem::create_directories(testDir);
+
+    // Create 3 WAV loops:
+    // 1-bar loop at 120 BPM (2.0s = 88200 samples)
+    const auto wav1 = testDir / "loop_1bar.wav";
+    // 2-bar loop at 120 BPM (4.0s = 176400 samples)
+    const auto wav2 = testDir / "loop_2bar.wav";
+    // 4-bar loop at 120 BPM (8.0s = 352800 samples)
+    const auto wav3 = testDir / "fläch.wav";
+
+    createSyntheticAcidWav(wav1, false, 4, 4, 4, 120.0f, 60, 88200);
+    createSyntheticAcidWav(wav2, false, 8, 4, 4, 120.0f, 60, 176400);
+    createSyntheticAcidWav(wav3, false, 16, 4, 4, 120.0f, 60, 352800);
+
+    const auto acdFile = testDir / "project.acd";
+
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    uint32_t usPerBeat = 500000; // 120 BPM
+    std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+    std::vector<uint8_t> tlstPayload;
+
+    auto makeTrak = [&](const std::string& wavName, const std::string& trkName, int endTicks) {
+        std::vector<uint8_t> trakPayload;
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        std::memcpy(trkhPayload.data(), &hdrSz, 4);
+
+        const juce::String jWav = juce::String::fromUTF8(wavName.c_str());
+        const juce::String jTrk = juce::String::fromUTF8(trkName.c_str());
+        auto u16Wav = jWav.toUTF16();
+        auto u16Trk = jTrk.toUTF16();
+        trkhPayload.insert(trkhPayload.end(), reinterpret_cast<const uint8_t*>(u16Wav.getAddress()),
+                           reinterpret_cast<const uint8_t*>(u16Wav.getAddress()) + (jWav.length() + 1) * sizeof(juce::CharPointer_UTF16::CharType));
+        trkhPayload.insert(trkhPayload.end(), reinterpret_cast<const uint8_t*>(u16Trk.getAddress()),
+                           reinterpret_cast<const uint8_t*>(u16Trk.getAddress()) + (jTrk.length() + 1) * sizeof(juce::CharPointer_UTF16::CharType));
+        writeChunk(trakPayload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36;
+        int32_t startTicks = 0;
+        int32_t eTicks = endTicks;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &eTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trakPayload, "rlst", rlstPayload);
+        return trakPayload;
+    };
+
+    writeList(tlstPayload, "trak", makeTrak("loop_1bar.wav", "1BarTrack", 1536));
+    writeList(tlstPayload, "trak", makeTrak("loop_2bar.wav", "2BarTrack", 3072));
+    writeList(tlstPayload, "trak", makeTrak("fläch.wav", "fläch", 6144));
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
     {
-        const auto& trk = pat.tracks[t];
-        if (trk.name == "gong")
-        {
-            REQUIRE(song.patternTrackKind(pat.id, static_cast<int>(t)) == SampleKind::OneShot);
-            REQUIRE(trk.clips.size() == 2);
-            foundGongOneShot = true;
-        }
-        else if (trk.name == "PulseRinger")
-        {
-            REQUIRE(trk.clips.size() == 2);
-            for (const auto& c : trk.clips)
-            {
-                REQUIRE(c.transposeSemitones == -3);
-            }
-            foundPulseRingerTranspose = true;
-        }
+        std::ofstream out(acdFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
     }
 
-    REQUIRE(foundGongOneShot);
-    REQUIRE(foundPulseRingerTranspose);
+    StretchCache cache;
+    SampleImporter importer;
+    auto songOpt = AcidProjectReader::loadProject(acdFile, cache, importer, 44100.0);
+    REQUIRE(songOpt.has_value());
+
+    const auto& song = *songOpt;
+    REQUIRE(song.bpm() == Catch::Approx(120.0));
+    REQUIRE(song.samples().size() == 3);
+
+    // Verify 1-bar loop
+    const auto* s1 = song.findSample(song.samples()[0].id);
+    REQUIRE(s1 != nullptr);
+    REQUIRE(s1->loopBars == 1);
+    REQUIRE(s1->originalBpm() == Catch::Approx(120.0));
+
+    // Verify 2-bar loop
+    const auto* s2 = song.findSample(song.samples()[1].id);
+    REQUIRE(s2 != nullptr);
+    REQUIRE(s2->loopBars == 2);
+    REQUIRE(s2->originalBpm() == Catch::Approx(120.0));
+
+    // Verify 4-bar loop (including umlaut filename)
+    const auto* s3 = song.findSample(song.samples()[2].id);
+    REQUIRE(s3 != nullptr);
+    REQUIRE(s3->loopBars == 4);
+    REQUIRE(s3->originalBpm() == Catch::Approx(120.0));
+
+    // Verify time stretching at song BPM produces correct audio lengths (ratio == 1.0)
+    auto audio1 = cache.getAudio(*s1, 120.0, 44100.0, 0, SampleKind::Loop);
+    auto audio2 = cache.getAudio(*s2, 120.0, 44100.0, 0, SampleKind::Loop);
+    auto audio3 = cache.getAudio(*s3, 120.0, 44100.0, 0, SampleKind::Loop);
+    REQUIRE(audio1 != nullptr);
+    REQUIRE(audio2 != nullptr);
+    REQUIRE(audio3 != nullptr);
+
+    // 1 bar at 120 BPM = 2.0s = 88200 samples
+    // 2 bars at 120 BPM = 4.0s = 176400 samples
+    // 4 bars at 120 BPM = 8.0s = 352800 samples
+    REQUIRE(audio1->numFrames() >= 88000);
+    REQUIRE(audio1->numFrames() <= 88400);
+    REQUIRE(audio2->numFrames() >= 176000);
+    REQUIRE(audio2->numFrames() <= 176800);
+    REQUIRE(audio3->numFrames() >= 352000);
+    REQUIRE(audio3->numFrames() <= 353600);
+
+    std::filesystem::remove_all(testDir);
 }
+
+TEST_CASE("AcidProjectReader does not overwrite loop sample tempo with project tempo when sample has acid chunk")
+{
+    const auto testDir = std::filesystem::temp_directory_path() / "acid_loop_preserve_test";
+    std::filesystem::remove_all(testDir);
+    std::filesystem::create_directories(testDir);
+
+    // Sample recorded at 95 BPM
+    const auto wavFile = testDir / "loop95.wav";
+    createSyntheticAcidWav(wavFile, false, 4, 4, 4, 95.0f, 60);
+
+    const auto acdFile = testDir / "song.acd";
+
+    // Project is at 120 BPM
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    uint32_t usPerBeat = 500000;
+    std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+    std::vector<uint8_t> trakPayload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        std::memcpy(trkhPayload.data(), &hdrSz, 4);
+        std::u16string s1 = u"loop95.wav";
+        std::u16string s2 = u"loop95";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trakPayload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36;
+        int32_t startTicks = 0;
+        int32_t endTicks = 3072; // 2 bars
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trakPayload, "rlst", rlstPayload);
+    }
+
+    std::vector<uint8_t> tlstPayload;
+    writeList(tlstPayload, "trak", trakPayload);
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
+    {
+        std::ofstream out(acdFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
+    }
+
+    StretchCache cache;
+    SampleImporter importer;
+    auto songOpt = AcidProjectReader::loadProject(acdFile, cache, importer, 44100.0);
+    REQUIRE(songOpt.has_value());
+
+    const auto& song = *songOpt;
+    REQUIRE(song.bpm() == Catch::Approx(120.0));
+    REQUIRE(song.samples().size() == 1);
+
+    const auto& sample = song.samples().front();
+    // Sample should have retained the 95 BPM detected from the WAV acid chunk (not forced to 120)
+    REQUIRE(sample.acidBpm == Catch::Approx(95.0f));
+    REQUIRE(sample.kind == SampleKind::Loop);
+    REQUIRE(sample.loopBars == 1);
+
+    const auto& pat = song.patterns().front();
+    REQUIRE(pat.tracks.size() == 1);
+    REQUIRE(song.patternTrackKind(pat.id, 0) == SampleKind::Loop);
+    REQUIRE(pat.tracks[0].clips.size() == 1);
+    REQUIRE(pat.tracks[0].clips[0].lengthSteps == Catch::Approx(64.0)); // 2 bars
+
+    // Building playback snapshot must schedule 2 loop cycles (1 bar each = 32 steps)
+    auto snapshot = SnapshotBuilder::buildPattern(song, pat.id, {}, 44100.0, 0, 0, nullptr, nullptr, &cache);
+    REQUIRE(snapshot != nullptr);
+    REQUIRE(snapshot->events.size() == 2);
+    REQUIRE(snapshot->events[0].startSample == 0);
+    // Cycle 2 starts at step 32 (1 bar)
+    const Timing timing(120.0, 44100.0, 0.0);
+    REQUIRE(snapshot->events[1].startSample == timing.stepToSample(32.0));
+
+    std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("AcidProjectReader preserves OneShot kind from WAV when track has no explicit acid chunk")
+{
+    const auto testDir = std::filesystem::temp_directory_path() / "acid_oneshot_preserve_test";
+    std::filesystem::remove_all(testDir);
+    std::filesystem::create_directories(testDir);
+
+    // One-shot sample
+    const auto wavFile = testDir / "hit.wav";
+    createSyntheticAcidWav(wavFile, true, 4, 4, 4, 120.0f, 60);
+
+    const auto acdFile = testDir / "song.acd";
+
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    uint32_t usPerBeat = 500000;
+    std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+    std::vector<uint8_t> trakPayload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        std::memcpy(trkhPayload.data(), &hdrSz, 4);
+        std::u16string s1 = u"hit.wav";
+        std::u16string s2 = u"hit";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trakPayload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36;
+        int32_t startTicks = 0;
+        int32_t endTicks = 1536;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trakPayload, "rlst", rlstPayload);
+    }
+
+    std::vector<uint8_t> tlstPayload;
+    writeList(tlstPayload, "trak", trakPayload);
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
+    {
+        std::ofstream out(acdFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
+    }
+
+    StretchCache cache;
+    SampleImporter importer;
+    auto songOpt = AcidProjectReader::loadProject(acdFile, cache, importer, 44100.0);
+    REQUIRE(songOpt.has_value());
+
+    const auto& song = *songOpt;
+    REQUIRE(song.samples().size() == 1);
+    REQUIRE(song.samples().front().kind == SampleKind::OneShot);
+
+    const auto& pat = song.patterns().front();
+    REQUIRE(pat.tracks.size() == 1);
+    REQUIRE(song.patternTrackKind(pat.id, 0) == SampleKind::OneShot);
+
+    std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("AcidProjectReader correctly handles sub-bar 2-beat loops like tambu")
+{
+    const auto testDir = std::filesystem::temp_directory_path() / "trami_acid_subbar_test";
+    std::filesystem::create_directories(testDir);
+
+    const auto wavFile = testDir / "tambu.wav";
+    // 44100 Hz, 45899 samples = 1.04079s
+    createSyntheticAcidWav(wavFile, false, 2, 4, 4, 230.59326f, 60, 45899);
+
+    const auto acdFile = testDir / "subbar.acd";
+
+    // Build tmap payload (100 BPM = 600,000 us/beat)
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    std::memcpy(tmapPayload.data(), &tmapSize, 4);
+    uint32_t usPerBeat = 600000;
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+    // Build Track 0 for tambu.wav (2 beats, 230.593 stored tempo in acid chunk)
+    std::vector<uint8_t> trakPayload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        std::memcpy(trkhPayload.data(), &hdrSz, 4);
+        std::u16string s1 = u"C:\\aldi\\tambu.wav";
+        std::u16string s2 = u"tambu";
+        std::memcpy(trkhPayload.data() + 16, s1.c_str(), (s1.size() + 1) * 2);
+        std::memcpy(trkhPayload.data() + 16 + (s1.size() + 1) * 2, s2.c_str(), (s2.size() + 1) * 2);
+        writeChunk(trakPayload, "trkh", trkhPayload);
+
+        // acid chunk: flags=0, root=60, numBeats=2, tempo=230.593f
+        std::vector<uint8_t> acidPayload(24, 0);
+        uint32_t flags = 0;
+        uint16_t root = 60;
+        uint32_t beats = 2;
+        uint16_t mDenom = 4;
+        uint16_t mNumer = 4;
+        float tempo = 230.59326f;
+        std::memcpy(acidPayload.data() + 0, &flags, 4);
+        std::memcpy(acidPayload.data() + 4, &root, 2);
+        std::memcpy(acidPayload.data() + 12, &beats, 4);
+        std::memcpy(acidPayload.data() + 16, &mDenom, 2);
+        std::memcpy(acidPayload.data() + 18, &mNumer, 2);
+        std::memcpy(acidPayload.data() + 20, &tempo, 4);
+        writeChunk(trakPayload, "acid", acidPayload);
+
+        // rlst with a 2-bar clip (start=0, end=3072 ticks = 64 steps)
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36;
+        int32_t startTicks = 0;
+        int32_t endTicks = 3072;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trakPayload, "rlst", rlstPayload);
+    }
+
+    std::vector<uint8_t> tlstPayload;
+    writeList(tlstPayload, "trak", trakPayload);
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
+    {
+        std::ofstream out(acdFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
+    }
+
+    StretchCache cache;
+    SampleImporter importer;
+    auto songOpt = AcidProjectReader::loadProject(acdFile, cache, importer, 44100.0);
+    REQUIRE(songOpt.has_value());
+
+    const auto& song = *songOpt;
+    REQUIRE(song.samples().size() == 1);
+    const auto& s = song.samples().front();
+    CHECK(s.kind == SampleKind::Loop);
+    CHECK(s.loopBeats == Catch::Approx(2.0));
+    CHECK(s.loopCycleBeats() == Catch::Approx(2.0));
+    CHECK(s.loopCycleSteps() == Catch::Approx(16.0));
+    // Authentic tempo of 2 beats in 1.04079s is 115.3 BPM
+    CHECK(s.acidBpm == Catch::Approx(115.3).margin(0.5));
+    CHECK(s.originalBpm() == Catch::Approx(115.3).margin(0.5));
+
+    // Verify snapshot event scheduling for a 64-step (2-bar) clip:
+    // It should schedule 4 repetitions at steps 0, 16, 32, 48!
+    const auto rawBank = cache.getRawBank();
+    auto snapshot = SnapshotBuilder::buildPattern(song, song.patterns().front().id, rawBank, 44100.0,
+                                                 0, 64, &rawBank, nullptr, &cache);
+    REQUIRE(snapshot != nullptr);
+    REQUIRE(snapshot->events.size() == 4);
+
+    const Timing timing(song.bpm(), 44100.0);
+    CHECK(snapshot->events[0].startSample == timing.stepToSample(0.0));
+    CHECK(snapshot->events[1].startSample == timing.stepToSample(16.0));
+    CHECK(snapshot->events[2].startSample == timing.stepToSample(32.0));
+    CHECK(snapshot->events[3].startSample == timing.stepToSample(48.0));
+
+    std::filesystem::remove_all(testDir);
+}
+

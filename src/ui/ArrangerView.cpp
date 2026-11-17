@@ -41,7 +41,7 @@ public:
         auto& hBar = getHorizontalScrollBar();
 
         if (vBar.isVisible())
-            vBar.setBounds(vBar.getX(), vBar.getY(), vBar.getWidth(), std::max(0, h - totalSize));
+            vBar.setBounds(vBar.getX(), ArrangerGrid::kRulerHeight, vBar.getWidth(), std::max(0, h - ArrangerGrid::kRulerHeight - totalSize));
 
         if (hBar.isVisible())
             hBar.setBounds(hBar.getX(), hBar.getY(), std::max(0, w - totalSize), hBar.getHeight());
@@ -51,6 +51,130 @@ public:
 
 private:
     StudioOneZoomCorner zoomCorner_;
+};
+
+class ArrangerView::ArrangerHeaderCorner : public juce::Component
+{
+public:
+    ArrangerHeaderCorner()
+    {
+        setOpaque(true);
+    }
+
+    std::function<void(float deltaY)> onScrollY;
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(juce::Colour(0xff23272d));
+        g.fillRect(getLocalBounds());
+        g.setColour(juce::Colour(0xff181a1f));
+        g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
+        g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
+        g.setColour(Palette::textDim);
+        g.setFont(Typography::bold(10.0f));
+        g.drawText("ARRANGER TRACKS", 12, 0, getWidth() - 24, getHeight(), juce::Justification::centredLeft);
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        if (onScrollY && wheel.deltaY != 0.0f)
+            onScrollY(wheel.deltaY);
+    }
+};
+
+class ArrangerView::ArrangerRuler : public juce::Component
+{
+public:
+    ArrangerRuler(ArrangerGrid& grid, juce::Viewport& gridViewport)
+        : grid_(grid), gridViewport_(gridViewport)
+    {
+        setOpaque(true);
+    }
+
+    void setScrollX(int scrollX)
+    {
+        if (scrollX_ != scrollX)
+        {
+            scrollX_ = scrollX;
+            repaint();
+        }
+    }
+
+    int scrollX() const noexcept { return scrollX_; }
+
+    void paint(juce::Graphics& g) override
+    {
+        juce::Graphics::ScopedSaveState save(g);
+        g.addTransform(juce::AffineTransform::translation(static_cast<float>(-scrollX_), 0.0f));
+        const int renderWidth = std::max(grid_.getWidth(), scrollX_ + getWidth());
+        grid_.paintRuler(g, renderWidth);
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        grid_.mouseMove(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+    }
+
+    void mouseExit(const juce::MouseEvent& e) override
+    {
+        grid_.mouseExit(toGridEvent(e));
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDown(toGridEvent(e));
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDrag(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        grid_.mouseUp(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+        repaint();
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDoubleClick(toGridEvent(e));
+        repaint();
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+    {
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        {
+            grid_.mouseWheelMove(toGridEvent(e), wheel);
+            return;
+        }
+        const float delta = (wheel.deltaX != 0.0f) ? wheel.deltaX : wheel.deltaY;
+        if (delta != 0.0f)
+        {
+            const int currentX = gridViewport_.getViewPositionX();
+            int deltaX = juce::roundToInt(-delta * 60.0f);
+            if (deltaX == 0 && delta != 0.0f)
+                deltaX = (delta > 0.0f ? -1 : 1);
+            gridViewport_.setViewPosition(currentX + deltaX, gridViewport_.getViewPositionY());
+        }
+    }
+
+private:
+    juce::MouseEvent toGridEvent(const juce::MouseEvent& e) const
+    {
+        return e.getEventRelativeTo(&grid_).withNewPosition(juce::Point<int>(e.x + scrollX_, e.y));
+    }
+
+    ArrangerGrid& grid_;
+    juce::Viewport& gridViewport_;
+    int scrollX_ = 0;
 };
 
 ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretchCache,
@@ -92,6 +216,12 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     addTrackButton_.onClick = [this]() { addTrack(); };
     addAndMakeVisible(addTrackButton_);
 
+    followToggle_.setClickingTogglesState(true);
+    followToggle_.setToggleState(followPlayhead_, juce::dontSendNotification);
+    followToggle_.setTooltip("Toggle Playhead Follow (Auto-Scroll) (F)");
+    followToggle_.onClick = [this]() { setFollowPlayhead(followToggle_.getToggleState()); };
+    addAndMakeVisible(followToggle_);
+
     zoomX_ = song_.arrangerZoomX();
     zoomY_ = song_.arrangerZoomY();
 
@@ -122,6 +252,7 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     trackHeadersViewport_ = std::make_unique<juce::Viewport>();
     trackHeadersViewport_->setViewedComponent(trackHeaders_.get(), false);
     trackHeadersViewport_->setScrollBarsShown(false, false);
+    trackHeadersViewport_->addMouseListener(this, true);
     addAndMakeVisible(trackHeadersViewport_.get());
 
     grid_ = std::make_unique<ArrangerGrid>(song_, *this);
@@ -135,6 +266,8 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     gridViewport_->onAreaChanged = [this](const juce::Rectangle<int>& area) {
         if (trackHeadersViewport_ != nullptr)
             trackHeadersViewport_->setViewPosition(0, area.getY());
+        if (ruler_ != nullptr)
+            ruler_->setScrollX(area.getX());
     };
     gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
     gridViewport_->zoomCorner().onZoomXChanged = [this](float newZoomX) {
@@ -154,6 +287,22 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
         applyZoom(zoomX_ * dx, zoomY_ * dy, {getWidth() / 2, 0});
     };
     addAndMakeVisible(gridViewport_.get());
+
+    headerCorner_ = std::make_unique<ArrangerHeaderCorner>();
+    headerCorner_->onScrollY = [this](float deltaY) {
+        if (gridViewport_ != nullptr && deltaY != 0.0f)
+        {
+            const int currentY = gridViewport_->getViewPositionY();
+            int dy = juce::roundToInt(-deltaY * 60.0f);
+            if (dy == 0 && deltaY != 0.0f)
+                dy = (deltaY > 0.0f ? -1 : 1);
+            gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), currentY + dy);
+        }
+    };
+    addAndMakeVisible(headerCorner_.get());
+
+    ruler_ = std::make_unique<ArrangerRuler>(*grid_, *gridViewport_);
+    addAndMakeVisible(ruler_.get());
 
     updatePatternList();
     republish();
@@ -255,6 +404,43 @@ void ArrangerView::playheadSeekRequested(double bar)
     engine_.sequencer().requestSeek(targetSample);
     if (grid_ != nullptr)
         grid_->setPlayheadBar(bar);
+    if (followPlayhead_)
+        scrollToPlayheadIfNeeded(bar);
+}
+
+void ArrangerView::setFollowPlayhead(bool enabled)
+{
+    followPlayhead_ = enabled;
+    followToggle_.setToggleState(followPlayhead_, juce::dontSendNotification);
+    if (followPlayhead_ && grid_ != nullptr)
+        scrollToPlayheadIfNeeded(grid_->playheadBar());
+}
+
+void ArrangerView::scrollToPlayheadIfNeeded(double bar)
+{
+    if (gridViewport_ == nullptr || grid_ == nullptr || bar < 0.0)
+        return;
+
+    const int phX = juce::roundToInt(bar * static_cast<double>(grid_->barWidth()));
+    const int viewX = gridViewport_->getViewPositionX();
+    const int viewW = gridViewport_->getViewWidth();
+
+    if (viewW <= 0)
+        return;
+
+    if (grid_->isMouseButtonDown()
+        || (ruler_ != nullptr && ruler_->isMouseButtonDown())
+        || gridViewport_->getHorizontalScrollBar().isMouseButtonDown()
+        || gridViewport_->getVerticalScrollBar().isMouseButtonDown())
+    {
+        return;
+    }
+
+    if (phX >= viewX + viewW - 10 || phX < viewX)
+    {
+        const int targetX = std::max(0, phX - 40);
+        gridViewport_->setViewPosition(targetX, gridViewport_->getViewPositionY());
+    }
 }
 
 void ArrangerView::addTrack()
@@ -589,7 +775,7 @@ void ArrangerView::applyZoomAtBar(float targetZoomX, double anchorBar, int ancho
 void ArrangerView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
 {
     const float newZoomX = std::clamp(targetZoomX, 0.2f, 4.0f);
-    const float newZoomY = std::clamp(targetZoomY, 0.5f, 2.5f);
+    const float newZoomY = std::clamp(targetZoomY, 1.0f, 2.5f);
 
     song_.setArrangerZoom(newZoomX, newZoomY);
 
@@ -646,7 +832,7 @@ void ArrangerView::resetZoom()
     const float fitX = static_cast<float>(viewW) / static_cast<float>(totalBars * ArrangerGrid::kDefaultBarWidth);
     const float fitY = static_cast<float>(viewH) / static_cast<float>(numTracks * ArrangerGrid::kDefaultTrackHeight);
 
-    applyZoom(fitX, std::clamp(fitY, 0.6f, 2.0f), {0, 0});
+    applyZoom(fitX, std::clamp(fitY, 1.0f, 2.0f), {0, 0});
     if (gridViewport_ != nullptr)
         gridViewport_->setViewPosition(0, 0);
 }
@@ -665,10 +851,21 @@ void ArrangerView::trackHeightOut()
 
 bool ArrangerView::keyPressed(const juce::KeyPress& key)
 {
+    const auto mods = key.getModifiers();
+    const bool isCmdOrCtrl = mods.isCommandDown() || mods.isCtrlDown();
+
     if (key.getKeyCode() == juce::KeyPress::spaceKey)
     {
         auto& seq = engine_.sequencer();
         seq.requestPlaying(!seq.isPlaying());
+        return true;
+    }
+
+    if (key.getKeyCode() == '0' || key.getKeyCode() == juce::KeyPress::numberPad0)
+    {
+        if (engine_.recorder().state() != RecordState::Idle)
+            engine_.recorder().stop();
+        engine_.sequencer().requestPlaying(false);
         return true;
     }
 
@@ -712,6 +909,12 @@ bool ArrangerView::keyPressed(const juce::KeyPress& key)
         }
     }
 
+    if (!isCmdOrCtrl && (key.getKeyCode() == 'F' || key.getKeyCode() == 'f'))
+    {
+        setFollowPlayhead(!followPlayhead_);
+        return true;
+    }
+
     return false;
 }
 
@@ -725,6 +928,10 @@ void ArrangerView::timerCallback()
     {
         const double currentBar = static_cast<double>(seq.position()) / samplesPerBar;
         grid_->setPlayheadBar(currentBar);
+        if (ruler_ != nullptr)
+            ruler_->repaint();
+        if (followPlayhead_ && seq.isPlaying())
+            scrollToPlayheadIfNeeded(currentBar);
     }
 }
 
@@ -747,11 +954,13 @@ void ArrangerView::resized()
 
     patternCombo_.setBounds(toolbar.removeFromLeft(150));
     toolbar.removeFromLeft(8);
-    addPatternButton_.setBounds(toolbar.removeFromLeft(68));
+    addPatternButton_.setBounds(toolbar.removeFromLeft(74));
     toolbar.removeFromLeft(8);
     editPatternButton_.setBounds(toolbar.removeFromLeft(88));
     toolbar.removeFromLeft(8);
-    addTrackButton_.setBounds(toolbar.removeFromLeft(70));
+    addTrackButton_.setBounds(toolbar.removeFromLeft(72));
+    toolbar.removeFromLeft(8);
+    followToggle_.setBounds(toolbar.removeFromLeft(64));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
@@ -764,6 +973,12 @@ void ArrangerView::resized()
     const int gridW = getWidth() - gridX;
     gridViewport_->setBounds(gridX, contentY, gridW, contentH);
 
+    if (headerCorner_ != nullptr)
+        headerCorner_->setBounds(0, contentY, headerW, ArrangerGrid::kRulerHeight);
+
+    if (ruler_ != nullptr)
+        ruler_->setBounds(gridX, contentY, gridW, ArrangerGrid::kRulerHeight);
+
     const int numTracks = song_.numArrangerTracks();
     const int totalBars = std::max(16, song_.lengthBars() + 6);
     const int neededGridWidth = totalBars * grid_->barWidth();
@@ -771,6 +986,23 @@ void ArrangerView::resized()
 
     grid_->setSize(std::max(gridW, neededGridWidth), std::max(contentH, neededGridHeight));
     trackHeaders_->setSize(headerW, std::max(contentH, neededGridHeight));
+}
+
+void ArrangerView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (trackHeadersViewport_ != nullptr && (e.eventComponent == trackHeadersViewport_.get() || trackHeadersViewport_->isParentOf(e.eventComponent)))
+    {
+        if (gridViewport_ != nullptr && wheel.deltaY != 0.0f)
+        {
+            const int currentY = gridViewport_->getViewPositionY();
+            int deltaY = juce::roundToInt(-wheel.deltaY * 60.0f);
+            if (deltaY == 0 && wheel.deltaY != 0.0f)
+                deltaY = (wheel.deltaY > 0.0f ? -1 : 1);
+            gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), currentY + deltaY);
+            return;
+        }
+    }
+    juce::Component::mouseWheelMove(e, wheel);
 }
 
 } // namespace trami

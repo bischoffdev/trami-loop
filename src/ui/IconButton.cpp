@@ -50,30 +50,30 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
 
     if (isOn)
     {
-        bg = activeColour_.withAlpha(0.22f);
-        border = activeColour_.withAlpha(0.85f);
+        bg = activeColour_.withAlpha(0.26f);
+        border = activeColour_.withAlpha(0.95f);
         iconCol = activeColour_;
         textCol = juce::Colours::white;
     }
     else if (shouldDrawButtonAsDown)
     {
-        bg = Palette::surface.darker(0.2f);
-        border = Palette::gridLine.brighter(0.4f);
+        bg = juce::Colour(0xff181c22);
+        border = Palette::accent.withAlpha(0.7f);
         iconCol = Palette::text;
         textCol = Palette::text;
     }
     else if (shouldDrawButtonAsHighlighted)
     {
-        bg = Palette::surface.brighter(0.12f);
-        border = Palette::gridLine.brighter(0.35f);
-        iconCol = Palette::text.brighter(0.2f);
-        textCol = Palette::text;
+        bg = juce::Colour(0xff2d3644);
+        border = Palette::accent.withAlpha(0.6f);
+        iconCol = juce::Colours::white;
+        textCol = juce::Colours::white;
     }
     else
     {
-        bg = Palette::surface.brighter(0.04f);
-        border = Palette::gridLine.brighter(0.18f);
-        iconCol = Palette::text.withAlpha(0.85f);
+        bg = juce::Colour(0xff222832);
+        border = juce::Colour(0xff3f4b5c);
+        iconCol = Palette::text;
         textCol = Palette::text;
     }
 
@@ -82,8 +82,8 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     {
         if (isOn)
         {
-            bg = juce::Colour(0xffe53935).withAlpha(0.30f);
-            border = juce::Colour(0xffe53935);
+            bg = juce::Colour(0xffe53935).withAlpha(0.35f);
+            border = juce::Colour(0xffef5350);
             iconCol = juce::Colour(0xffff5252);
             textCol = juce::Colours::white;
         }
@@ -94,40 +94,53 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     }
     else if (icon_ == Icon::Play && isOn)
     {
-        bg = juce::Colour(0xff43a047).withAlpha(0.30f);
-        border = juce::Colour(0xff43a047);
+        bg = juce::Colour(0xff43a047).withAlpha(0.35f);
+        border = juce::Colour(0xff66bb6a);
         iconCol = juce::Colour(0xff66bb6a);
         textCol = juce::Colours::white;
     }
     else if (icon_ == Icon::Loop && isOn)
     {
-        bg = juce::Colour(0xffffb300).withAlpha(0.25f);
-        border = juce::Colour(0xffffb300);
+        bg = juce::Colour(0xffffb300).withAlpha(0.28f);
+        border = juce::Colour(0xffffca28);
         iconCol = juce::Colour(0xffffca28);
+        textCol = juce::Colours::white;
+    }
+    else if (icon_ == Icon::Follow && isOn)
+    {
+        bg = Palette::accent.withAlpha(0.28f);
+        border = Palette::accent;
+        iconCol = Palette::accent;
         textCol = juce::Colours::white;
     }
 
     g.setColour(bg);
-    g.fillRoundedRectangle(bounds, 5.0f);
+    g.fillRoundedRectangle(bounds, 4.5f);
 
     g.setColour(border);
-    g.drawRoundedRectangle(bounds, 5.0f, isOn ? 1.5f : 1.0f);
+    g.drawRoundedRectangle(bounds, 4.5f, isOn ? 1.5f : 1.0f);
 
     const float totalW = bounds.getWidth();
     const float totalH = bounds.getHeight();
     juce::Rectangle<float> iconArea;
     juce::Rectangle<float> labelArea;
 
-    if (totalW >= 85.0f && totalW > totalH * 1.7f)
+    if (label_.isEmpty())
+    {
+        // Icon-only button: icon is nicely centered in the whole button area
+        iconArea = bounds.reduced(2.0f);
+    }
+    else if (totalW >= 80.0f && totalW > totalH * 1.5f)
     {
         // Wide button: horizontal layout (icon on left, label on right)
-        iconArea = bounds.removeFromLeft(24.0f).reduced(2.0f, 0.0f);
+        const float iconW = std::min(24.0f, totalH - 4.0f);
+        iconArea = bounds.removeFromLeft(iconW + 4.0f).reduced(2.0f, 0.0f);
         labelArea = bounds.withTrimmedLeft(2.0f);
     }
     else
     {
         // Standard button: vertical layout (icon on top, label underneath)
-        const float iconH = std::round(totalH * 0.58f);
+        const float iconH = std::round(totalH * 0.52f);
         iconArea = bounds.removeFromTop(iconH);
         labelArea = bounds;
     }
@@ -140,13 +153,27 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
 
     drawIcon(g, iconArea, iconCol);
 
-    g.setColour(textCol);
-    const float fontSz = (totalW >= 85.0f && totalW > totalH * 1.7f) ? 12.5f : (totalH >= 38.0f ? 11.5f : 10.5f);
-    g.setFont(Typography::bold(fontSz));
-    g.drawText(label_, labelArea.reduced(2.0f, 0.0f),
-               (totalW >= 85.0f && totalW > totalH * 1.7f) ? juce::Justification::centredLeft
-                                                           : juce::Justification::centred,
-               true);
+    if (!label_.isEmpty())
+    {
+        g.setColour(textCol);
+        const bool isHorizontal = (totalW >= 80.0f && totalW > totalH * 1.5f);
+        float fontSz = isHorizontal ? 12.0f : (totalH >= 38.0f ? 11.0f : 10.0f);
+        auto font = juce::Font(Typography::bold(fontSz));
+
+        // Auto-scale font size if needed so text fits neatly without clipping
+        const float textW = static_cast<float>(font.getStringWidth(label_));
+        const float maxTextW = labelArea.getWidth() - 4.0f;
+        if (textW > maxTextW && maxTextW > 10.0f)
+        {
+            fontSz = std::max(8.0f, fontSz * (maxTextW / textW));
+            font = juce::Font(Typography::bold(fontSz));
+        }
+        g.setFont(font);
+
+        g.drawText(label_, labelArea.reduced(2.0f, 0.0f),
+                   isHorizontal ? juce::Justification::centredLeft : juce::Justification::centred,
+                   false);
+    }
 }
 
 void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
@@ -387,6 +414,27 @@ void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::
     {
         g.drawEllipse(cx - 5.0f, cy - 6.0f, 9.0f, 9.0f, 1.4f);
         g.drawLine(cx + 2.0f, cy + 1.0f, cx + 5.5f, cy + 4.5f, 2.0f);
+        break;
+    }
+    case Icon::Follow:
+    {
+        // Vertical playhead line
+        g.setColour(colour);
+        g.drawVerticalLine(juce::roundToInt(cx + 3.0f), cy - 6.0f, cy + 6.0f);
+
+        // Playhead top triangle marker
+        juce::Path phMarker;
+        phMarker.addTriangle(cx + 0.5f, cy - 6.0f, cx + 5.5f, cy - 6.0f, cx + 3.0f, cy - 2.5f);
+        g.fillPath(phMarker);
+
+        // Right-pointing tracking arrow
+        juce::Path arrow;
+        arrow.startNewSubPath(cx - 7.0f, cy + 0.5f);
+        arrow.lineTo(cx - 0.5f, cy + 0.5f);
+        arrow.lineTo(cx - 3.5f, cy - 2.5f);
+        arrow.startNewSubPath(cx - 0.5f, cy + 0.5f);
+        arrow.lineTo(cx - 3.5f, cy + 3.5f);
+        g.strokePath(arrow, juce::PathStrokeType(1.6f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
         break;
     }
     }

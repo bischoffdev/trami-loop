@@ -13,6 +13,12 @@ double Sample::originalBpm() const noexcept
         return 0.0;
     if (acidBpm > 0.0)
         return acidBpm;
+    if (durationSeconds > 0.0)
+    {
+        const double beats = loopCycleBeats();
+        if (beats > 0.0)
+            return (beats * 60.0) / durationSeconds;
+    }
     return Timing::loopBpm(durationSeconds, loopBars);
 }
 

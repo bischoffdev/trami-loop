@@ -73,6 +73,7 @@ public:
         virtual void zoomToLevelRequested(float /*targetZoomX*/, double /*anchorStep*/, int /*anchorViewportX*/) {}
         virtual void clipsDragging(const std::vector<DragClipOverride>& /*items*/) {}
         virtual void clipsDragEnded() {}
+        virtual void patternLengthExtensionRequested(int /*minBars*/) {}
     };
 
     PatternGrid(const Song& song, StretchCache& stretchCache, PatternId patternId, Listener& listener);
@@ -98,11 +99,13 @@ public:
     int loopStartStep() const noexcept { return loopStartStep_; }
     int loopEndStep() const noexcept { return loopEndStep_; }
     void setLoopRegion(int startStep, int endStep);
+    void paintRuler(juce::Graphics& g, int renderWidth);
 
     void setZoom(float zoomX, float zoomY);
     float zoomX() const noexcept { return zoomX_; }
     float zoomY() const noexcept { return zoomY_; }
-    int stepWidth() const noexcept { return stepWidth_; }
+    int stepWidth() const noexcept { return std::max(1, juce::roundToInt(stepWidth_)); }
+    double stepWidthDouble() const noexcept { return stepWidth_; }
     int trackHeight() const noexcept { return trackHeight_; }
 
     int stepToX(double step) const;
@@ -139,7 +142,8 @@ public:
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kRulerHeight = 28;
-    static constexpr int kDefaultTrackHeight = 40;
+    static constexpr int kDefaultTrackHeight = 48;
+    static constexpr int kMinTrackHeight = 48;
     static constexpr int kDefaultStepWidth = 16;
     static constexpr int kTrackHeight = kDefaultTrackHeight;
     static constexpr int kStepWidth = kDefaultStepWidth;
@@ -209,7 +213,7 @@ private:
 
     float zoomX_ = 1.0f;
     float zoomY_ = 1.0f;
-    int stepWidth_ = kDefaultStepWidth;
+    double stepWidth_ = static_cast<double>(kDefaultStepWidth);
     int trackHeight_ = kDefaultTrackHeight;
     int rasterSteps_ = 2; // Default 1/16 (2 steps in 1/32 grid)
 

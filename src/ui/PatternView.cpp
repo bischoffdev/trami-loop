@@ -41,7 +41,7 @@ public:
         auto& hBar = getHorizontalScrollBar();
 
         if (vBar.isVisible())
-            vBar.setBounds(vBar.getX(), vBar.getY(), vBar.getWidth(), std::max(0, h - totalSize));
+            vBar.setBounds(vBar.getX(), PatternGrid::kRulerHeight, vBar.getWidth(), std::max(0, h - PatternGrid::kRulerHeight - totalSize));
 
         if (hBar.isVisible())
             hBar.setBounds(hBar.getX(), hBar.getY(), std::max(0, w - totalSize), hBar.getHeight());
@@ -51,6 +51,129 @@ public:
 
 private:
     StudioOneZoomCorner zoomCorner_;
+};
+
+class PatternView::HeaderCorner : public juce::Component
+{
+public:
+    HeaderCorner()
+    {
+        setOpaque(true);
+    }
+
+    std::function<void(float deltaY)> onScrollY;
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(juce::Colour(0xff23272d));
+        g.fillRect(getLocalBounds());
+        g.setColour(juce::Colour(0xff181a1f));
+        g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
+        g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        if (onScrollY && wheel.deltaY != 0.0f)
+            onScrollY(wheel.deltaY);
+    }
+};
+
+class PatternView::PatternRuler : public juce::Component, public juce::TooltipClient
+{
+public:
+    PatternRuler(PatternGrid& grid, juce::Viewport& gridViewport)
+        : grid_(grid), gridViewport_(gridViewport)
+    {
+        setOpaque(true);
+    }
+
+    void setScrollX(int scrollX)
+    {
+        if (scrollX_ != scrollX)
+        {
+            scrollX_ = scrollX;
+            repaint();
+        }
+    }
+
+    int scrollX() const noexcept { return scrollX_; }
+
+    juce::String getTooltip() override { return grid_.getTooltip(); }
+
+    void paint(juce::Graphics& g) override
+    {
+        juce::Graphics::ScopedSaveState save(g);
+        g.addTransform(juce::AffineTransform::translation(static_cast<float>(-scrollX_), 0.0f));
+        const int renderWidth = std::max(grid_.getWidth(), scrollX_ + getWidth());
+        grid_.paintRuler(g, renderWidth);
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        grid_.mouseMove(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+    }
+
+    void mouseExit(const juce::MouseEvent& e) override
+    {
+        grid_.mouseExit(toGridEvent(e));
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDown(toGridEvent(e));
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDrag(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        grid_.mouseUp(toGridEvent(e));
+        setMouseCursor(grid_.getMouseCursor());
+        repaint();
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        grid_.mouseDoubleClick(toGridEvent(e));
+        repaint();
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+    {
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        {
+            grid_.mouseWheelMove(toGridEvent(e), wheel);
+            return;
+        }
+        const float delta = (wheel.deltaX != 0.0f) ? wheel.deltaX : wheel.deltaY;
+        if (delta != 0.0f)
+        {
+            const int currentX = gridViewport_.getViewPositionX();
+            int deltaX = juce::roundToInt(-delta * 60.0f);
+            if (deltaX == 0 && delta != 0.0f)
+                deltaX = (delta > 0.0f ? -1 : 1);
+            gridViewport_.setViewPosition(currentX + deltaX, gridViewport_.getViewPositionY());
+        }
+    }
+
+private:
+    juce::MouseEvent toGridEvent(const juce::MouseEvent& e) const
+    {
+        return e.getEventRelativeTo(&grid_).withNewPosition(juce::Point<int>(e.x + scrollX_, e.y));
+    }
+
+    PatternGrid& grid_;
+    juce::Viewport& gridViewport_;
+    int scrollX_ = 0;
 };
 
 PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchCache)
@@ -93,66 +216,6 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     };
     addAndMakeVisible(patternTitle_);
 
-    lengthCombo_.addItem("1 Bar", 1);
-    lengthCombo_.addItem("2 Bars", 2);
-    lengthCombo_.addItem("4 Bars", 4);
-    lengthCombo_.addItem("8 Bars", 8);
-    lengthCombo_.addItem("16 Bars", 16);
-    lengthCombo_.addItem("32 Bars", 32);
-    lengthCombo_.addItem("64 Bars", 64);
-    lengthCombo_.addItem("128 Bars", 128);
-    lengthCombo_.addItem("256 Bars", 256);
-    lengthCombo_.addSeparator();
-    lengthCombo_.addItem("Custom...", -1);
-    lengthCombo_.onChange = [this]() {
-        const int bars = lengthCombo_.getSelectedId();
-        if (bars == -1)
-        {
-            const auto* p = song_.findPattern(currentPattern_);
-            const int currentBars = p != nullptr ? p->lengthBars : 4;
-            auto* w = new juce::AlertWindow("Set Pattern Length", "Enter pattern length in bars (1 - 9999):",
-                                           juce::AlertWindow::QuestionIcon);
-            w->addTextEditor("bars", juce::String(currentBars));
-            w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
-            w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-            w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result) {
-                if (result == 1)
-                {
-                    const int customBars = w->getTextEditorContents("bars").getIntValue();
-                    if (customBars >= 1 && customBars <= 9999)
-                    {
-                        if (onPushUndo_)
-                            onPushUndo_();
-                        if (song_.setPatternLength(currentPattern_, customBars))
-                        {
-                            updateLengthSelector();
-                            republish();
-                            resized();
-                        }
-                    }
-                }
-                else
-                {
-                    updateLengthSelector();
-                }
-            }), true);
-            return;
-        }
-
-        if (bars > 0)
-        {
-            if (onPushUndo_)
-                onPushUndo_();
-            if (song_.setPatternLength(currentPattern_, bars))
-            {
-                updateLengthSelector();
-                republish();
-                resized();
-            }
-        }
-    };
-    addAndMakeVisible(lengthCombo_);
-
     // Raster Size Selector
     rasterLabel_.setFont(Typography::bold(12.0f));
     rasterLabel_.setColour(juce::Label::textColourId, Palette::textDim);
@@ -178,6 +241,17 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     addTrackButton_.setTooltip("Add a new sample track to this pattern");
     addTrackButton_.onClick = [this]() { addTrack(); };
     addAndMakeVisible(addTrackButton_);
+
+    // Follow Playhead Toggle
+    followToggle_.setClickingTogglesState(true);
+    followToggle_.setToggleState(followPlayhead_, juce::dontSendNotification);
+    followToggle_.setTooltip("Toggle Playhead Follow (Auto-Scroll) (F)");
+    followToggle_.onClick = [this]() {
+        setFollowPlayhead(followToggle_.getToggleState());
+        if (onShowToast_)
+            onShowToast_(followPlayhead_ ? "Playhead Follow: ON" : "Playhead Follow: OFF");
+    };
+    addAndMakeVisible(followToggle_);
 
     // Browser Panel
     browserPanel_ = std::make_unique<SampleBrowserPanel>(song_, engine_, stretchCache_, [this](SampleId id) {
@@ -267,6 +341,7 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     trackHeadersViewport_ = std::make_unique<juce::Viewport>();
     trackHeadersViewport_->setViewedComponent(trackHeaders_.get(), false);
     trackHeadersViewport_->setScrollBarsShown(false, false);
+    trackHeadersViewport_->addMouseListener(this, true);
     addAndMakeVisible(trackHeadersViewport_.get());
 
     grid_ = std::make_unique<PatternGrid>(song_, stretchCache_, currentPattern_, *this);
@@ -277,6 +352,8 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     gridViewport_->onAreaChanged = [this](const juce::Rectangle<int>& area) {
         if (trackHeadersViewport_ != nullptr)
             trackHeadersViewport_->setViewPosition(0, area.getY());
+        if (ruler_ != nullptr)
+            ruler_->setScrollX(area.getX());
     };
     gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
     gridViewport_->zoomCorner().onZoomXChanged = [this](float newZoomX) {
@@ -296,6 +373,22 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         applyZoom(zoomX_ * dx, zoomY_ * dy, {getWidth() / 2, 0});
     };
     addAndMakeVisible(gridViewport_.get());
+
+    headerCorner_ = std::make_unique<HeaderCorner>();
+    headerCorner_->onScrollY = [this](float deltaY) {
+        if (gridViewport_ != nullptr && deltaY != 0.0f)
+        {
+            const int currentY = gridViewport_->getViewPositionY();
+            int dy = juce::roundToInt(-deltaY * 60.0f);
+            if (dy == 0 && deltaY != 0.0f)
+                dy = (deltaY > 0.0f ? -1 : 1);
+            gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), currentY + dy);
+        }
+    };
+    addAndMakeVisible(headerCorner_.get());
+
+    ruler_ = std::make_unique<PatternRuler>(*grid_, *gridViewport_);
+    addAndMakeVisible(ruler_.get());
 
     const auto* initialPat = song_.findPattern(currentPattern_);
     const int initialTotalSteps = initialPat != nullptr ? initialPat->lengthSteps() : 32;
@@ -330,6 +423,9 @@ void PatternView::setPattern(PatternId patternId)
         onLoopRegionChanged_(loopStartStep_, loopEndStep_);
     trackHeaders_->setPattern(patternId);
     grid_->setPattern(patternId);
+    if (ruler_ != nullptr)
+        ruler_->repaint();
+    resetPlayhead();
     updateLengthSelector();
     trackHeaders_->updateFromModel();
     syncAllTrackMixes();
@@ -342,6 +438,8 @@ void PatternView::loopRegionChanged(int startStep, int endStep)
     loopStartStep_ = startStep;
     loopEndStep_ = endStep;
     republish();
+    if (ruler_ != nullptr)
+        ruler_->repaint();
     if (onLoopRegionChanged_)
         onLoopRegionChanged_(loopStartStep_, loopEndStep_);
 }
@@ -366,6 +464,49 @@ void PatternView::playheadSeekRequested(int step)
     engine_.sequencer().requestSeek(targetSample);
     if (grid_ != nullptr)
         grid_->setPlayheadStep(static_cast<double>(step));
+    if (ruler_ != nullptr)
+        ruler_->repaint();
+    if (followPlayhead_)
+        scrollToPlayheadIfNeeded(static_cast<double>(step));
+}
+
+void PatternView::setFollowPlayhead(bool enabled)
+{
+    followPlayhead_ = enabled;
+    followToggle_.setToggleState(followPlayhead_, juce::dontSendNotification);
+    if (followPlayhead_ && grid_ != nullptr)
+    {
+        scrollToPlayheadIfNeeded(grid_->playheadStep());
+    }
+}
+
+void PatternView::scrollToPlayheadIfNeeded(double phStep)
+{
+    if (gridViewport_ == nullptr || grid_ == nullptr || phStep < 0.0)
+        return;
+
+    const int phX = grid_->stepToX(phStep);
+    const int viewX = gridViewport_->getViewPositionX();
+    const int viewW = gridViewport_->getViewWidth();
+
+    if (viewW <= 0)
+        return;
+
+    if (grid_->isMouseButtonDown()
+        || (ruler_ != nullptr && ruler_->isMouseButtonDown())
+        || gridViewport_->getHorizontalScrollBar().isMouseButtonDown()
+        || gridViewport_->getVerticalScrollBar().isMouseButtonDown())
+    {
+        return;
+    }
+
+    // Page-scroll: when the playhead approaches the right edge, page forward;
+    // when it loops or jumps back to the left, page backward.
+    if (phX >= viewX + viewW - 10 || phX < viewX)
+    {
+        const int targetX = std::max(0, phX - 40);
+        gridViewport_->setViewPosition(targetX, gridViewport_->getViewPositionY());
+    }
 }
 
 void PatternView::updateTrackHeaders()
@@ -411,6 +552,7 @@ void PatternView::deleteTrack(int track)
         onPushUndo_();
     if (song_.removeTrackFromPattern(currentPattern_, track))
     {
+        autoAdjustPatternLength();
         trackHeaders_->updateFromModel();
         republish();
         resized();
@@ -462,7 +604,7 @@ void PatternView::setTrackKind(int trackIndex, SampleKind newKind)
 
     const auto sid = song_.patternTrackSample(currentPattern_, trackIndex);
     if (sid.isValid())
-        stretchCache_.removeSample(sid);
+        stretchCache_.invalidateSample(sid);
 
     song_.setPatternTrackKind(currentPattern_, trackIndex, newKind);
 
@@ -519,26 +661,7 @@ void PatternView::updateLengthSelector()
 {
     const Pattern* p = song_.findPattern(currentPattern_);
     if (p != nullptr)
-    {
         patternTitle_.setText(p->name, juce::dontSendNotification);
-
-        // Ensure current length exists in combo
-        bool found = false;
-        for (int i = 0; i < lengthCombo_.getNumItems(); ++i)
-        {
-            if (lengthCombo_.getItemId(i) == p->lengthBars)
-            {
-                found = true;
-                break;
-            }
-        }
-        if (!found && p->lengthBars > 0)
-        {
-            lengthCombo_.addItem(juce::String(p->lengthBars) + " Bars", p->lengthBars);
-        }
-
-        lengthCombo_.setSelectedId(p->lengthBars, juce::dontSendNotification);
-    }
 }
 
 void PatternView::updateSampleSelector()
@@ -618,36 +741,9 @@ void PatternView::clipClicked(ClipId)
 {
 }
 
-void PatternView::clipMoved(ClipId clipId, int /*newTrack*/, double newStep)
+void PatternView::clipMoved(ClipId clipId, int newTrack, double newStep)
 {
-    const auto* pat = song_.findPattern(currentPattern_);
-    if (!pat)
-        return;
-
-    int trackIdx = -1;
-    for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
-    {
-        for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
-        {
-            if (c.id == clipId)
-            {
-                trackIdx = t;
-                break;
-            }
-        }
-        if (trackIdx >= 0)
-            break;
-    }
-    if (trackIdx < 0)
-        return;
-
-    if (onPushUndo_)
-        onPushUndo_();
-
-    song_.moveClip(currentPattern_, clipId, trackIdx, newStep);
-    publishSnapshotQuick();
-    republish();
-    grid_->repaint();
+    clipsMoved({{clipId, newTrack, newStep}});
 }
 
 void PatternView::clipsMoved(const std::vector<PatternGrid::ClipMoveInfo>& moves)
@@ -655,11 +751,30 @@ void PatternView::clipsMoved(const std::vector<PatternGrid::ClipMoveInfo>& moves
     if (moves.empty())
         return;
 
+    const auto* p = song_.findPattern(currentPattern_);
+    if (p != nullptr)
+    {
+        double maxEndStep = 0.0;
+        for (const auto& m : moves)
+        {
+            if (const auto* c = song_.findClip(currentPattern_, m.clipId))
+                maxEndStep = std::max(maxEndStep, m.newStep + c->lengthSteps);
+        }
+        if (maxEndStep > static_cast<double>(p->lengthSteps()))
+        {
+            const int neededBars = std::max(p->lengthBars + 1,
+                                            static_cast<int>(std::ceil(maxEndStep / static_cast<double>(kStepsPerBar))));
+            patternLengthExtensionRequested(neededBars);
+        }
+    }
+
     if (onPushUndo_)
         onPushUndo_();
 
     for (const auto& m : moves)
         song_.moveClip(currentPattern_, m.clipId, m.newTrack, m.newStep);
+
+    autoAdjustPatternLength();
 
     publishSnapshotQuick();
     republish();
@@ -677,16 +792,86 @@ void PatternView::clipsResized(const std::vector<PatternGrid::ClipResizeInfo>& r
     if (resizes.empty())
         return;
 
+    const auto* p = song_.findPattern(currentPattern_);
+    if (p != nullptr)
+    {
+        double maxEndStep = 0.0;
+        for (const auto& r : resizes)
+            maxEndStep = std::max(maxEndStep, r.newStartStep + r.newLengthSteps);
+        if (maxEndStep > static_cast<double>(p->lengthSteps()))
+        {
+            const int neededBars = std::max(p->lengthBars + 1,
+                                            static_cast<int>(std::ceil(maxEndStep / static_cast<double>(kStepsPerBar))));
+            patternLengthExtensionRequested(neededBars);
+        }
+    }
+
     if (onPushUndo_)
         onPushUndo_();
 
     for (const auto& r : resizes)
         song_.resizeClip(currentPattern_, r.clipId, r.newStartStep, r.newLengthSteps, r.newOffsetSteps);
 
+    autoAdjustPatternLength();
+
     publishSnapshotQuick();
     republish();
     if (grid_ != nullptr)
         grid_->repaint();
+}
+
+void PatternView::patternLengthExtensionRequested(int minBars)
+{
+    const auto* p = song_.findPattern(currentPattern_);
+    if (p == nullptr || minBars <= p->lengthBars)
+        return;
+
+    const int targetBars = std::clamp(minBars, 1, 9999);
+    if (song_.setPatternLength(currentPattern_, targetBars))
+    {
+        updateLengthSelector();
+        republish();
+        resized();
+    }
+}
+
+void PatternView::autoAdjustPatternLength()
+{
+    const auto* p = song_.findPattern(currentPattern_);
+    if (p == nullptr)
+        return;
+
+    double maxClipEndStep = 0.0;
+    for (const auto& track : p->tracks)
+    {
+        for (const auto& clip : track.clips)
+        {
+            maxClipEndStep = std::max(maxClipEndStep, clip.startStep + clip.lengthSteps);
+        }
+    }
+
+    // A song always starts with and has at least 1 bar.
+    // If clips exist, length in bars is exactly enough to contain all clips.
+    const int neededBars = std::max(1, static_cast<int>(std::ceil((maxClipEndStep - 1e-4) / static_cast<double>(kStepsPerBar))));
+
+    if (neededBars != p->lengthBars)
+    {
+        if (song_.setPatternLength(currentPattern_, neededBars))
+        {
+            if (loopEndStep_ > neededBars * kStepsPerBar || loopEndStep_ == p->lengthBars * kStepsPerBar)
+            {
+                loopEndStep_ = neededBars * kStepsPerBar;
+                if (grid_ != nullptr)
+                    grid_->setLoopRegion(loopStartStep_, loopEndStep_);
+                if (onLoopRegionChanged_)
+                    onLoopRegionChanged_(loopStartStep_, loopEndStep_);
+            }
+            republish();
+            resized();
+            if (grid_ != nullptr)
+                grid_->repaint();
+        }
+    }
 }
 
 void PatternView::clipEnvelopeChanged(ClipId clipId, float gain, float fadeInSteps, float fadeOutSteps)
@@ -853,6 +1038,8 @@ void PatternView::clipsDeleteRequested(const std::vector<ClipId>& clipIds)
 
     for (const auto cid : clipIds)
         song_.removeClip(currentPattern_, cid);
+
+    autoAdjustPatternLength();
 
     if (onShowToast_)
     {
@@ -1228,6 +1415,7 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
 
         trackHeaders_->updateFromModel();
         syncAllTrackMixes();
+        autoAdjustPatternLength();
         publishSnapshotQuick();
         republish();
         resized();
@@ -1290,6 +1478,16 @@ void PatternView::duplicateSelectedClip()
     const double spanTotal = cb.maxEndStep - cb.minStartStep;
     const double stepOffset = spanTotal > 0.0 ? spanTotal : 4.0;
 
+    double maxNeededEnd = 0.0;
+    for (const auto& item : cb.items)
+        maxNeededEnd = std::max(maxNeededEnd, item.originalStartStep + stepOffset + (item.lengthSteps > 0.0 ? item.lengthSteps : 4.0));
+    const int neededBars = std::max(1, static_cast<int>(std::ceil((maxNeededEnd - 1e-4) / static_cast<double>(kStepsPerBar))));
+    if (neededBars > pat->lengthBars)
+    {
+        song_.setPatternLength(currentPattern_, neededBars);
+        pat = song_.findPattern(currentPattern_);
+    }
+
     if (onPushUndo_)
         onPushUndo_();
 
@@ -1312,6 +1510,7 @@ void PatternView::duplicateSelectedClip()
 
     if (!newClipIds.empty())
     {
+        autoAdjustPatternLength();
         grid_->setSelectedClips(newClipIds);
         grid_->setCursorPosition(-1, -1);
         if (onShowToast_)
@@ -1348,6 +1547,13 @@ void PatternView::clipDuplicatedTo(ClipId clipId, int track, double startStep)
     if (clip == nullptr)
         return;
 
+    const int neededBars = std::max(1, static_cast<int>(std::ceil(((startStep + clip->lengthSteps) - 1e-4) / static_cast<double>(kStepsPerBar))));
+    if (neededBars > pat->lengthBars)
+    {
+        song_.setPatternLength(currentPattern_, neededBars);
+        pat = song_.findPattern(currentPattern_);
+    }
+
     if (onPushUndo_)
         onPushUndo_();
 
@@ -1357,6 +1563,7 @@ void PatternView::clipDuplicatedTo(ClipId clipId, int track, double startStep)
         song_.setClipEnvelope(currentPattern_, *newClipId, clip->gain, clip->fadeInSteps, clip->fadeOutSteps);
         pasteTargetTrack_ = track;
         pasteTargetStep_ = juce::roundToInt(startStep);
+        autoAdjustPatternLength();
         if (grid_ != nullptr)
             grid_->setSelectedClip(*newClipId);
         publishSnapshotQuick();
@@ -1398,6 +1605,7 @@ void PatternView::gridCellDoubleClicked(int track, int step)
         grid_->setSelectedClip(*newClipId);
         grid_->clearCursor();
     }
+    autoAdjustPatternLength();
     publishSnapshotQuick();
     republish();
     if (grid_ != nullptr)
@@ -1448,6 +1656,16 @@ void PatternView::importAndAssignToTrack(const juce::String& filePath, int targe
     activeSample_ = sampleId;
 
     const auto* pat = song_.findPattern(currentPattern_);
+    const int sampleSteps = bars * kStepsPerBar;
+    const int targetStep = hasSpecificStep ? step : 0;
+    const int neededEndStep = targetStep + sampleSteps;
+    const int neededBars = std::max(1, static_cast<int>(std::ceil((neededEndStep - 1e-4) / static_cast<double>(kStepsPerBar))));
+    if (pat != nullptr && neededBars > pat->lengthBars)
+    {
+        song_.setPatternLength(currentPattern_, neededBars);
+        pat = song_.findPattern(currentPattern_);
+    }
+
     if (pat != nullptr && targetTrack >= 0 && targetTrack < static_cast<int>(pat->tracks.size()))
     {
         song_.replaceTrackSample(currentPattern_, targetTrack, sampleId);
@@ -1457,9 +1675,10 @@ void PatternView::importAndAssignToTrack(const juce::String& filePath, int targe
     else
     {
         const int newTrack = song_.addTrackToPattern(currentPattern_, sampleId);
-        song_.placeClip(currentPattern_, newTrack, sampleId, hasSpecificStep ? step : 0);
+        song_.placeClip(currentPattern_, newTrack, sampleId, targetStep);
     }
 
+    autoAdjustPatternLength();
     updateSampleSelector();
     updateLengthSelector();
     trackHeaders_->updateFromModel();
@@ -1515,7 +1734,7 @@ void PatternView::zoomToLevelRequested(float targetZoomX, double anchorStep, int
 
 void PatternView::applyZoomAtStep(float targetZoomX, double anchorStep, int anchorViewportX)
 {
-    const float newZoomX = std::clamp(targetZoomX, 0.25f, 4.0f);
+    const float newZoomX = std::clamp(targetZoomX, StudioOneZoomCorner::kMinZoomX, StudioOneZoomCorner::kMaxZoomX);
     song_.setPatternZoom(newZoomX, zoomY_);
 
     if (std::abs(newZoomX - zoomX_) < 0.0005f)
@@ -1543,8 +1762,8 @@ void PatternView::applyZoomAtStep(float targetZoomX, double anchorStep, int anch
 
 void PatternView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<int> anchorInGrid)
 {
-    const float newZoomX = std::clamp(targetZoomX, 0.25f, 4.0f);
-    const float newZoomY = std::clamp(targetZoomY, 0.5f, 2.5f);
+    const float newZoomX = std::clamp(targetZoomX, StudioOneZoomCorner::kMinZoomX, StudioOneZoomCorner::kMaxZoomX);
+    const float newZoomY = std::clamp(targetZoomY, 1.0f, 2.5f);
 
     song_.setPatternZoom(newZoomX, newZoomY);
 
@@ -1602,9 +1821,17 @@ void PatternView::resetZoom()
     const float fitX = static_cast<float>(viewW) / static_cast<float>(totalSteps * PatternGrid::kDefaultStepWidth);
     const float fitY = static_cast<float>(viewH) / static_cast<float>(numTracks * PatternGrid::kDefaultTrackHeight);
 
-    applyZoom(fitX, std::clamp(fitY, 0.6f, 2.0f), {0, 0});
+    applyZoom(fitX, std::clamp(fitY, 1.0f, 2.0f), {0, 0});
     if (gridViewport_ != nullptr)
         gridViewport_->setViewPosition(0, 0);
+}
+
+void PatternView::resetPlayhead()
+{
+    if (grid_ != nullptr)
+        grid_->setPlayheadStep(0.0);
+    if (gridViewport_ != nullptr)
+        gridViewport_->setViewPosition(0, gridViewport_->getViewPositionY());
 }
 
 void PatternView::trackHeightIn()
@@ -1632,7 +1859,13 @@ void PatternView::timerCallback()
 
             const std::int64_t pos = engine_.sequencer().position();
             const double currentStep = static_cast<double>(pos) / samplesPerStep;
-            grid_->setPlayheadStep(std::fmod(currentStep, static_cast<double>(totalSteps)));
+            const double phStep = std::fmod(currentStep, static_cast<double>(totalSteps));
+            grid_->setPlayheadStep(phStep);
+            if (ruler_ != nullptr)
+                ruler_->repaint();
+
+            if (followPlayhead_ && engine_.sequencer().isPlaying())
+                scrollToPlayheadIfNeeded(phStep);
         }
     }
 }
@@ -1643,6 +1876,14 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
     {
         auto& seq = engine_.sequencer();
         seq.requestPlaying(!seq.isPlaying());
+        return true;
+    }
+
+    if (key.getKeyCode() == '0' || key.getKeyCode() == juce::KeyPress::numberPad0)
+    {
+        if (engine_.recorder().state() != RecordState::Idle)
+            engine_.recorder().stop();
+        engine_.sequencer().requestPlaying(false);
         return true;
     }
 
@@ -1736,6 +1977,14 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
                                           key.isKeyCode('-') ||
                                           key.getKeyCode() == '-');
 
+    if (!isCmdOrCtrl && (key.getKeyCode() == 'F' || key.getKeyCode() == 'f'))
+    {
+        setFollowPlayhead(!followPlayhead_);
+        if (onShowToast_)
+            onShowToast_(followPlayhead_ ? "Playhead Follow: ON" : "Playhead Follow: OFF");
+        return true;
+    }
+
     if (grid_ != nullptr && (isPlus || isMinus))
     {
         const auto& selected = grid_->selectedClips();
@@ -1774,12 +2023,10 @@ void PatternView::resized()
     constexpr int kToolbarHeight = 44;
     auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 4);
 
-    browserToggle_.setBounds(toolbar.removeFromLeft(54));
+    browserToggle_.setBounds(toolbar.removeFromLeft(64));
     toolbar.removeFromLeft(8);
 
     patternTitle_.setBounds(toolbar.removeFromLeft(80));
-    toolbar.removeFromLeft(4);
-    lengthCombo_.setBounds(toolbar.removeFromLeft(90));
     toolbar.removeFromLeft(12);
 
     // Grid / Raster
@@ -1788,7 +2035,9 @@ void PatternView::resized()
     rasterCombo_.setBounds(toolbar.removeFromLeft(65));
     toolbar.removeFromLeft(10);
 
-    addTrackButton_.setBounds(toolbar.removeFromLeft(70));
+    addTrackButton_.setBounds(toolbar.removeFromLeft(72));
+    toolbar.removeFromLeft(8);
+    followToggle_.setBounds(toolbar.removeFromLeft(64));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
@@ -1813,15 +2062,38 @@ void PatternView::resized()
     const int gridW = getWidth() - headerW;
     gridViewport_->setBounds(headerW, contentY, gridW, timelineH);
 
+    if (headerCorner_ != nullptr)
+        headerCorner_->setBounds(0, contentY, headerW, PatternGrid::kRulerHeight);
+
+    if (ruler_ != nullptr)
+        ruler_->setBounds(headerW, contentY, gridW, PatternGrid::kRulerHeight);
+
     const auto* pat = song_.findPattern(currentPattern_);
     const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
     const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
 
-    const int neededGridWidth = totalSteps * grid_->stepWidth();
+    const int neededGridWidth = grid_->stepToX(totalSteps);
     const int neededGridHeight = PatternGrid::kRulerHeight + (numTracks + 1) * grid_->trackHeight();
 
     grid_->setSize(std::max(gridW, neededGridWidth), std::max(timelineH, neededGridHeight));
     trackHeaders_->setSize(headerW, std::max(timelineH, neededGridHeight));
+}
+
+void PatternView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (trackHeadersViewport_ != nullptr && (e.eventComponent == trackHeadersViewport_.get() || trackHeadersViewport_->isParentOf(e.eventComponent)))
+    {
+        if (gridViewport_ != nullptr && wheel.deltaY != 0.0f)
+        {
+            const int currentY = gridViewport_->getViewPositionY();
+            int deltaY = juce::roundToInt(-wheel.deltaY * 60.0f);
+            if (deltaY == 0 && wheel.deltaY != 0.0f)
+                deltaY = (wheel.deltaY > 0.0f ? -1 : 1);
+            gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), currentY + deltaY);
+            return;
+        }
+    }
+    juce::Component::mouseWheelMove(e, wheel);
 }
 
 } // namespace trami

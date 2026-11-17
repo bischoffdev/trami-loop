@@ -150,6 +150,46 @@ TEST_CASE("Nothing plays while stopped; rewind returns to start")
     REQUIRE(render(seq, 100, 100) == std::vector<std::int64_t>{0});
 }
 
+TEST_CASE("Stopping playback produces immediate silence and stops all voices")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0);
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+
+    seq.requestPlaying(true);
+    std::vector<float> left(512, 0.0f);
+    std::vector<float> right(512, 0.0f);
+    seq.process(left.data(), right.data(), 512);
+
+    bool hasAudio = false;
+    for (int i = 0; i < 512; ++i)
+    {
+        if (std::abs(left[i]) > 0.001f || std::abs(right[i]) > 0.001f)
+        {
+            hasAudio = true;
+            break;
+        }
+    }
+    REQUIRE(hasAudio);
+
+    // Stop playback
+    seq.requestPlaying(false);
+
+    // The very next block must be completely silent
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 512);
+
+    for (int i = 0; i < 512; ++i)
+    {
+        CHECK(left[i] == 0.0f);
+        CHECK(right[i] == 0.0f);
+    }
+}
+
 TEST_CASE("Metronome clicks on every beat")
 {
     Fixture f;
@@ -659,6 +699,46 @@ TEST_CASE("Sequencer output loudness metering detects peaks, RMS and clipping")
 
     levels = seq.outputLevels();
     REQUIRE(levels.clipped == false);
+}
+
+TEST_CASE("Metronome click is audible in audio output but not reflected in outputLevels")
+{
+    // Snapshot with NO clips, 120 BPM
+    Song song;
+    song.setBpm(120.0);
+    const auto patId = song.addPattern("Empty", 4);
+    SampleBank emptyBank;
+
+    auto snap = SnapshotBuilder::buildPattern(song, patId, emptyBank, kRate);
+    REQUIRE(snap != nullptr);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.setMetronomeEnabled(true);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(512, 0.0f);
+    std::vector<float> right(512, 0.0f);
+
+    // Process first block (starts at beat 0, so accent click is triggered)
+    seq.process(left.data(), right.data(), 512);
+
+    // Main volume indicator levels must NOT reflect the metronome click
+    auto levels = seq.outputLevels();
+    REQUIRE(levels.peakL == Catch::Approx(0.0f));
+    REQUIRE(levels.peakR == Catch::Approx(0.0f));
+    REQUIRE(levels.rmsL == Catch::Approx(0.0f));
+    REQUIRE(levels.rmsR == Catch::Approx(0.0f));
+    REQUIRE(levels.clipped == false);
+
+    // BUT the metronome click is indeed rendered into the audio buffer
+    float audioPeak = 0.0f;
+    for (int i = 0; i < 512; ++i)
+    {
+        audioPeak = std::max(audioPeak, std::abs(left[i]));
+    }
+    REQUIRE(audioPeak > 0.1f);
 }
 
 TEST_CASE("Removing an active clip silences its voice immediately during playback")

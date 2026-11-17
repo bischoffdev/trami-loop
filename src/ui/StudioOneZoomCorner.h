@@ -14,6 +14,8 @@ class StudioOneZoomCorner : public juce::Component, public juce::TooltipClient
 public:
     static constexpr int kThickness = 17;
     static constexpr int kSliderLength = 72;
+    static constexpr float kMinZoomX = 0.005f;
+    static constexpr float kMaxZoomX = 4.0f;
 
     StudioOneZoomCorner();
     ~StudioOneZoomCorner() override = default;

@@ -8,6 +8,7 @@
 #include "model/Song.h"
 #include "model/UndoManager.h"
 #include "ui/IconButton.h"
+#include "ui/MasterChannelStrip.h"
 #include "ui/PatternView.h"
 #include "ui/ToastOverlay.h"
 #include "ui/TransportBar.h"
@@ -56,16 +57,17 @@ private:
 
     std::optional<std::filesystem::path> currentProjectDir_;
 
-    IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo (Ctrl+Z)"};
-    IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo (Ctrl+Y)"};
-    IconButton newButton_{"New", IconButton::Icon::New, "New Project (Ctrl+N)"};
-    IconButton openButton_{"Open", IconButton::Icon::Open, "Open Project (Ctrl+O)"};
-    IconButton saveButton_{"Save", IconButton::Icon::Save, "Save Project (Ctrl+S)"};
-    IconButton exportButton_{"Export", IconButton::Icon::Export, "Export Mixdown WAV (Ctrl+E)"};
-    IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Audio Device Settings"};
+    IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo"};
+    IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo"};
+    IconButton newButton_{"New", IconButton::Icon::New, "New"};
+    IconButton openButton_{"Open", IconButton::Icon::Open, "Open"};
+    IconButton saveButton_{"Save", IconButton::Icon::Save, "Save"};
+    IconButton exportButton_{"Export", IconButton::Icon::Export, "Export"};
+    IconButton settingsButton_{"Audio", IconButton::Icon::Settings, "Settings"};
 
     std::unique_ptr<PatternView> patternView_;
     std::unique_ptr<TransportBar> transportBar_;
+    std::unique_ptr<MasterChannelStrip> masterChannelStrip_;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
     juce::TooltipWindow tooltipWindow_{this, 400};

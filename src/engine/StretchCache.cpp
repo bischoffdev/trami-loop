@@ -45,6 +45,18 @@ void StretchCache::removeSample(SampleId id)
     }
 }
 
+void StretchCache::invalidateSample(SampleId id)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = cache_.begin(); it != cache_.end();)
+    {
+        if (std::get<0>(it->first) == id.value)
+            it = cache_.erase(it);
+        else
+            ++it;
+    }
+}
+
 void StretchCache::clear()
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -192,19 +204,29 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
 {
     const SampleKind effectiveKind = kindOverride.value_or(sample.kind);
     int effectiveBars = loopBarsOverride.value_or(sample.loopBars);
-    if (effectiveKind == SampleKind::Loop && effectiveBars <= 0)
+    if (effectiveKind == SampleKind::Loop)
     {
-        const double secPerBar = (targetBpm > 0.0) ? (60.0 / targetBpm) * 4.0 : 2.0;
-        effectiveBars = (secPerBar > 0.0 && sample.durationSeconds > 0.0)
-            ? std::max(1, static_cast<int>(std::round(sample.durationSeconds / secPerBar)))
-            : 1;
+        double refBpm = (sample.acidBpm > 20.0) ? sample.acidBpm : targetBpm;
+        if (refBpm > 20.0 && sample.durationSeconds > 0.0)
+        {
+            const double secPerBar = (60.0 / refBpm) * 4.0;
+            const int estBars = std::max(1, static_cast<int>(std::round(sample.durationSeconds / secPerBar)));
+            if (effectiveBars <= 1 && estBars > 1)
+                effectiveBars = estBars;
+        }
+        if (effectiveBars <= 0)
+        {
+            const double secPerBar = (targetBpm > 0.0) ? (60.0 / targetBpm) * 4.0 : 2.0;
+            effectiveBars = (secPerBar > 0.0 && sample.durationSeconds > 0.0)
+                ? std::max(1, static_cast<int>(std::round(sample.durationSeconds / secPerBar)))
+                : 1;
+        }
     }
 
     std::shared_ptr<const AudioData> raw;
     const int bpmKey = (effectiveKind == SampleKind::OneShot) ? 0 : static_cast<int>(std::round(targetBpm * 10.0));
-    CacheKey key{sample.id.value, semitones, bpmKey,
-                 (effectiveKind == SampleKind::Loop ? effectiveBars : 0),
-                 static_cast<int>(std::round(sampleRate))};
+    const int cycleKey = (effectiveKind == SampleKind::Loop) ? static_cast<int>(std::round(sample.loopCycleBeats() * 100.0)) : 0;
+    CacheKey key{sample.id.value, semitones, bpmKey, cycleKey, static_cast<int>(std::round(sampleRate))};
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -218,11 +240,11 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
             return raw;
 
         // Loops at original tempo with 0 transpose don't need stretching or pitching
-        double origBpm = sample.acidBpm;
+        double origBpm = sample.originalBpm();
         if (origBpm <= 0.0 && effectiveBars > 0 && sample.durationSeconds > 0.0)
             origBpm = Timing::loopBpm(sample.durationSeconds, effectiveBars);
 
-        const bool tempoMatches = (origBpm <= 0.0 || std::abs(origBpm - targetBpm) < 0.001);
+        const bool tempoMatches = (origBpm > 0.0 && std::abs(origBpm - targetBpm) < 0.001);
         if (effectiveKind == SampleKind::Loop && semitones == 0 && tempoMatches)
             return raw;
 
@@ -236,7 +258,7 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
     double ratio = 1.0;
     if (effectiveKind == SampleKind::Loop)
     {
-        double origBpm = sample.acidBpm;
+        double origBpm = sample.originalBpm();
         if (origBpm <= 0.0 && effectiveBars > 0 && sample.durationSeconds > 0.0)
             origBpm = Timing::loopBpm(sample.durationSeconds, effectiveBars);
 

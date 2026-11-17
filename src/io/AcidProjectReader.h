@@ -26,10 +26,11 @@ struct AcidTrack
     std::string trackName;
     std::string samplePath;
     std::string sampleFileName;
+    bool hasAcidChunk = false;
     bool isOneShot = false;
     int rootNote = -1;
-    int beatCount = 4;
-    float originalBpm = 120.0f;
+    int beatCount = 0;
+    float originalBpm = 0.0f;
     std::vector<AcidTimelineClip> clips;
 };
 

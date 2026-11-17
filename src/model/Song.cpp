@@ -48,6 +48,8 @@ SampleId Song::addSample(Sample sample)
 {
     sample.id = sampleIds_.next();
     sample.loopBars = std::max(1, sample.loopBars);
+    if (sample.loopBeats <= 0.0)
+        sample.loopBeats = static_cast<double>(sample.loopBars * kBeatsPerBar);
     samples_.push_back(std::move(sample));
     return samples_.back().id;
 }
@@ -502,7 +504,7 @@ bool Song::setPatternTrackKind(PatternId patternId, int trackIndex, SampleKind k
         if (Sample* s = findSample(sid))
         {
             s->kind = SampleKind::Loop;
-            if (s->loopBars <= 1 && s->durationSeconds > 0.0)
+            if (s->loopBars <= 0 && s->durationSeconds > 0.0)
             {
                 const double refBpm = (s->acidBpm > 0.0) ? s->acidBpm : (bpm_ > 0.0 ? bpm_ : 120.0);
                 const double secPerBar = (60.0 / refBpm) * 4.0;

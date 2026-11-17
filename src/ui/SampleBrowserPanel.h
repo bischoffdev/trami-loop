@@ -57,8 +57,8 @@ private:
     std::unique_ptr<juce::FileTreeComponent> fileTree_;
 
     juce::ComboBox driveSelector_;
-    IconButton upFolderButton_{"Up", IconButton::Icon::Undo, "Up one directory level"};
-    IconButton browseFolderButton_{"...", IconButton::Icon::Open, "Browse custom directory or drive..."};
+    IconButton upFolderButton_{"Up", IconButton::Icon::Undo, ""};
+    IconButton browseFolderButton_{"Browse", IconButton::Icon::Open, ""};
     std::unique_ptr<juce::FileChooser> folderChooser_;
     std::vector<juce::File> driveList_;
 

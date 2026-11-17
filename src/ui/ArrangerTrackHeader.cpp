@@ -109,6 +109,7 @@ ArrangerTrackHeaderList::ArrangerTrackHeaderList(Song& song, MixChangedCallback 
         addAndMakeVisible(c.volLabel.get());
 
         c.volumeSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+        c.volumeSlider->setScrollWheelEnabled(false);
         c.volumeSlider->setRange(0.0, 2.0, 0.01);
         c.volumeSlider->setValue(1.0, juce::dontSendNotification);
         c.volumeSlider->setTooltip("Track " + juce::String(t + 1) + " Volume");
@@ -132,6 +133,7 @@ ArrangerTrackHeaderList::ArrangerTrackHeaderList(Song& song, MixChangedCallback 
         addAndMakeVisible(c.panLabel.get());
 
         c.panSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+        c.panSlider->setScrollWheelEnabled(false);
         c.panSlider->setRange(-1.0, 1.0, 0.01);
         c.panSlider->setValue(0.0, juce::dontSendNotification);
         c.panSlider->setTooltip("Track " + juce::String(t + 1) + " Pan");
@@ -219,7 +221,7 @@ void ArrangerTrackHeaderList::updateFromModel()
 
 void ArrangerTrackHeaderList::setTrackHeight(int height)
 {
-    const int clamped = std::max(22, height);
+    const int clamped = std::max(kMinTrackHeight, height);
     if (trackHeight_ != clamped)
     {
         trackHeight_ = clamped;
@@ -318,59 +320,40 @@ void ArrangerTrackHeaderList::resized()
         const int y = ArrangerGrid::kRulerHeight + t * trackHeight_;
         auto& c = controls_[static_cast<std::size_t>(t)];
 
-        if (trackHeight_ >= 34)
-        {
-            // 2-row layout:
-            // Top: Waveform icon (painted) + Name Label + subtle delete button
-            const int nameX = kStripWidth + 24;
-            const int nameW = std::max(40, getWidth() - nameX - 26);
-            c.label->setBounds(nameX, y + 2, nameW, 18);
-            if (c.deleteButton != nullptr)
-                c.deleteButton->setBounds(getWidth() - 24, y + 2, 20, 18);
+        // 2-row layout:
+        // Top: Waveform icon (painted) + Name Label + subtle delete button
+        const int nameX = kStripWidth + 24;
+        const int nameW = std::max(40, getWidth() - nameX - 26);
+        c.label->setBounds(nameX, y + 2, nameW, 20);
+        if (c.deleteButton != nullptr)
+            c.deleteButton->setBounds(getWidth() - 24, y + 2, 20, 20);
 
-            // Bottom: [ M | S ]  ( • )  Vol [===] Pan [===]
-            const int btnY = y + 22;
-            const int btnH = std::min(18, trackHeight_ - 24);
+        // Bottom: [ M | S ]  ( • )  Vol [===] Pan [===]
+        const int btnY = y + 24;
+        const int btnH = std::clamp(trackHeight_ - 26, 18, 22);
 
-            c.muteButton->setBounds(kStripWidth + 4, btnY, 22, btnH);
-            c.soloButton->setBounds(kStripWidth + 26, btnY, 22, btnH);
-            c.armButton->setBounds(kStripWidth + 52, btnY, 18, btnH);
+        c.muteButton->setBounds(kStripWidth + 4, btnY, 22, btnH);
+        c.soloButton->setBounds(kStripWidth + 28, btnY, 22, btnH);
+        c.armButton->setBounds(kStripWidth + 54, btnY, 18, btnH);
 
-            const int remainX = kStripWidth + 74;
-            const int remainW = std::max(20, getWidth() - remainX - 6);
-            constexpr int lblW = 28;
-            const int sliderW = std::max(20, (remainW - (lblW * 2 + 8)) / 2);
+        const int remainX = kStripWidth + 76;
+        const int remainW = std::max(20, getWidth() - remainX - 6);
+        constexpr int lblW = 26;
+        const int sliderW = std::max(20, (remainW - (lblW * 2 + 8)) / 2);
 
-            c.volLabel->setVisible(true);
-            c.volumeSlider->setVisible(true);
-            c.panLabel->setVisible(true);
-            c.panSlider->setVisible(true);
+        c.volLabel->setVisible(true);
+        c.volumeSlider->setVisible(true);
+        c.panLabel->setVisible(true);
+        c.panSlider->setVisible(true);
 
-            int curX = remainX;
-            c.volLabel->setBounds(curX, btnY, lblW, btnH);
-            curX += lblW + 2;
-            c.volumeSlider->setBounds(curX, btnY, sliderW, btnH);
-            curX += sliderW + 6;
-            c.panLabel->setBounds(curX, btnY, lblW, btnH);
-            curX += lblW + 2;
-            c.panSlider->setBounds(curX, btnY, sliderW, btnH);
-        }
-        else
-        {
-            // 1-row compact layout
-            c.label->setBounds(kStripWidth + 4, y + 1, std::max(40, getWidth() - 200), trackHeight_ - 2);
-            c.muteButton->setBounds(getWidth() - 176, y + 1, 18, trackHeight_ - 2);
-            c.soloButton->setBounds(getWidth() - 156, y + 1, 18, trackHeight_ - 2);
-            c.armButton->setBounds(getWidth() - 134, y + 1, 16, trackHeight_ - 2);
-            c.volLabel->setVisible(true);
-            c.volLabel->setBounds(getWidth() - 118, y + 1, 28, trackHeight_ - 2);
-            c.volumeSlider->setVisible(true);
-            c.volumeSlider->setBounds(getWidth() - 88, y + 1, 60, trackHeight_ - 2);
-            c.panLabel->setVisible(false);
-            c.panSlider->setVisible(false);
-            if (c.deleteButton != nullptr)
-                c.deleteButton->setBounds(getWidth() - 22, y + 1, 18, trackHeight_ - 2);
-        }
+        int curX = remainX;
+        c.volLabel->setBounds(curX, btnY, lblW, btnH);
+        curX += lblW + 2;
+        c.volumeSlider->setBounds(curX, btnY, sliderW, btnH);
+        curX += sliderW + 6;
+        c.panLabel->setBounds(curX, btnY, lblW, btnH);
+        curX += lblW + 2;
+        c.panSlider->setBounds(curX, btnY, sliderW, btnH);
     }
 
     if (addTrackButton_ != nullptr)

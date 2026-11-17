@@ -70,6 +70,7 @@ public:
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kHeaderWidth = 260;
+    static constexpr int kMinTrackHeight = 48;
 
 private:
     struct TrackControls
@@ -99,7 +100,7 @@ private:
     DeleteTrackCallback onDeleteTrack_;
     MoveTrackCallback onMoveTrack_;
     TrackRenamedCallback onTrackRenamed_;
-    int trackHeight_ = 36;
+    int trackHeight_ = kMinTrackHeight;
     int dragHoverTrack_ = -1;
     bool isReorderDrag_ = false;
 

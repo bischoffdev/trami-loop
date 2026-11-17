@@ -12,8 +12,8 @@ StudioOneZoomCorner::StudioOneZoomCorner()
 
 void StudioOneZoomCorner::setZoomLevels(float zoomX, float zoomY)
 {
-    zoomX_ = std::clamp(zoomX, 0.25f, 4.0f);
-    zoomY_ = std::clamp(zoomY, 0.5f, 2.5f);
+    zoomX_ = std::clamp(zoomX, kMinZoomX, kMaxZoomX);
+    zoomY_ = std::clamp(zoomY, 1.0f, 2.5f);
     repaint();
 }
 
@@ -47,7 +47,9 @@ juce::Rectangle<int> StudioOneZoomCorner::getHSliderThumbBounds() const
 {
     constexpr int thumbW = 16;
     constexpr int thumbH = 13;
-    const float t = std::clamp((std::log2(std::clamp(zoomX_, 0.25f, 4.0f)) + 2.0f) / 4.0f, 0.0f, 1.0f);
+    const float logMin = std::log2(kMinZoomX);
+    const float logMax = std::log2(kMaxZoomX);
+    const float t = std::clamp((std::log2(std::clamp(zoomX_, kMinZoomX, kMaxZoomX)) - logMin) / (logMax - logMin), 0.0f, 1.0f);
     const int travel = kSliderLength - thumbW;
     const int thumbX = juce::roundToInt(t * static_cast<float>(travel));
     return {thumbX, kSliderLength + 2, thumbW, thumbH};
@@ -57,13 +59,8 @@ juce::Rectangle<int> StudioOneZoomCorner::getVSliderThumbBounds() const
 {
     constexpr int thumbW = 13;
     constexpr int thumbH = 16;
-    const float zy = std::clamp(zoomY_, 0.5f, 2.5f);
-    float t = 0.5f;
-    if (zy <= 1.0f)
-        t = zy - 0.5f;
-    else
-        t = 0.5f + (zy - 1.0f) / 3.0f;
-    t = std::clamp(t, 0.0f, 1.0f);
+    const float zy = std::clamp(zoomY_, 1.0f, 2.5f);
+    const float t = std::clamp((zy - 1.0f) / 1.5f, 0.0f, 1.0f);
     const int travel = kSliderLength - thumbH;
     const int thumbY = juce::roundToInt((1.0f - t) * static_cast<float>(travel));
     return {kSliderLength + 2, thumbY, thumbW, thumbH};
@@ -191,7 +188,9 @@ void StudioOneZoomCorner::updateZoomFromMouseX(int mouseX)
     constexpr int thumbW = 16;
     const int travel = kSliderLength - thumbW;
     const float t = std::clamp(static_cast<float>(mouseX - thumbW / 2) / static_cast<float>(travel), 0.0f, 1.0f);
-    const float newZoomX = std::pow(2.0f, 4.0f * t - 2.0f);
+    const float logMin = std::log2(kMinZoomX);
+    const float logMax = std::log2(kMaxZoomX);
+    const float newZoomX = std::pow(2.0f, logMin + t * (logMax - logMin));
     zoomX_ = newZoomX;
     if (onZoomXChanged)
         onZoomXChanged(newZoomX);
@@ -203,11 +202,7 @@ void StudioOneZoomCorner::updateZoomFromMouseY(int mouseY)
     constexpr int thumbH = 16;
     const int travel = kSliderLength - thumbH;
     const float t = std::clamp(1.0f - static_cast<float>(mouseY - thumbH / 2) / static_cast<float>(travel), 0.0f, 1.0f);
-    float newZoomY = 1.0f;
-    if (t <= 0.5f)
-        newZoomY = 0.5f + t;
-    else
-        newZoomY = 1.0f + (t - 0.5f) * 3.0f;
+    const float newZoomY = 1.0f + t * 1.5f;
     zoomY_ = newZoomY;
     if (onZoomYChanged)
         onZoomYChanged(newZoomY);

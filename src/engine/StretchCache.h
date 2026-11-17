@@ -33,6 +33,7 @@ public:
     std::shared_ptr<const AudioData> getRawAudio(SampleId id) const;
     SampleBank getRawBank() const;
     void removeSample(SampleId id);
+    void invalidateSample(SampleId id);
     void clear();
 
     /// Synchronously retrieves or generates the active SampleBank for the given song.

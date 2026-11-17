@@ -36,7 +36,8 @@ public:
         Edit,
         ZoomIn,
         ZoomOut,
-        ZoomReset
+        ZoomReset,
+        Follow
     };
 
     IconButton(const juce::String& buttonName, Icon icon, const juce::String& label);

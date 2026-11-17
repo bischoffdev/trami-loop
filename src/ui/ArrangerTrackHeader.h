@@ -51,6 +51,7 @@ public:
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kHeaderWidth = 260;
+    static constexpr int kMinTrackHeight = 48;
 
 private:
     struct TrackControls
@@ -74,7 +75,7 @@ private:
     DeleteTrackCallback onDeleteTrack_;
     MoveTrackCallback onMoveTrack_;
     AddTrackCallback onAddTrack_;
-    int trackHeight_ = 44;
+    int trackHeight_ = kMinTrackHeight;
     int dragHoverTrack_ = -1;
 
     std::unique_ptr<juce::TextButton> addTrackButton_;
