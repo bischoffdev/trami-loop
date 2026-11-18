@@ -103,6 +103,16 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.nameLabel.get());
 
+            c.propsButton = std::make_unique<juce::TextButton>("P");
+            c.propsButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.10f));
+            c.propsButton->setColour(juce::TextButton::textColourOffId, Palette::accent);
+            c.propsButton->setTooltip("Track " + juce::String(t + 1) + " Properties (Stretch Markers / Key / Summary)");
+            c.propsButton->onClick = [this, t]() {
+                if (onTrackProperties_)
+                    onTrackProperties_(t);
+            };
+            addAndMakeVisible(c.propsButton.get());
+
             c.typeButton = std::make_unique<juce::TextButton>("type");
             addAndMakeVisible(c.typeButton.get());
 
@@ -151,6 +161,18 @@ void TrackHeaderList::updateFromModel()
 
             c.armButton = std::make_unique<DAWArmButton>();
             c.armButton->setTooltip("Arm Track " + juce::String(t + 1) + " for Recording");
+            c.armButton->onClick = [this, t]() {
+                if (auto* p = song_.findPattern(patternId_))
+                {
+                    if (t < static_cast<int>(p->tracks.size()))
+                    {
+                        p->tracks[static_cast<std::size_t>(t)].armed =
+                            controls_[static_cast<std::size_t>(t)].armButton->getToggleState();
+                        if (onMixChanged_)
+                            onMixChanged_(t);
+                    }
+                }
+            };
             addAndMakeVisible(c.armButton.get());
 
             c.volLabel = std::make_unique<juce::Label>("vol", "Vol");
@@ -221,6 +243,7 @@ void TrackHeaderList::updateFromModel()
             c.panSlider->setValue(track.mix.pan, juce::dontSendNotification);
             c.muteButton->setToggleState(track.muted, juce::dontSendNotification);
             c.soloButton->setToggleState(track.solo, juce::dontSendNotification);
+            c.armButton->setToggleState(track.armed, juce::dontSendNotification);
 
             const SampleKind kind = song_.patternTrackKind(patternId_, t);
             if (kind == SampleKind::Loop)
@@ -228,17 +251,30 @@ void TrackHeaderList::updateFromModel()
                 c.typeButton->setButtonText("LOOP");
                 c.typeButton->setColour(juce::TextButton::buttonColourId, juce::Colour(0xfff59e0b).withAlpha(0.28f));
                 c.typeButton->setColour(juce::TextButton::textColourOffId, juce::Colour(0xffffca28));
-                c.typeButton->setTooltip("Track " + juce::String(t + 1) + ": Loop (Time-Stretched to tempo). Click to toggle to 1-Shot.");
+                c.typeButton->setTooltip("Track " + juce::String(t + 1) + ": Loop (Time-Stretched to tempo). Click to cycle to 1-Shot / Disk.");
             }
-            else
+            else if (kind == SampleKind::OneShot)
             {
                 c.typeButton->setButtonText("1-SHOT");
                 c.typeButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
                 c.typeButton->setColour(juce::TextButton::textColourOffId, Palette::textDim.brighter(0.2f));
-                c.typeButton->setTooltip("Track " + juce::String(t + 1) + ": One-Shot (Natural pitch/duration). Click to toggle to Loop.");
+                c.typeButton->setTooltip("Track " + juce::String(t + 1) + ": One-Shot (Natural pitch/duration). Click to cycle to Disk / Loop.");
+            }
+            else
+            {
+                c.typeButton->setButtonText("DISK");
+                c.typeButton->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff10b981).withAlpha(0.28f));
+                c.typeButton->setColour(juce::TextButton::textColourOffId, juce::Colour(0xff34d399));
+                c.typeButton->setTooltip("Track " + juce::String(t + 1) + ": Disk-Based (Streams long audio files). Click to cycle to Loop.");
             }
             c.typeButton->onClick = [this, t, kind]() {
-                const SampleKind newKind = (kind == SampleKind::Loop) ? SampleKind::OneShot : SampleKind::Loop;
+                SampleKind newKind = SampleKind::Loop;
+                if (kind == SampleKind::Loop)
+                    newKind = SampleKind::OneShot;
+                else if (kind == SampleKind::OneShot)
+                    newKind = SampleKind::DiskStream;
+                else
+                    newKind = SampleKind::Loop;
                 if (onTrackTypeChanged_)
                     onTrackTypeChanged_(t, newKind);
             };
@@ -247,19 +283,27 @@ void TrackHeaderList::updateFromModel()
             if (!sid.isValid() && !track.clips.empty())
                 sid = track.clips.front().sampleId;
 
+            const Sample* samplePtr = song_.findSample(sid);
+            const bool isMissing = (samplePtr != nullptr && samplePtr->missing);
+
             const std::string customName = song_.patternTrackName(patternId_, t);
             if (!customName.empty())
             {
-                c.nameLabel->setText(juce::String(t + 1) + ". " + customName, juce::dontSendNotification);
-                c.nameLabel->setColour(juce::Label::textColourId, Palette::text);
-                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + ": " + customName + " (Double-click to rename)");
+                const juce::String suffix = isMissing ? " [MISSING]" : "";
+                c.nameLabel->setText(juce::String(t + 1) + ". " + customName + suffix, juce::dontSendNotification);
+                c.nameLabel->setColour(juce::Label::textColourId, isMissing ? Palette::danger : Palette::text);
+                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + ": " + customName +
+                                        (isMissing ? " (Missing file: " + juce::String(samplePtr->fileName) + ")"
+                                                   : " (Double-click to rename)"));
             }
-            else if (const Sample* s = song_.findSample(sid))
+            else if (samplePtr != nullptr)
             {
-                const juce::String fn = s->fileName.empty() ? juce::String(s->name) : juce::String(s->fileName);
-                c.nameLabel->setText(juce::String(t + 1) + ". " + fn, juce::dontSendNotification);
-                c.nameLabel->setColour(juce::Label::textColourId, Palette::text);
-                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + ": " + fn + " (Double-click to rename)");
+                const juce::String fn = samplePtr->fileName.empty() ? juce::String(samplePtr->name) : juce::String(samplePtr->fileName);
+                const juce::String suffix = isMissing ? " [MISSING]" : "";
+                c.nameLabel->setText(juce::String(t + 1) + ". " + fn + suffix, juce::dontSendNotification);
+                c.nameLabel->setColour(juce::Label::textColourId, isMissing ? Palette::danger : Palette::text);
+                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + ": " + fn +
+                                        (isMissing ? " (Missing audio file)" : " (Double-click to rename)"));
             }
             else
             {
@@ -313,7 +357,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
             sid = track.clips.front().sampleId;
 
         if (const Sample* s = song_.findSample(sid))
-            badgeCol = juce::Colour::fromHSV(s->hue(), 0.8f, 0.88f, 1.0f);
+            badgeCol = s->missing ? Palette::danger.withAlpha(0.8f) : juce::Colour::fromHSV(s->hue(), 0.8f, 0.88f, 1.0f);
 
         g.setColour(badgeCol);
         g.fillRect(0, y, kStripWidth, trackHeight_);
@@ -380,10 +424,12 @@ void TrackHeaderList::resized()
         auto& c = controls_[static_cast<std::size_t>(t)];
 
         // 2-row layout:
-        // Top: Waveform icon + Name Label + Type Button + Delete Button
+        // Top: Waveform icon + Name Label + Props Button + Type Button + Delete Button
         const int nameX = kStripWidth + 24;
-        const int nameW = std::max(40, getWidth() - nameX - 82);
+        const int nameW = std::max(40, getWidth() - nameX - 104);
         c.nameLabel->setBounds(nameX, y + 2, nameW, 20);
+        if (c.propsButton != nullptr)
+            c.propsButton->setBounds(getWidth() - 102, y + 2, 22, 20);
         if (c.typeButton != nullptr)
             c.typeButton->setBounds(getWidth() - 78, y + 2, 50, 20);
         if (c.deleteButton != nullptr)
@@ -444,10 +490,21 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isPopupMenu())
     {
+        const TrackEnvelopeType visEnv = track.visibleEnvelope;
         juce::PopupMenu m;
+        m.addItem(20, "Track Properties (Stretch / Key / Summary)...");
         m.addItem(1, "Rename Track...");
-        m.addItem(2, "Track Type: Loop (time-stretched)", true, kind == SampleKind::Loop);
-        m.addItem(3, "Track Type: One-Shot (natural pitch)", true, kind == SampleKind::OneShot);
+        m.addSeparator();
+        m.addItem(2, "Track Type: Loop (Time-Stretched)", true, kind == SampleKind::Loop);
+        m.addItem(3, "Track Type: One-Shot (Natural Speed)", true, kind == SampleKind::OneShot);
+        m.addItem(6, "Track Type: Disk-Based (Stream Long Audio)", true, kind == SampleKind::DiskStream);
+        m.addSeparator();
+        juce::PopupMenu envMenu;
+        envMenu.addItem(30, "Off (Hide Track Automation)", true, visEnv == TrackEnvelopeType::None);
+        envMenu.addItem(31, "Volume Envelope", true, visEnv == TrackEnvelopeType::Volume);
+        envMenu.addItem(32, "Pan Envelope", true, visEnv == TrackEnvelopeType::Pan);
+        envMenu.addItem(33, "Aux FX Send Envelope", true, visEnv == TrackEnvelopeType::FxSend);
+        m.addSubMenu("Track Envelope / Automation", envMenu);
         m.addSeparator();
         m.addItem(4, "Duplicate Track");
         m.addItem(10, "Move Track Up", t > 0);
@@ -458,7 +515,11 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(
                             juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
                         [this, t](int result) {
-                            if (result == 1 && t < static_cast<int>(controls_.size()))
+                            if (result == 20 && onTrackProperties_)
+                            {
+                                onTrackProperties_(t);
+                            }
+                            else if (result == 1 && t < static_cast<int>(controls_.size()))
                             {
                                 if (controls_[static_cast<std::size_t>(t)].nameLabel != nullptr)
                                     controls_[static_cast<std::size_t>(t)].nameLabel->showEditor();
@@ -467,6 +528,42 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                                 onTrackTypeChanged_(t, SampleKind::Loop);
                             else if (result == 3 && onTrackTypeChanged_)
                                 onTrackTypeChanged_(t, SampleKind::OneShot);
+                            else if (result == 6 && onTrackTypeChanged_)
+                                onTrackTypeChanged_(t, SampleKind::DiskStream);
+                            else if (result >= 30 && result <= 33)
+                            {
+                                if (auto* p = song_.findPattern(patternId_))
+                                {
+                                    if (t < static_cast<int>(p->tracks.size()))
+                                    {
+                                        auto& trk = p->tracks[static_cast<std::size_t>(t)];
+                                        if (result == 30) trk.visibleEnvelope = TrackEnvelopeType::None;
+                                        else if (result == 31)
+                                        {
+                                            trk.visibleEnvelope = TrackEnvelopeType::Volume;
+                                            if (trk.volumeAutomation.empty())
+                                                trk.volumeAutomation = {{0.0, trk.mix.volume, EnvelopeCurve::Linear},
+                                                                        {static_cast<double>(p->lengthSteps()), trk.mix.volume, EnvelopeCurve::Linear}};
+                                        }
+                                        else if (result == 32)
+                                        {
+                                            trk.visibleEnvelope = TrackEnvelopeType::Pan;
+                                            if (trk.panAutomation.empty())
+                                                trk.panAutomation = {{0.0, trk.mix.pan, EnvelopeCurve::Linear},
+                                                                     {static_cast<double>(p->lengthSteps()), trk.mix.pan, EnvelopeCurve::Linear}};
+                                        }
+                                        else if (result == 33)
+                                        {
+                                            trk.visibleEnvelope = TrackEnvelopeType::FxSend;
+                                            if (trk.fxAutomation.empty())
+                                                trk.fxAutomation = {{0.0, trk.fxSend, EnvelopeCurve::Linear},
+                                                                    {static_cast<double>(p->lengthSteps()), trk.fxSend, EnvelopeCurve::Linear}};
+                                        }
+                                        if (onMixChanged_)
+                                            onMixChanged_(t);
+                                    }
+                                }
+                            }
                             else if (result == 4 && onDuplicateTrack_)
                                 onDuplicateTrack_(t);
                             else if (result == 10 && onMoveTrack_)

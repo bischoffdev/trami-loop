@@ -17,6 +17,13 @@ void StretchCache::setRawAudio(SampleId id, std::shared_ptr<const AudioData> aud
 {
     std::lock_guard<std::mutex> lock(mutex_);
     rawBank_[id] = std::move(audio);
+    for (auto it = cache_.begin(); it != cache_.end();)
+    {
+        if (std::get<0>(it->first) == id.value)
+            it = cache_.erase(it);
+        else
+            ++it;
+    }
 }
 
 std::shared_ptr<const AudioData> StretchCache::getRawAudio(SampleId id) const
@@ -59,6 +66,7 @@ void StretchCache::invalidateSample(SampleId id)
 
 void StretchCache::clear()
 {
+    cancelPending();
     std::lock_guard<std::mutex> lock(mutex_);
     rawBank_.clear();
     cache_.clear();
@@ -99,8 +107,10 @@ SampleBank StretchCache::getOrUpdateSync(const Song& song, double sampleRate)
     SampleBank bank;
     for (const auto& sample : song.samples())
     {
-        auto audio = getOrRender(sample, song.bpm(), sampleRate, 0,
-                                 effectiveKinds[sample.id.value], effectiveBars[sample.id.value]);
+        const auto kind = effectiveKinds[sample.id.value];
+        const int effSemi = song.effectiveClipTranspose(&sample, 0, kind);
+        auto audio = getOrRender(sample, song.bpm(), sampleRate, effSemi,
+                                 kind, effectiveBars[sample.id.value]);
         if (audio != nullptr)
             bank[sample.id] = std::move(audio);
     }
@@ -163,8 +173,10 @@ void StretchCache::requestUpdateAsync(const Song& song, double sampleRate, Compl
             if (cancelRequested_.load() || jobId != currentJobId_.load())
                 return;
 
-            auto audio = getOrRender(sample, song.bpm(), sampleRate, 0,
-                                     effectiveKinds[sample.id.value], effectiveBars[sample.id.value]);
+            const auto kind = effectiveKinds[sample.id.value];
+            const int effSemi = song.effectiveClipTranspose(&sample, 0, kind);
+            auto audio = getOrRender(sample, song.bpm(), sampleRate, effSemi,
+                                     kind, effectiveBars[sample.id.value]);
             if (audio != nullptr)
                 bank[sample.id] = std::move(audio);
         }
@@ -178,13 +190,14 @@ void StretchCache::requestUpdateAsync(const Song& song, double sampleRate, Compl
                 const auto& trk = pat.tracks[t];
                 for (const auto& c : trk.clips)
                 {
-                    if (c.transposeSemitones != 0)
+                    if (const auto* s = song.findSample(c.sampleId))
                     {
-                        if (const auto* s = song.findSample(c.sampleId))
+                        const int effSemi = song.effectiveClipTranspose(s, c.transposeSemitones, kind);
+                        if (effSemi != 0)
                         {
                             if (cancelRequested_.load() || jobId != currentJobId_.load())
                                 return;
-                            getOrRender(*s, song.bpm(), sampleRate, c.transposeSemitones, kind, effectiveBars[s->id.value]);
+                            getOrRender(*s, song.bpm(), sampleRate, effSemi, kind, effectiveBars[s->id.value]);
                         }
                     }
                 }
@@ -224,7 +237,8 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
     }
 
     std::shared_ptr<const AudioData> raw;
-    const int bpmKey = (effectiveKind == SampleKind::OneShot) ? 0 : static_cast<int>(std::round(targetBpm * 10.0));
+    const bool isUnstretched = (effectiveKind == SampleKind::OneShot || effectiveKind == SampleKind::DiskStream);
+    const int bpmKey = isUnstretched ? 0 : static_cast<int>(std::round(targetBpm * 10.0));
     const int cycleKey = (effectiveKind == SampleKind::Loop) ? static_cast<int>(std::round(sample.loopCycleBeats() * 100.0)) : 0;
     CacheKey key{sample.id.value, semitones, bpmKey, cycleKey, static_cast<int>(std::round(sampleRate))};
 
@@ -235,8 +249,8 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
             return nullptr;
         raw = rawIt->second;
 
-        // One-shots with 0 transpose don't need stretching or pitching
-        if (effectiveKind == SampleKind::OneShot && semitones == 0)
+        // One-shots and DiskStream tracks with 0 transpose don't need stretching or pitching
+        if (isUnstretched && semitones == 0)
             return raw;
 
         // Loops at original tempo with 0 transpose don't need stretching or pitching
@@ -266,7 +280,7 @@ std::shared_ptr<const AudioData> StretchCache::getOrRender(const Sample& sample,
             ratio = origBpm / targetBpm;
     }
     const double pitchScale = std::pow(2.0, static_cast<double>(semitones) / 12.0);
-    AudioData resultAudio = (effectiveKind == SampleKind::OneShot)
+    AudioData resultAudio = isUnstretched
         ? TimeStretcher::resample(*raw, pitchScale)
         : TimeStretcher::stretch(*raw, ratio, sampleRate, pitchScale);
     auto rendered = std::make_shared<const AudioData>(std::move(resultAudio));

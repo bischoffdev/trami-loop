@@ -2,13 +2,55 @@
 
 #include "engine/AudioData.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace trami
 {
+
+struct PlaybackEnvelopeNode
+{
+    float positionNorm = 0.0f; ///< [0.0 .. 1.0] across the event duration
+    float value = 1.0f;
+    std::uint8_t curve = 0;    ///< 0 = Linear, 1 = Fast, 2 = Slow
+};
+
+inline constexpr int kMaxPlaybackEnvNodes = 16;
+
+inline float evaluatePlaybackEnvelope(const std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes>& nodes,
+                                      int count, float normPos, float defaultVal) noexcept
+{
+    if (count <= 0)
+        return defaultVal;
+    if (normPos <= nodes[0].positionNorm)
+        return nodes[0].value;
+    if (normPos >= nodes[static_cast<std::size_t>(count - 1)].positionNorm)
+        return nodes[static_cast<std::size_t>(count - 1)].value;
+
+    for (int i = 0; i + 1 < count; ++i)
+    {
+        const auto& p0 = nodes[static_cast<std::size_t>(i)];
+        const auto& p1 = nodes[static_cast<std::size_t>(i + 1)];
+        if (normPos >= p0.positionNorm && normPos <= p1.positionNorm)
+        {
+            const float span = p1.positionNorm - p0.positionNorm;
+            if (span <= 1e-6f)
+                return p1.value;
+            const float t = std::clamp((normPos - p0.positionNorm) / span, 0.0f, 1.0f);
+            float shaped = t;
+            if (p0.curve == 1)
+                shaped = std::sqrt(t);
+            else if (p0.curve == 2)
+                shaped = t * t;
+            return p0.value + shaped * (p1.value - p0.value);
+        }
+    }
+    return nodes[static_cast<std::size_t>(count - 1)].value;
+}
 
 /// One sample trigger at an exact position on the playback timeline.
 struct PlaybackEvent
@@ -24,6 +66,11 @@ struct PlaybackEvent
     std::int64_t fadeOutSamples = 0;
     std::uint32_t clipId = 0;
     bool reversed = false;
+    float fxSend = 0.0f;
+    std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> volEnv{};
+    int volEnvCount = 0;
+    std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> panEnv{};
+    int panEnvCount = 0;
 };
 
 struct TrackMixSnapshot

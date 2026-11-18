@@ -15,6 +15,7 @@ struct AcidMetadata
 {
     bool isAcidized = false;
     bool isOneShot = false;
+    bool isDiskBased = false;
     bool hasRootNote = false;
     int rootNote = -1;            ///< MIDI root note (0-127), e.g. 60 = C4; -1 if not set.
     int numBeats = 4;             ///< Number of musical beats in the loop.

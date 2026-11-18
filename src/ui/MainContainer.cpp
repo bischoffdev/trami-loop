@@ -298,7 +298,8 @@ void MainContainer::openProjectDialog()
         initialLoc = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
 
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        "Open project (*.trami, *.acd, *.acd-zip)", initialLoc, "*.trami;*.acd;*.acd-zip", true);
+        "Open project (*.trami, *.acd, *.acd-zip, *.acp, *.acp-zip)", initialLoc,
+        "*.trami;*.acd;*.acd-zip;*.acp;*.acp-zip", true);
 
     fileChooser_->launchAsync(
         juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
@@ -311,18 +312,19 @@ void MainContainer::openProjectDialog()
                 // Check if chosen file is an ACID project (.acd or .acd-zip)
                 if (AcidProjectReader::isAcidProject(chosen))
                 {
+                    if (engine_.recorder().state() != RecordState::Idle)
+                        engine_.recorder().stop();
+                    engine_.sequencer().requestPlaying(false);
+                    engine_.sequencer().requestRewind();
+                    engine_.sequencer().stopPreview();
+
                     std::filesystem::path extractedDir;
                     if (auto loaded = AcidProjectReader::loadProject(chosen, stretchCache_, importer_, engine_.sampleRate(), &extractedDir))
                     {
-                        if (engine_.recorder().state() != RecordState::Idle)
-                            engine_.recorder().stop();
-
-                        engine_.sequencer().requestPlaying(false);
-                        engine_.sequencer().requestRewind();
-
                         song_ = std::move(*loaded);
                         currentProjectDir_ = extractedDir.empty() ? chosen.parent_path() : extractedDir;
                         history_.clear();
+                        engine_.sequencer().resetTrackMix();
                         engine_.sequencer().setMasterVolume(song_.masterVolume());
                         if (patternView_ != nullptr)
                         {
@@ -339,7 +341,7 @@ void MainContainer::openProjectDialog()
                             {
                                 if (const auto* s = song_.findSample(trk.sampleId))
                                 {
-                                    if (s->durationSeconds <= 0.0)
+                                    if (s->missing || s->durationSeconds <= 0.0)
                                         missingAudio++;
                                 }
                             }
@@ -371,17 +373,18 @@ void MainContainer::openProjectDialog()
                     projectPath = chosen;
                 }
 
+                if (engine_.recorder().state() != RecordState::Idle)
+                    engine_.recorder().stop();
+                engine_.sequencer().requestPlaying(false);
+                engine_.sequencer().requestRewind();
+                engine_.sequencer().stopPreview();
+
                 if (auto loaded = ProjectSerializer::loadProject(projectPath, stretchCache_, importer_, engine_.sampleRate()))
                 {
-                    if (engine_.recorder().state() != RecordState::Idle)
-                        engine_.recorder().stop();
-
-                    engine_.sequencer().requestPlaying(false);
-                    engine_.sequencer().requestRewind();
-
                     song_ = std::move(*loaded);
                     currentProjectDir_ = std::filesystem::is_directory(projectPath) ? projectPath : projectPath.parent_path();
                     history_.clear();
+                    engine_.sequencer().resetTrackMix();
                     engine_.sequencer().setMasterVolume(song_.masterVolume());
                     if (patternView_ != nullptr)
                     {

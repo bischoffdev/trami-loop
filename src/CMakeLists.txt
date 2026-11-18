@@ -38,6 +38,7 @@ target_sources(TramiLoop PRIVATE
     ui/IconButton.cpp
     ui/PatternGrid.cpp
     ui/TrackHeader.cpp
+    ui/TrackPropertiesDialog.cpp
     ui/SampleBrowserPanel.cpp
     ui/PatternView.cpp
     ui/ArrangerGrid.cpp

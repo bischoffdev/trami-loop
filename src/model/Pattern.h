@@ -14,6 +14,41 @@ namespace trami
 
 inline constexpr int kTracksPerPattern = 32;
 
+/// Segment interpolation curve for multi-point ACID-style breakpoint envelopes.
+enum class EnvelopeCurve
+{
+    Linear = 0,
+    Fast = 1, ///< Logarithmic / fast attack
+    Slow = 2  ///< Exponential / slow attack
+};
+
+/// A single breakpoint node on a clip or track envelope.
+struct EnvelopePoint
+{
+    double position = 0.0; ///< Normalized [0.0 .. 1.0] on a Clip, or step position [0 .. lengthSteps] on a Track.
+    float value = 1.0f;    ///< Gain [0.0 .. 2.0], Pan [-1.0 .. +1.0], or FX Send [0.0 .. 1.0].
+    EnvelopeCurve curve = EnvelopeCurve::Linear;
+};
+
+enum class TrackEnvelopeType
+{
+    None = 0,
+    Volume = 1,
+    Pan = 2,
+    FxSend = 3
+};
+
+/// Evaluates a sorted breakpoint envelope at `pos`, returning `defaultVal` if `points` is empty.
+float evaluateEnvelope(const std::vector<EnvelopePoint>& points, double pos, float defaultVal) noexcept;
+
+/// Named timeline marker / section anchor on a pattern ruler.
+struct TimelineMarker
+{
+    int id = 0;
+    double step = 0.0;
+    std::string name;
+};
+
 /// A sample placed on a pattern track at a grid step (supports fractional steps for unconstrained resizing/moving).
 struct Clip
 {
@@ -27,6 +62,8 @@ struct Clip
     float fadeOutSteps = 0.0f;   ///< Fade-out duration in steps (0 = no fade).
     bool reversed = false;       ///< When true, audio plays in reverse.
     int transposeSemitones = 0;  ///< Transposition in semitones (-48 .. +48).
+    std::vector<EnvelopePoint> volumeEnvelope; ///< Optional multi-point volume envelope across [0..1] of clip.
+    std::vector<EnvelopePoint> panEnvelope;    ///< Optional multi-point pan envelope [-1..+1] across [0..1] of clip.
 };
 
 /// Temporary clip override state during real-time dragging, resizing, or envelope adjustments.
@@ -85,6 +122,12 @@ struct PatternTrack
     TrackMix mix;
     bool muted = false;
     bool solo = false;
+    bool armed = false;
+    float fxSend = 0.0f; ///< Aux FX send level [0.0 .. 1.0].
+    TrackEnvelopeType visibleEnvelope = TrackEnvelopeType::None;
+    std::vector<EnvelopePoint> volumeAutomation; ///< Position in steps.
+    std::vector<EnvelopePoint> panAutomation;    ///< Position in steps.
+    std::vector<EnvelopePoint> fxAutomation;     ///< Position in steps.
     SampleId sampleId;
     std::optional<SampleKind> kindOverride;
     std::vector<Clip> clips;
@@ -97,6 +140,7 @@ struct Pattern
     std::string name;
     int lengthBars = 1;
     std::vector<PatternTrack> tracks{1};
+    std::vector<TimelineMarker> markers;
 
     int lengthSteps() const noexcept;
     PatternTrack& track() noexcept { return tracks.front(); }

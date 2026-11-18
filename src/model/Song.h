@@ -21,10 +21,17 @@ public:
     double bpm() const noexcept { return bpm_; }
     double swing() const noexcept { return swing_; }
     float masterVolume() const noexcept { return masterVolume_; }
+    int projectRootNote() const noexcept { return projectRootNote_; }
 
     void setBpm(double bpm) noexcept;
     void setSwing(double swing) noexcept;
     void setMasterVolume(float volume) noexcept;
+    void setProjectRootNote(int rootNote) noexcept;
+
+    /// Returns total transpose in semitones combining master project key conforming (for Loops with a rootNote)
+    /// and the clip's individual transposeSemitones.
+    int effectiveClipTranspose(const Sample* sample, int clipTransposeSemitones, SampleKind trackKind) const noexcept;
+    double defaultClipSpanSteps(const Clip& clip, int trackIndex, PatternId patternId) const noexcept;
 
     // --- Samples -------------------------------------------------------------
     SampleId addSample(Sample sample);
@@ -49,6 +56,8 @@ public:
                                     double lengthSteps = 0.0, double offsetSteps = 0.0);
     bool resizeClip(PatternId pattern, ClipId clip, double newStartStep, double newLengthSteps, double newOffsetSteps);
     bool setClipEnvelope(PatternId pattern, ClipId clip, float gain, float fadeInSteps, float fadeOutSteps);
+    bool setClipVolumeEnvelope(PatternId pattern, ClipId clip, std::vector<EnvelopePoint> points);
+    bool setClipPanEnvelope(PatternId pattern, ClipId clip, std::vector<EnvelopePoint> points);
     bool setClipReversed(PatternId pattern, ClipId clip, bool reversed);
     bool isClipReversed(PatternId pattern, ClipId clip) const noexcept;
     bool setClipTranspose(PatternId pattern, ClipId clip, int semitones);
@@ -58,6 +67,14 @@ public:
     bool moveClip(PatternId pattern, ClipId clip, int newTrack, double newStartStep);
     bool moveClipBetweenPatterns(PatternId fromPattern, PatternId toPattern, ClipId clip, double newStartStep);
     bool removeClip(PatternId pattern, ClipId clip);
+    std::optional<std::pair<ClipId, ClipId>> splitClip(PatternId pattern, ClipId clip, double splitStep);
+    std::optional<ClipId> joinClips(PatternId pattern, const std::vector<ClipId>& clipIds);
+    bool setTrackAutomation(PatternId pattern, int trackIndex, TrackEnvelopeType type, std::vector<EnvelopePoint> points);
+    bool setTrackFxSend(PatternId pattern, int trackIndex, float fxSend);
+    int addMarker(PatternId pattern, double step, std::string name);
+    bool moveMarker(PatternId pattern, int markerId, double newStep);
+    bool renameMarker(PatternId pattern, int markerId, std::string newName);
+    bool removeMarker(PatternId pattern, int markerId);
     bool setPatternTrackSample(PatternId pattern, int track, SampleId sample);
     bool replaceTrackSample(PatternId pattern, int track, SampleId newSampleId);
     SampleId patternTrackSample(PatternId pattern, int track) const noexcept;
@@ -107,6 +124,7 @@ private:
     double bpm_ = 120.0;
     double swing_ = 0.0;
     float masterVolume_ = 1.0f;
+    int projectRootNote_ = -1; ///< -1 = None / No master key, 0..127 = MIDI note / pitch class.
     float patternZoomX_ = 1.0f;
     float patternZoomY_ = 1.0f;
     float arrangerZoomX_ = 1.0f;
