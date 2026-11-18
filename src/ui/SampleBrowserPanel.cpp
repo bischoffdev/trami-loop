@@ -1,5 +1,7 @@
 #include "ui/SampleBrowserPanel.h"
 
+#include "engine/TimeStretcher.h"
+#include "model/Timing.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <algorithm>
@@ -105,6 +107,11 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     autoPreviewToggle_.setTooltip("Automatically play samples on selection");
     addAndMakeVisible(autoPreviewToggle_);
 
+    syncPreviewToggle_.setColour(juce::ToggleButton::textColourId, Palette::accent);
+    syncPreviewToggle_.setToggleState(true, juce::dontSendNotification);
+    syncPreviewToggle_.setTooltip("ACID In-Sync Auditioning: Time-stretch loops to project BPM, conform to project Key, and beat-sync preview when playing");
+    addAndMakeVisible(syncPreviewToggle_);
+
     previewButton_.setTooltip("Preview selected sample (Space)");
     previewButton_.onClick = [this]() { previewCurrentSelection(); };
     addAndMakeVisible(previewButton_);
@@ -135,6 +142,19 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
     };
     addAndMakeVisible(addOneShotButton_);
 
+    addDiskButton_.setTooltip("Add as Disk-Based Stream Track (for long audio files)");
+    addDiskButton_.onClick = [this]() {
+        const auto file = fileTree_->getSelectedFile();
+        if (file.existsAsFile() && importer_.isSupportedFormat(file.getFullPathName().toStdString()))
+        {
+            if (onAddToNewTrack_)
+                onAddToNewTrack_(file.getFullPathName(), SampleKind::DiskStream);
+            else
+                importCurrentSelection(SampleKind::DiskStream);
+        }
+    };
+    addAndMakeVisible(addDiskButton_);
+
     startTimerHz(20);
 }
 
@@ -158,17 +178,41 @@ void SampleBrowserPanel::selectionChanged()
             const auto filePath = file.getFullPathName().toStdString();
             fileNameLabel_.setText(file.getFileName(), juce::dontSendNotification);
 
-            // Load audio data for live waveform preview
+            // Load audio data and ACID metadata for live waveform preview
+            selectedAcidMeta_ = AcidChunkReader::readFromFile(filePath);
             auto audioOpt = importer_.loadAudioData(filePath, engine_.sampleRate());
             if (audioOpt.has_value())
             {
                 selectedAudio_ = std::make_shared<const AudioData>(std::move(*audioOpt));
                 previewDuration_ = static_cast<double>(selectedAudio_->numFrames()) / engine_.sampleRate();
+                juce::String acidInfo;
+                if (selectedAcidMeta_.has_value() && selectedAcidMeta_->isAcidized)
+                {
+                    if (selectedAcidMeta_->isDiskBased)
+                    {
+                        acidInfo = "  |  ACID Disk-Based";
+                    }
+                    else if (selectedAcidMeta_->isOneShot)
+                    {
+                        acidInfo = "  |  ACID One-Shot";
+                    }
+                    else
+                    {
+                        const double trueBpm = (selectedAcidMeta_->numBeats > 0 && previewDuration_ > 0.0)
+                            ? ((static_cast<double>(selectedAcidMeta_->numBeats) * 60.0) / previewDuration_)
+                            : selectedAcidMeta_->tempo;
+                        acidInfo = "  |  ACID Loop (" + juce::String(selectedAcidMeta_->numBeats) + " beats, " +
+                                   juce::String(trueBpm, 1) + " BPM";
+                        if (selectedAcidMeta_->rootNote >= 0)
+                            acidInfo += juce::String(", Key: ") + Sample::pitchClassName(selectedAcidMeta_->rootNote);
+                        acidInfo += ")";
+                    }
+                }
                 fileDetailsLabel_.setText(
                     juce::String(previewDuration_, 2) + "s  |  " +
                     juce::String(static_cast<int>(engine_.sampleRate())) + " Hz  |  " +
                     (selectedAudio_->numChannels() == 2 ? "Stereo" : "Mono") +
-                    "  |  Drag onto any track above",
+                    acidInfo,
                     juce::dontSendNotification);
             }
             else
@@ -373,29 +417,76 @@ void SampleBrowserPanel::previewCurrentSelection()
         return;
     }
 
-    if (selectedAudio_ != nullptr && selectedAudio_->numFrames() > 0 && currentPreviewPath_ == filePath)
+    if (selectedAudio_ == nullptr || selectedAudio_->numFrames() == 0 || currentPreviewPath_ != filePath)
     {
-        previewProgress_ = 0.0;
-        previewButton_.setIcon(IconButton::Icon::Stop);
-        previewButton_.setLabel("Stop");
-        previewButton_.setToggleState(true, juce::dontSendNotification);
-        engine_.sequencer().triggerPreview(selectedAudio_);
-        return;
+        selectedAcidMeta_ = AcidChunkReader::readFromFile(filePath);
+        auto audioOpt = importer_.loadAudioData(filePath, engine_.sampleRate());
+        if (!audioOpt.has_value())
+            return;
+        selectedAudio_ = std::make_shared<const AudioData>(std::move(*audioOpt));
     }
 
-    auto audioOpt = importer_.loadAudioData(filePath, engine_.sampleRate());
-    if (audioOpt.has_value())
+    currentPreviewPath_ = filePath;
+    const double rawDur = static_cast<double>(selectedAudio_->numFrames()) / engine_.sampleRate();
+    std::shared_ptr<const AudioData> audioToPlay = selectedAudio_;
+    int startDelaySamples = 0;
+    bool loopPreview = false;
+
+    const bool hasAcid = (selectedAcidMeta_.has_value() && selectedAcidMeta_->isAcidized);
+    const bool isLoopCandidate = hasAcid
+        ? (!selectedAcidMeta_->isOneShot && !selectedAcidMeta_->isDiskBased)
+        : (rawDur >= 0.35 && rawDur <= 16.0);
+
+    if (syncPreviewToggle_.getToggleState() && isLoopCandidate && rawDur > 0.05 && song_.bpm() > 20.0)
     {
-        currentPreviewPath_ = filePath;
-        selectedAudio_ = std::make_shared<const AudioData>(std::move(*audioOpt));
-        previewDuration_ = static_cast<double>(selectedAudio_->numFrames()) / engine_.sampleRate();
-        previewProgress_ = 0.0;
-        previewButton_.setIcon(IconButton::Icon::Stop);
-        previewButton_.setLabel("Stop");
-        previewButton_.setToggleState(true, juce::dontSendNotification);
-        engine_.sequencer().triggerPreview(selectedAudio_);
-        repaint();
+        double loopBeats = 4.0;
+        if (hasAcid && selectedAcidMeta_->numBeats > 0)
+        {
+            loopBeats = static_cast<double>(selectedAcidMeta_->numBeats);
+        }
+        else
+        {
+            const double secPerBeat = 60.0 / song_.bpm();
+            const double estBeats = rawDur / secPerBeat;
+            if (estBeats < 1.5) loopBeats = 1.0;
+            else if (estBeats < 3.0) loopBeats = 2.0;
+            else if (estBeats < 6.0) loopBeats = 4.0;
+            else if (estBeats < 12.0) loopBeats = 8.0;
+            else loopBeats = 16.0;
+        }
+
+        const double origBpm = (loopBeats * 60.0) / rawDur;
+        const double ratio = (origBpm > 20.0 && origBpm < 300.0) ? (origBpm / song_.bpm()) : 1.0;
+        const int semitones = hasAcid
+            ? Sample::keyConformSemitones(selectedAcidMeta_->rootNote, song_.projectRootNote())
+            : 0;
+        const double pitchScale = std::pow(2.0, static_cast<double>(semitones) / 12.0);
+
+        if (std::abs(ratio - 1.0) > 0.002 || semitones != 0)
+        {
+            AudioData stretched = TimeStretcher::stretch(*selectedAudio_, ratio, engine_.sampleRate(), pitchScale);
+            audioToPlay = std::make_shared<const AudioData>(std::move(stretched));
+        }
+
+        if (engine_.sequencer().isPlaying())
+        {
+            loopPreview = true;
+            const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
+            const std::int64_t samplesPerBeat = std::max<std::int64_t>(1, std::llround(timing.samplesPerStep() * kStepsPerBeat));
+            const std::int64_t pos = engine_.sequencer().position();
+            const std::int64_t rem = pos % samplesPerBeat;
+            if (rem > 64)
+                startDelaySamples = static_cast<int>(samplesPerBeat - rem);
+        }
     }
+
+    previewDuration_ = static_cast<double>(audioToPlay->numFrames()) / engine_.sampleRate();
+    previewProgress_ = 0.0;
+    previewButton_.setIcon(IconButton::Icon::Stop);
+    previewButton_.setLabel("Stop");
+    previewButton_.setToggleState(true, juce::dontSendNotification);
+    engine_.sequencer().triggerPreview(audioToPlay, startDelaySamples, loopPreview);
+    repaint();
 }
 
 void SampleBrowserPanel::timerCallback()
@@ -413,11 +504,9 @@ void SampleBrowserPanel::timerCallback()
             repaint();
         }
     }
-    else if (previewDuration_ > 0.0)
+    else
     {
-        previewProgress_ += 1.0 / (20.0 * previewDuration_);
-        if (previewProgress_ > 1.0)
-            previewProgress_ = 1.0;
+        previewProgress_ = std::clamp(engine_.sequencer().previewProgress(), 0.0, 1.0);
         repaint();
     }
 }
@@ -560,13 +649,17 @@ void SampleBrowserPanel::resized()
     rightArea.removeFromTop(4);
 
     auto controlBar = rightArea.removeFromBottom(46);
-    previewButton_.setBounds(controlBar.removeFromLeft(80).reduced(0, 4));
+    previewButton_.setBounds(controlBar.removeFromLeft(74).reduced(0, 4));
+    controlBar.removeFromLeft(6);
+    autoPreviewToggle_.setBounds(controlBar.removeFromLeft(102).reduced(0, 8));
+    controlBar.removeFromLeft(6);
+    syncPreviewToggle_.setBounds(controlBar.removeFromLeft(118).reduced(0, 8));
     controlBar.removeFromLeft(10);
-    autoPreviewToggle_.setBounds(controlBar.removeFromLeft(110).reduced(0, 8));
-    controlBar.removeFromLeft(16);
-    addLoopButton_.setBounds(controlBar.removeFromLeft(140).reduced(0, 4));
-    controlBar.removeFromLeft(10);
-    addOneShotButton_.setBounds(controlBar.removeFromLeft(160).reduced(0, 4));
+    addLoopButton_.setBounds(controlBar.removeFromLeft(112).reduced(0, 4));
+    controlBar.removeFromLeft(6);
+    addOneShotButton_.setBounds(controlBar.removeFromLeft(126).reduced(0, 4));
+    controlBar.removeFromLeft(6);
+    addDiskButton_.setBounds(controlBar.removeFromLeft(112).reduced(0, 4));
 
     waveformRect_ = rightArea.reduced(0, 2);
 }

@@ -641,6 +641,31 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
         });
     };
 
+    // Master Project Key selector
+    keyCombo_.setTooltip("Master Project Key (ACID automatic loop key conforming)");
+    keyCombo_.addItem("Key: Off", 100);
+    static constexpr const char* kPitchNames[12] = {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+    for (int i = 0; i < 12; ++i)
+        keyCombo_.addItem(juce::String("Key: ") + kPitchNames[i], i + 1);
+    keyCombo_.setSelectedId(100, juce::dontSendNotification);
+    keyCombo_.onChange = [this]() {
+        const int id = keyCombo_.getSelectedId();
+        if (id == 100)
+            song_.setProjectRootNote(-1);
+        else if (id >= 1 && id <= 12)
+            song_.setProjectRootNote(60 + (id - 1));
+        if (onModelModified_)
+            onModelModified_();
+        if (onShowToast_)
+        {
+            const int rn = song_.projectRootNote();
+            onShowToast_(rn >= 0 ? ("Master Key: " + juce::String(Sample::pitchClassName(rn))) : "Master Key Conforming: OFF");
+        }
+    };
+    addAndMakeVisible(keyCombo_);
+
     updateDisplay();
     startTimerHz(30);
 }
@@ -745,6 +770,8 @@ void TransportBar::updateDisplay()
         swingSlider_->setTooltip("Swing Groove: " + pctStr + " (Double-click: 0%, Right-click: Presets)");
     }
     metroButton_.setToggleState(engine_.sequencer().isMetronomeEnabled(), juce::dontSendNotification);
+    const int rn = song_.projectRootNote();
+    keyCombo_.setSelectedId(rn >= 0 ? ((rn % 12) + 1) : 100, juce::dontSendNotification);
     repaint();
 }
 
@@ -963,6 +990,10 @@ void TransportBar::resized()
         swingLabel_->setBounds(swingBoxX + 2, barY + 12, 46, barH - 14);
     if (swingSlider_ != nullptr)
         swingSlider_->setBounds(swingBoxX + 53, barY + 6, 62, barH - 12);
+
+    // Master Key selector
+    const int keyBoxX = swingBoxX + 120 + 6;
+    keyCombo_.setBounds(keyBoxX, barY, 76, barH);
 }
 
 void TransportBar::timerCallback()

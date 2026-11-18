@@ -39,6 +39,17 @@ public:
     void clipResized(ClipId clipId, double newStartStep, double newLengthSteps, double newOffsetSteps) override;
     void clipsResized(const std::vector<PatternGrid::ClipResizeInfo>& resizes) override;
     void clipEnvelopeChanged(ClipId clipId, float gain, float fadeInSteps, float fadeOutSteps) override;
+    void clipVolumeEnvelopeChanged(ClipId clipId, std::vector<EnvelopePoint> points) override;
+    void clipPanEnvelopeChanged(ClipId clipId, std::vector<EnvelopePoint> points) override;
+    void trackAutomationChanged(int track, TrackEnvelopeType type, std::vector<EnvelopePoint> points) override;
+    void clipSplitRequested(const std::vector<ClipId>& clipIds, double splitStep) override;
+    void clipsJoinRequested(const std::vector<ClipId>& clipIds) override;
+    void clipPainted(int track, double startStep, double lengthSteps) override;
+    void markerAddRequested(double step) override;
+    void markerMoved(int markerId, double newStep) override;
+    void markerRenameRequested(int markerId) override;
+    void markerDeleteRequested(int markerId) override;
+    void tabLoopToMarkerSection(int direction) override;
     void clipReverseRequested(ClipId clipId) override;
     void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
     void clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones) override;
@@ -164,6 +175,7 @@ private:
     PatternId currentPattern_;
     SampleId activeSample_;
     SampleBank activeBank_;
+    std::uint64_t republishGeneration_ = 0;
     SampleImporter importer_;
     PushUndoCallback onPushUndo_;
     std::function<void(int, int)> onLoopRegionChanged_;
@@ -186,6 +198,17 @@ private:
 
     IconButton addTrackButton_{"AddTrack", IconButton::Icon::Plus, "+ Track"};
     IconButton followToggle_{"Follow", IconButton::Icon::Follow, "Follow"};
+
+    // Edit Tool & Action buttons
+    juce::TextButton selectToolButton_{"Select (V)"};
+    juce::TextButton paintToolButton_{"Paint (P)"};
+    juce::TextButton eraseToolButton_{"Erase (E)"};
+    juce::TextButton splitButton_{"Split (S)"};
+    juce::TextButton joinButton_{"Join (J)"};
+    juce::TextButton markerButton_{"+ Marker (M)"};
+
+    double recordStartStep_ = 0.0;
+    void setActiveTool(PatternGrid::EditTool tool);
 
     bool followPlayhead_ = true;
     bool showBrowser_ = true;

@@ -130,6 +130,9 @@ private:
     std::unique_ptr<SwingLabel> swingLabel_;
     class SwingSlider;
     std::unique_ptr<SwingSlider> swingSlider_;
+
+    // Master Project Key selector (ACID automatic key conforming)
+    juce::ComboBox keyCombo_;
 };
 
 } // namespace trami

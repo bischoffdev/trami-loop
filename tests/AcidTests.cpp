@@ -226,7 +226,10 @@ TEST_CASE("AcidProjectReader identifies ACID files and loads .acd and .acd-zip")
 {
     REQUIRE(AcidProjectReader::isAcidProject("project.acd"));
     REQUIRE(AcidProjectReader::isAcidProject("song.acd-zip"));
+    REQUIRE(AcidProjectReader::isAcidProject("project.acp"));
+    REQUIRE(AcidProjectReader::isAcidProject("song.acp-zip"));
     REQUIRE(AcidProjectReader::isAcidProject("track.ACD"));
+    REQUIRE(AcidProjectReader::isAcidProject("track.ACP"));
     REQUIRE_FALSE(AcidProjectReader::isAcidProject("song.wav"));
     REQUIRE_FALSE(AcidProjectReader::isAcidProject("song.trami"));
 
@@ -998,4 +1001,487 @@ TEST_CASE("AcidProjectReader correctly handles sub-bar 2-beat loops like tambu")
 
     std::filesystem::remove_all(testDir);
 }
+
+TEST_CASE("AcidProjectReader handles 768 PPQN tmap, sample frame offsets, xlst gains, and marks missing files without loading random files")
+{
+    const auto testDir = std::filesystem::temp_directory_path() / "trami_acid_authentic_768_test";
+    std::filesystem::remove_all(testDir);
+    std::filesystem::create_directories(testDir);
+
+    // Create project directory files:
+    // 1. beat2.wav (4 beats, 112618 samples at 44100 Hz = 93.9814 BPM)
+    const auto beat2Wav = testDir / "beat2.wav";
+    createSyntheticAcidWav(beat2Wav, false, 4, 4, 4, 93.9814f, 60, 112618);
+
+    // 2. gong.wav (One-Shot, flags=0x01, 32 beats stored in acid chunk, 88200 samples = 2.0s)
+    const auto gongWav = testDir / "gong.wav";
+    createSyntheticAcidWav(gongWav, true, 32, 4, 4, 94.92f, 60, 88200);
+
+    // 3. Random unreferenced file in the same project directory (e.g. git.wav and beat.wav)
+    // These must NOT be loaded in place of missing tracks (like git_arpeggio.wav or beat_missing.wav)
+    const auto randomGitWav = testDir / "git.wav";
+    createSyntheticAcidWav(randomGitWav, false, 4, 4, 4, 120.0f, 60, 88200);
+
+    const auto acpFile = testDir / "session.acp";
+
+    // Build tmap with authentic 768 PPQN (3072 ticks/bar, 96 ticks/step) and 100 BPM (600,000 us/beat)
+    std::vector<uint8_t> tmapPayload(20, 0);
+    uint32_t tmapSize = 20;
+    uint32_t ppqn = 768;
+    uint32_t usPerBeat = 600000;
+    uint32_t projRoot = 57;
+    std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+    std::memcpy(tmapPayload.data() + 4, &ppqn, 4);
+    std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+    std::memcpy(tmapPayload.data() + 12, &projRoot, 4);
+
+    // Track 0: beat2.wav (present in project dir, originally at G:\aldi\beat2.wav)
+    // 16-beat loop here (4 bars) to test sampleOffsetFrames = 3/4 of 112618 = 84463
+    std::vector<uint8_t> trak0Payload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52;
+        uint32_t trkType = 1; // Loop
+        uint32_t totalSamples = 112618;
+        std::memcpy(trkhPayload.data() + 0, &hdrSz, 4);
+        std::memcpy(trkhPayload.data() + 4, &trkType, 4);
+        std::memcpy(trkhPayload.data() + 16, &totalSamples, 4);
+        std::u16string s1 = u"G:\\aldi\\beat2.wav";
+        std::u16string s2 = u"beat2";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trak0Payload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> acidPayload(24, 0);
+        uint32_t flags = 0;
+        uint32_t beats = 16; // 4 bars = 128 steps
+        uint16_t denom = 4, numer = 4;
+        float tempo = 93.9814f;
+        std::memcpy(acidPayload.data() + 0, &flags, 4);
+        std::memcpy(acidPayload.data() + 12, &beats, 4);
+        std::memcpy(acidPayload.data() + 16, &denom, 2);
+        std::memcpy(acidPayload.data() + 18, &numer, 2);
+        std::memcpy(acidPayload.data() + 20, &tempo, 4);
+        writeChunk(trak0Payload, "acid", acidPayload);
+
+        // Track xlst/gain: volume = 0.72f, pan = -0.25f
+        std::vector<uint8_t> xlstPayload;
+        std::vector<uint8_t> gainPayload(20, 0);
+        std::memcpy(gainPayload.data(), "gain", 4);
+        float vol = 0.72f, pan = -0.25f;
+        std::memcpy(gainPayload.data() + 12, &vol, 4);
+        std::memcpy(gainPayload.data() + 16, &pan, 4);
+        writeChunk(xlstPayload, "gain", gainPayload);
+        writeList(trak0Payload, "xlst", xlstPayload);
+
+        // Region at bar 1 (3072 ticks = step 32) to bar 3 (9216 ticks = step 96, length 2 bars = 64 steps)
+        // with sampleOffsetFrames = 84463 (75% of 112618 -> 96 steps offset into the 128-step loop)
+        // and region envelope gain = 0.5f
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36, startTicks = 3072, endTicks = 9216, sampleOff = 84463;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        std::memcpy(rgnhPayload.data() + 16, &sampleOff, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+
+        std::vector<uint8_t> rgnXlst;
+        std::vector<uint8_t> envPayload(32, 0);
+        std::memcpy(envPayload.data(), " env", 4);
+        uint32_t envType = 0, numPts = 1;
+        float envGain = 0.5f;
+        std::memcpy(envPayload.data() + 12, &envType, 4);
+        std::memcpy(envPayload.data() + 16, &numPts, 4);
+        std::memcpy(envPayload.data() + 24, &envGain, 4);
+        writeChunk(rgnXlst, " env", envPayload);
+        writeList(rgnPayload, "xlst", rgnXlst);
+
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trak0Payload, "rlst", rlstPayload);
+    }
+
+    // Track 1: Missing external loop "R:\Loops\Guitars\git_arpeggio.wav" (must NOT match git.wav!)
+    std::vector<uint8_t> trak1Payload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52, trkType = 1, totalSamples = 454884;
+        std::memcpy(trkhPayload.data() + 0, &hdrSz, 4);
+        std::memcpy(trkhPayload.data() + 4, &trkType, 4);
+        std::memcpy(trkhPayload.data() + 16, &totalSamples, 4);
+        std::u16string s1 = u"R:\\Loops\\Guitars\\git_arpeggio.wav";
+        std::u16string s2 = u"git_arpeggio";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trak1Payload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> acidPayload(24, 0);
+        uint32_t flags = 0x02, beats = 16;
+        uint16_t root = 57, denom = 4, numer = 4;
+        float tempo = 93.07f;
+        std::memcpy(acidPayload.data() + 0, &flags, 4);
+        std::memcpy(acidPayload.data() + 4, &root, 2);
+        std::memcpy(acidPayload.data() + 12, &beats, 4);
+        std::memcpy(acidPayload.data() + 16, &denom, 2);
+        std::memcpy(acidPayload.data() + 18, &numer, 2);
+        std::memcpy(acidPayload.data() + 20, &tempo, 4);
+        writeChunk(trak1Payload, "acid", acidPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36, startTicks = 0, endTicks = 6144;
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trak1Payload, "rlst", rlstPayload);
+    }
+
+    // Track 2: gong.wav One-Shot (flags=1, trkType=4) with region longer than sample duration
+    std::vector<uint8_t> trak2Payload;
+    {
+        std::vector<uint8_t> trkhPayload(52, 0);
+        uint32_t hdrSz = 52, trkType = 4, totalSamples = 88200;
+        std::memcpy(trkhPayload.data() + 0, &hdrSz, 4);
+        std::memcpy(trkhPayload.data() + 4, &trkType, 4);
+        std::memcpy(trkhPayload.data() + 16, &totalSamples, 4);
+        std::u16string s1 = u"G:\\aldi\\gong.wav";
+        std::u16string s2 = u"gong";
+        const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
+        const uint8_t* p2 = reinterpret_cast<const uint8_t*>(s2.data());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.length() + 1) * 2);
+        writeChunk(trak2Payload, "trkh", trkhPayload);
+
+        std::vector<uint8_t> acidPayload(24, 0);
+        uint32_t flags = 0x01, beats = 32;
+        uint16_t root = 60, denom = 4, numer = 4;
+        float tempo = 94.92f;
+        std::memcpy(acidPayload.data() + 0, &flags, 4);
+        std::memcpy(acidPayload.data() + 4, &root, 2);
+        std::memcpy(acidPayload.data() + 12, &beats, 4);
+        std::memcpy(acidPayload.data() + 16, &denom, 2);
+        std::memcpy(acidPayload.data() + 18, &numer, 2);
+        std::memcpy(acidPayload.data() + 20, &tempo, 4);
+        writeChunk(trak2Payload, "acid", acidPayload);
+
+        std::vector<uint8_t> rlstPayload;
+        std::vector<uint8_t> rgnPayload;
+        std::vector<uint8_t> rgnhPayload(36, 0);
+        int32_t rgnSz = 36, startTicks = 0, endTicks = 12288; // 4 bars (128 steps), longer than 2.0s one-shot
+        std::memcpy(rgnhPayload.data() + 0, &rgnSz, 4);
+        std::memcpy(rgnhPayload.data() + 4, &startTicks, 4);
+        std::memcpy(rgnhPayload.data() + 8, &endTicks, 4);
+        writeChunk(rgnPayload, "rgnh", rgnhPayload);
+        writeList(rlstPayload, "rgn ", rgnPayload);
+        writeList(trak2Payload, "rlst", rlstPayload);
+    }
+
+    std::vector<uint8_t> tlstPayload;
+    writeList(tlstPayload, "trak", trak0Payload);
+    writeList(tlstPayload, "trak", trak1Payload);
+    writeList(tlstPayload, "trak", trak2Payload);
+
+    std::vector<uint8_t> riffPayload;
+    riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
+    writeChunk(riffPayload, "tmap", tmapPayload);
+    writeList(riffPayload, "tlst", tlstPayload);
+
+    {
+        std::ofstream out(acpFile, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riffPayload.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riffPayload.data()), riffPayload.size());
+    }
+
+    StretchCache cache;
+    SampleImporter importer;
+    auto songOpt = AcidProjectReader::loadProject(acpFile, cache, importer, 44100.0);
+    REQUIRE(songOpt.has_value());
+
+    const auto& song = *songOpt;
+    REQUIRE(song.bpm() == Catch::Approx(100.0));
+    // Only the 3 referenced tracks' samples exist; unreferenced git.wav was NOT added
+    REQUIRE(song.samples().size() == 3);
+
+    const auto& pat = song.patterns().front();
+    // Max endTicks = 12288 at 3072 ticks/bar = 4 bars
+    REQUIRE(pat.lengthBars == 4);
+    REQUIRE(pat.tracks.size() == 3);
+
+    // Track 0: beat2.wav matched in project dir
+    const auto* s0 = song.findSample(pat.tracks[0].sampleId);
+    REQUIRE(s0 != nullptr);
+    CHECK(s0->missing == false);
+    CHECK(s0->fileName == "beat2.wav");
+    CHECK(song.patternTrackKind(pat.id, 0) == SampleKind::Loop);
+    CHECK(pat.tracks[0].mix.volume == Catch::Approx(0.72f));
+    CHECK(pat.tracks[0].mix.pan == Catch::Approx(-0.25f));
+    REQUIRE(pat.tracks[0].clips.size() == 1);
+    CHECK(pat.tracks[0].clips[0].startStep == Catch::Approx(32.0));
+    CHECK(pat.tracks[0].clips[0].lengthSteps == Catch::Approx(64.0));
+    CHECK(pat.tracks[0].clips[0].offsetSteps == Catch::Approx(96.0).margin(0.01));
+    CHECK(pat.tracks[0].clips[0].gain == Catch::Approx(0.5f));
+
+    // Track 1: git_arpeggio.wav is missing and did NOT load git.wav
+    const auto* s1 = song.findSample(pat.tracks[1].sampleId);
+    REQUIRE(s1 != nullptr);
+    CHECK(s1->missing == true);
+    CHECK(s1->fileName == "git_arpeggio.wav");
+    CHECK(cache.getRawAudio(s1->id) == nullptr);
+
+    // Track 2: gong.wav is a One-Shot
+    const auto* s2 = song.findSample(pat.tracks[2].sampleId);
+    REQUIRE(s2 != nullptr);
+    CHECK(s2->missing == false);
+    CHECK(s2->kind == SampleKind::OneShot);
+    CHECK(song.patternTrackKind(pat.id, 2) == SampleKind::OneShot);
+
+    // Verify SnapshotBuilder schedules:
+    // - Track 0 (64-step clip starting at offset 96 of a 128-step loop):
+    //   Cycle 1 plays steps 96..128 (32 steps) starting at step 32,
+    //   Cycle 2 wraps to step 0..32 (32 steps) starting at step 64!
+    // - Track 1 (missing): 0 events
+    // - Track 2 (One-Shot gong): exactly 1 event at step 0 (does NOT loop/repeat!)
+    const auto rawBank = cache.getRawBank();
+    auto snapshot = SnapshotBuilder::buildPattern(song, pat.id, rawBank, 44100.0, 0, 128, &rawBank, nullptr, &cache);
+    REQUIRE(snapshot != nullptr);
+
+    int track0Events = 0;
+    int track1Events = 0;
+    int track2Events = 0;
+    for (const auto& ev : snapshot->events)
+    {
+        if (ev.track == 0) track0Events++;
+        else if (ev.track == 1) track1Events++;
+        else if (ev.track == 2) track2Events++;
+    }
+    CHECK(track0Events == 2);
+    CHECK(track1Events == 0);
+    CHECK(track2Events == 1);
+
+    std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("Opening a second project into the same StretchCache completely clears audio from the first project")
+{
+    const auto dir1 = std::filesystem::temp_directory_path() / "trami_acid_proj1_mem_test";
+    const auto dir2 = std::filesystem::temp_directory_path() / "trami_acid_proj2_mem_test";
+    std::filesystem::remove_all(dir1);
+    std::filesystem::remove_all(dir2);
+    std::filesystem::create_directories(dir1);
+    std::filesystem::create_directories(dir2);
+
+    // Project 1 has 2 tracks with real audio: loopA.wav and loopB.wav (both 1 bar at 120 BPM)
+    const auto wav1A = dir1 / "loopA.wav";
+    const auto wav1B = dir1 / "loopB.wav";
+    createSyntheticAcidWav(wav1A, false, 4, 4, 4, 120.0f, 60, 88200);
+    createSyntheticAcidWav(wav1B, false, 4, 4, 4, 120.0f, 60, 88200);
+
+    // Project 2 has 2 tracks:
+    // Track 0: loopC.wav (exists on disk, 1 bar at 120 BPM -> gets SampleId{1}, same CacheKey as wav1A!)
+    // Track 1: missingB.wav (missing on disk -> gets SampleId{2}, same SampleId as wav1B in Project 1!)
+    const auto wav2C = dir2 / "loopC.wav";
+    createSyntheticAcidWav(wav2C, false, 4, 4, 4, 120.0f, 60, 88200);
+    // Overwrite wav2C data with silence so we can distinguish its samples from wav1A's sine wave
+    {
+        juce::File jf(juce::String::fromUTF8(wav2C.string().c_str()));
+        jf.deleteFile();
+        createSyntheticAcidWav(wav2C, false, 4, 4, 4, 120.0f, 60, 88200);
+    }
+
+    auto writeTwoTrackAcd = [](const std::filesystem::path& acdPath,
+                               const std::u16string& file0,
+                               const std::u16string& file1) {
+        std::vector<uint8_t> tmapPayload(20, 0);
+        uint32_t tmapSize = 20, ppqn = 768, usPerBeat = 500000;
+        std::memcpy(tmapPayload.data() + 0, &tmapSize, 4);
+        std::memcpy(tmapPayload.data() + 4, &ppqn, 4);
+        std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
+
+        auto buildTrak = [](const std::u16string& fname) {
+            std::vector<uint8_t> trak;
+            std::vector<uint8_t> trkh(52, 0);
+            uint32_t hdrSz = 52, trkType = 1, frames = 88200;
+            std::memcpy(trkh.data() + 0, &hdrSz, 4);
+            std::memcpy(trkh.data() + 4, &trkType, 4);
+            std::memcpy(trkh.data() + 16, &frames, 4);
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(fname.data());
+            trkh.insert(trkh.end(), p, p + (fname.length() + 1) * 2);
+            writeChunk(trak, "trkh", trkh);
+
+            std::vector<uint8_t> acid(24, 0);
+            uint32_t beats = 4;
+            float tempo = 120.0f;
+            std::memcpy(acid.data() + 12, &beats, 4);
+            std::memcpy(acid.data() + 20, &tempo, 4);
+            writeChunk(trak, "acid", acid);
+
+            std::vector<uint8_t> rlst, rgn, rgnh(36, 0);
+            int32_t rgnSz = 36, sTicks = 0, eTicks = 3072;
+            std::memcpy(rgnh.data() + 0, &rgnSz, 4);
+            std::memcpy(rgnh.data() + 4, &sTicks, 4);
+            std::memcpy(rgnh.data() + 8, &eTicks, 4);
+            writeChunk(rgn, "rgnh", rgnh);
+            writeList(rlst, "rgn ", rgn);
+            writeList(trak, "rlst", rlst);
+            return trak;
+        };
+
+        std::vector<uint8_t> tlst;
+        writeList(tlst, "trak", buildTrak(file0));
+        writeList(tlst, "trak", buildTrak(file1));
+
+        std::vector<uint8_t> riff;
+        riff.insert(riff.end(), {'A', 'C', 'I', 'D'});
+        writeChunk(riff, "tmap", tmapPayload);
+        writeList(riff, "tlst", tlst);
+
+        std::ofstream out(acdPath, std::ios::binary);
+        out.write("RIFF", 4);
+        uint32_t rSz = static_cast<uint32_t>(riff.size());
+        out.write(reinterpret_cast<const char*>(&rSz), 4);
+        out.write(reinterpret_cast<const char*>(riff.data()), riff.size());
+    };
+
+    const auto acd1 = dir1 / "proj1.acd";
+    const auto acd2 = dir2 / "proj2.acd";
+    writeTwoTrackAcd(acd1, u"loopA.wav", u"loopB.wav");
+    writeTwoTrackAcd(acd2, u"loopC.wav", u"missingB.wav");
+
+    StretchCache sharedCache;
+    SampleImporter importer;
+
+    // 1. Load Project 1 and populate stretched cache
+    auto song1 = AcidProjectReader::loadProject(acd1, sharedCache, importer, 44100.0);
+    REQUIRE(song1.has_value());
+    auto bank1 = sharedCache.getOrUpdateSync(*song1, 44100.0);
+    REQUIRE(bank1.size() == 2);
+    const auto* oldAudio0 = bank1[song1->samples()[0].id].get();
+    REQUIRE(oldAudio0 != nullptr);
+
+    // 2. Load Project 2 into the same sharedCache
+    auto song2 = AcidProjectReader::loadProject(acd2, sharedCache, importer, 44100.0);
+    REQUIRE(song2.has_value());
+    REQUIRE(song2->samples().size() == 2);
+
+    // Track 1 (missingB.wav) has SampleId{2} - must NOT inherit loopB.wav's audio from Project 1!
+    const auto& missingSample = song2->samples()[1];
+    CHECK(missingSample.missing == true);
+    CHECK(sharedCache.getRawAudio(missingSample.id) == nullptr);
+
+    auto bank2 = sharedCache.getOrUpdateSync(*song2, 44100.0);
+    CHECK(bank2.find(missingSample.id) == bank2.end());
+    CHECK(bank2[song2->samples()[0].id].get() != oldAudio0);
+
+    std::filesystem::remove_all(dir1);
+    std::filesystem::remove_all(dir2);
+}
+
+TEST_CASE("ACID features: Key Conforming, Split/Join, Envelopes, Transients, Disk Mode & Markers")
+{
+    Song song;
+    song.setBpm(120.0);
+    song.setProjectRootNote(62); // Master Key = D
+
+    // 1. Sample with rootNote = C (60), Loop
+    Sample loopSample;
+    loopSample.name = "BassLoop";
+    loopSample.fileName = "BassLoop.wav";
+    loopSample.durationSeconds = 2.0;
+    loopSample.kind = SampleKind::Loop;
+    loopSample.loopBars = 1;
+    loopSample.loopBeats = 4.0;
+    loopSample.rootNote = 60; // C
+    loopSample.acidBpm = 120.0;
+    loopSample.author = "Sonic Foundry";
+    loopSample.stretchMarkers = {0.25, 0.5, 0.75};
+    const auto loopId = song.addSample(loopSample);
+
+    // Master Key D (62) vs Sample Root C (60) -> +2 semitones automatic conforming for Loops, 0 for OneShots/Disk
+    const Sample* sPtr = song.findSample(loopId);
+    REQUIRE(sPtr != nullptr);
+    CHECK(song.effectiveClipTranspose(sPtr, 0, SampleKind::Loop) == 2);
+    CHECK(song.effectiveClipTranspose(sPtr, 3, SampleKind::Loop) == 5);
+    CHECK(song.effectiveClipTranspose(sPtr, 0, SampleKind::OneShot) == 0);
+    CHECK(song.effectiveClipTranspose(sPtr, 0, SampleKind::DiskStream) == 0);
+
+    // 2. Pattern with Split & Join
+    const auto patId = song.addPattern("Main", 4);
+    song.setPatternTrackKind(patId, 0, SampleKind::Loop);
+    auto clipOpt = song.placeClip(patId, 0, loopId, 0.0, 64.0, 0.0);
+    REQUIRE(clipOpt.has_value());
+
+    // Set multi-point volume envelope on the clip before splitting
+    song.setClipVolumeEnvelope(patId, *clipOpt, {
+        {0.0, 0.0f, EnvelopeCurve::Fast},
+        {0.5, 1.0f, EnvelopeCurve::Linear},
+        {1.0, 0.5f, EnvelopeCurve::Slow}
+    });
+
+    // Split at step 32 (bar 2)
+    auto splitRes = song.splitClip(patId, *clipOpt, 32.0);
+    REQUIRE(splitRes.has_value());
+    const auto* leftClip = song.findClip(patId, splitRes->first);
+    const auto* rightClip = song.findClip(patId, splitRes->second);
+    REQUIRE(leftClip != nullptr);
+    REQUIRE(rightClip != nullptr);
+    CHECK(leftClip->startStep == Catch::Approx(0.0));
+    CHECK(leftClip->lengthSteps == Catch::Approx(32.0));
+    CHECK(rightClip->startStep == Catch::Approx(32.0));
+    CHECK(rightClip->lengthSteps == Catch::Approx(32.0));
+    CHECK(!leftClip->volumeEnvelope.empty());
+    CHECK(!rightClip->volumeEnvelope.empty());
+    CHECK(leftClip->volumeEnvelope.back().value == Catch::Approx(1.0f));
+    CHECK(rightClip->volumeEnvelope.front().value == Catch::Approx(1.0f));
+
+    // Join the two split clips back into one 64-step clip
+    auto joinedId = song.joinClips(patId, {splitRes->first, splitRes->second});
+    REQUIRE(joinedId.has_value());
+    const auto* joinedClip = song.findClip(patId, *joinedId);
+    REQUIRE(joinedClip != nullptr);
+    CHECK(joinedClip->startStep == Catch::Approx(0.0));
+    CHECK(joinedClip->lengthSteps == Catch::Approx(64.0));
+    CHECK(song.findPattern(patId)->tracks[0].clips.size() == 1);
+
+    // 3. Timeline Markers
+    const int m1 = song.addMarker(patId, 0.0, "Intro");
+    const int m2 = song.addMarker(patId, 32.0, "Verse");
+    CHECK(m1 > 0);
+    CHECK(m2 > m1);
+    REQUIRE(song.findPattern(patId)->markers.size() == 2);
+    CHECK(song.moveMarker(patId, m2, 64.0));
+    CHECK(song.renameMarker(patId, m2, "Chorus"));
+    CHECK(song.findPattern(patId)->markers[1].step == Catch::Approx(64.0));
+    CHECK(song.findPattern(patId)->markers[1].name == "Chorus");
+    CHECK(song.removeMarker(patId, m1));
+    CHECK(song.findPattern(patId)->markers.size() == 1);
+
+    // 4. Track Automation & Disk-Based Mode
+    const int diskTrack = song.addTrackToPattern(patId, loopId);
+    song.setPatternTrackKind(patId, diskTrack, SampleKind::DiskStream);
+    CHECK(song.patternTrackKind(patId, diskTrack) == SampleKind::DiskStream);
+    CHECK(song.setTrackFxSend(patId, 0, 0.65f));
+    CHECK(song.setTrackAutomation(patId, 0, TrackEnvelopeType::Volume, {{0.0, 0.5f, EnvelopeCurve::Linear}, {64.0, 1.5f, EnvelopeCurve::Linear}}));
+
+    // 5. Transient detection on synthetic impulse buffer
+    std::vector<float> testAudio(44100, 0.0f);
+    for (int i = 0; i < 200; ++i)
+    {
+        testAudio[10000 + i] = 0.9f;
+        testAudio[25000 + i] = 0.85f;
+    }
+    const auto detected = Sample::detectTransients(testAudio.data(), testAudio.data(), 44100, 44100.0, 8);
+    CHECK(detected.size() >= 2);
+}
+
+
 

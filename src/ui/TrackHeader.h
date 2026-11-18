@@ -26,6 +26,7 @@ public:
     using DeleteTrackCallback = std::function<void(int track)>;
     using MoveTrackCallback = std::function<void(int from, int to)>;
     using TrackRenamedCallback = std::function<void(int track, const std::string& name)>;
+    using TrackPropertiesCallback = std::function<void(int track)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
 
@@ -42,6 +43,7 @@ public:
     void setOnDeleteTrack(DeleteTrackCallback cb) { onDeleteTrack_ = std::move(cb); }
     void setOnMoveTrack(MoveTrackCallback cb) { onMoveTrack_ = std::move(cb); }
     void setOnTrackRenamed(TrackRenamedCallback cb) { onTrackRenamed_ = std::move(cb); }
+    void setOnTrackProperties(TrackPropertiesCallback cb) { onTrackProperties_ = std::move(cb); }
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
     std::function<void(const juce::MouseEvent&)> onMarqueeStart;
@@ -76,6 +78,7 @@ private:
     struct TrackControls
     {
         std::unique_ptr<juce::Label> nameLabel;
+        std::unique_ptr<juce::TextButton> propsButton;
         std::unique_ptr<juce::TextButton> typeButton;
         std::unique_ptr<juce::TextButton> deleteButton;
         std::unique_ptr<DAWMuteButton> muteButton;
@@ -100,6 +103,7 @@ private:
     DeleteTrackCallback onDeleteTrack_;
     MoveTrackCallback onMoveTrack_;
     TrackRenamedCallback onTrackRenamed_;
+    TrackPropertiesCallback onTrackProperties_;
     int trackHeight_ = kMinTrackHeight;
     int dragHoverTrack_ = -1;
     bool isReorderDrag_ = false;

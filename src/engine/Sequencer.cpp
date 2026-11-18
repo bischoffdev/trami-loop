@@ -13,6 +13,9 @@ namespace trami
 Sequencer::Sequencer(SnapshotExchange& exchange, double sampleRate)
     : exchange_(exchange), click_(synth::click(sampleRate, 1000.0)), accentClick_(synth::click(sampleRate, 1600.0))
 {
+    const std::size_t delaySamples = std::max<std::size_t>(4096, static_cast<std::size_t>(std::max(8000.0, sampleRate) * 0.375));
+    fxDelayL_.assign(delaySamples, 0.0f);
+    fxDelayR_.assign(delaySamples, 0.0f);
     resetTrackMix();
 }
 
@@ -201,13 +204,13 @@ void Sequencer::updateAllVoiceGains() noexcept
         updateVoiceGainsForTrack(t);
 }
 
-void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio)
+void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples, bool loopPreview)
 {
     collectPreviewGarbage();
     if (audio == nullptr || audio->numFrames() == 0)
         return;
 
-    auto* item = new PreviewItem{std::move(audio)};
+    auto* item = new PreviewItem{std::move(audio), std::max(0, startDelaySamples), loopPreview};
     if (PreviewItem* prev = pendingPreview_.exchange(item, std::memory_order_acq_rel))
         delete prev;
 }
@@ -245,12 +248,14 @@ void Sequencer::handlePreviewRequests() noexcept
     if (stopPreviewRequested_.exchange(false, std::memory_order_acq_rel))
     {
         previewVoice_.active = false;
+        previewLooping_ = false;
         if (currentPreview_ != nullptr)
         {
             retirePreview(currentPreview_);
             currentPreview_ = nullptr;
         }
         previewPlaying_.store(false, std::memory_order_release);
+        previewProgress_.store(0.0, std::memory_order_relaxed);
     }
 
     if (PreviewItem* next = pendingPreview_.exchange(nullptr, std::memory_order_acq_rel))
@@ -259,9 +264,11 @@ void Sequencer::handlePreviewRequests() noexcept
             retirePreview(currentPreview_);
 
         currentPreview_ = next;
+        previewLooping_ = currentPreview_->loopPreview;
         previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, currentPreview_->audio->numFrames(),
-                              0, 0.85f, 0.85f, 0.85f, 0.85f, true, -1, 0, 0, 0};
+                              currentPreview_->startDelaySamples, 0.85f, 0.85f, 0.85f, 0.85f, true, -1, 0, 0, 0};
         previewPlaying_.store(true, std::memory_order_release);
+        previewProgress_.store(0.0, std::memory_order_relaxed);
     }
 }
 
@@ -276,21 +283,41 @@ void Sequencer::renderPreview(float* left, float* right, int numSamples) noexcep
 
     for (int i = 0; i < numSamples; ++i)
     {
+        if (previewVoice_.startDelay > 0)
+        {
+            --previewVoice_.startDelay;
+            continue;
+        }
+
         if (previewVoice_.readPosition >= frames)
         {
-            previewVoice_.active = false;
-            if (currentPreview_ != nullptr)
+            if (previewLooping_ && frames > 0)
             {
-                retirePreview(currentPreview_);
-                currentPreview_ = nullptr;
+                previewVoice_.readPosition = 0;
             }
-            previewPlaying_.store(false, std::memory_order_release);
-            break;
+            else
+            {
+                previewVoice_.active = false;
+                if (currentPreview_ != nullptr)
+                {
+                    retirePreview(currentPreview_);
+                    currentPreview_ = nullptr;
+                }
+                previewPlaying_.store(false, std::memory_order_release);
+                previewProgress_.store(0.0, std::memory_order_relaxed);
+                break;
+            }
         }
 
         left[i] += srcL[previewVoice_.readPosition] * previewVoice_.gainLeft;
         right[i] += srcR[previewVoice_.readPosition] * previewVoice_.gainRight;
         ++previewVoice_.readPosition;
+    }
+
+    if (previewVoice_.active && frames > 0)
+    {
+        previewProgress_.store(static_cast<double>(previewVoice_.readPosition) / static_cast<double>(frames),
+                               std::memory_order_relaxed);
     }
 }
 
@@ -433,6 +460,9 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
 void Sequencer::adoptPendingSnapshot() noexcept
 {
+    if (!playing_.load(std::memory_order_relaxed) || stopVoicesRequested_.load(std::memory_order_relaxed))
+        stopAllVoices();
+
     for (auto& s : retiringSnapshots_)
     {
         if (s != nullptr && !hasVoicesFrom(s))
@@ -557,7 +587,7 @@ void Sequencer::adoptPendingSnapshot() noexcept
                         {
                             startVoice(ev.audio, current_, 0, ev.gainLeft, ev.gainRight,
                                        offsetInClip, remainingFrames, ev.track,
-                                       ev.fadeInSamples, ev.fadeOutSamples, ev.clipId);
+                                       ev.fadeInSamples, ev.fadeOutSamples, ev.clipId, ev.reversed, &ev);
                         }
                     }
                 }
@@ -641,7 +671,7 @@ void Sequencer::chaseActiveEvents(std::int64_t pos) noexcept
             {
                 startVoice(ev.audio, current_, 0, ev.gainLeft, ev.gainRight,
                            offsetInClip, remainingFrames, ev.track,
-                           ev.fadeInSamples, ev.fadeOutSamples, ev.clipId, ev.reversed);
+                           ev.fadeInSamples, ev.fadeOutSamples, ev.clipId, ev.reversed, &ev);
             }
         }
     }
@@ -656,7 +686,7 @@ void Sequencer::scheduleRange(std::int64_t from, std::int64_t to, int blockOffse
     for (; it != events.end() && it->startSample < to; ++it)
         startVoice(it->audio, current_, blockOffset + static_cast<int>(it->startSample - from), it->gainLeft,
                    it->gainRight, it->audioOffset, it->maxFrames, it->track, it->fadeInSamples, it->fadeOutSamples,
-                   it->clipId, it->reversed);
+                   it->clipId, it->reversed, &(*it));
 }
 
 void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept
@@ -735,7 +765,7 @@ void Sequencer::renderMetronome(float* left, float* right, int numSamples) noexc
 void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner, int delay, float gainL,
                            float gainR, std::int64_t audioOffset, std::int64_t maxFrames, int track,
                            std::int64_t fadeInSamples, std::int64_t fadeOutSamples, std::uint32_t clipId,
-                           bool reversed) noexcept
+                           bool reversed, const PlaybackEvent* srcEvent) noexcept
 {
     if (audio == nullptr || audio->numFrames() == 0)
         return;
@@ -784,12 +814,22 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
 
     *target = Voice{audio, owner, startFrame, startFrame, endFrame, delay, gainL, gainR, effL, effR, true, track,
                     std::max<std::int64_t>(0, fadeInSamples), std::max<std::int64_t>(0, fadeOutSamples), clipId, reversed};
+    if (srcEvent != nullptr)
+    {
+        target->fxSend = srcEvent->fxSend;
+        target->volEnv = srcEvent->volEnv;
+        target->volEnvCount = srcEvent->volEnvCount;
+        target->panEnv = srcEvent->panEnv;
+        target->panEnvCount = srcEvent->panEnvCount;
+    }
 }
 
 void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 {
     if (!playing_.load(std::memory_order_relaxed))
         return;
+
+    bool anyFxActive = false;
 
     for (auto& voice : voices_)
     {
@@ -813,6 +853,11 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 
         const float* srcL = voice.audio->left();
         const float* srcR = voice.audio->right();
+        const float invSpan = (voice.endPosition > voice.startPosition)
+            ? (1.0f / static_cast<float>(voice.endPosition - voice.startPosition))
+            : 0.0f;
+        if (voice.fxSend > 0.001f)
+            anyFxActive = true;
 
         for (int i = voice.startDelay; i < numSamples; ++i)
         {
@@ -824,12 +869,9 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
             }
 
             float env = 1.0f;
-            if (voice.fadeInSamples > 0)
-            {
-                const std::int64_t offsetFromStart = voice.readPosition - voice.startPosition;
-                if (offsetFromStart < voice.fadeInSamples)
-                    env *= static_cast<float>(offsetFromStart) / static_cast<float>(voice.fadeInSamples);
-            }
+            const std::int64_t offsetFromStart = voice.readPosition - voice.startPosition;
+            if (voice.fadeInSamples > 0 && offsetFromStart < voice.fadeInSamples)
+                env *= static_cast<float>(offsetFromStart) / static_cast<float>(voice.fadeInSamples);
             if (voice.fadeOutSamples > 0)
             {
                 const std::int64_t remaining = voice.endPosition - voice.readPosition;
@@ -837,15 +879,65 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
                     env *= static_cast<float>(remaining) / static_cast<float>(voice.fadeOutSamples);
             }
 
+            const float normPos = static_cast<float>(offsetFromStart) * invSpan;
+            if (voice.volEnvCount > 0)
+                env *= evaluatePlaybackEnvelope(voice.volEnv, voice.volEnvCount, normPos, 1.0f);
+
+            float panScaleL = 1.0f;
+            float panScaleR = 1.0f;
+            if (voice.panEnvCount > 0)
+            {
+                const float panOffset = evaluatePlaybackEnvelope(voice.panEnv, voice.panEnvCount, normPos, 0.0f);
+                const auto [pL, pR] = SnapshotBuilder::panGains(panOffset);
+                panScaleL = pL;
+                panScaleR = pR;
+            }
+
             const std::int64_t frameIdx = voice.reversed
-                ? (voice.endPosition - 1 - (voice.readPosition - voice.startPosition))
+                ? (voice.endPosition - 1 - offsetFromStart)
                 : voice.readPosition;
 
-            left[i] += srcL[frameIdx] * voice.gainLeft * env;
-            right[i] += srcR[frameIdx] * voice.gainRight * env;
+            const float outL = srcL[frameIdx] * voice.gainLeft * env * panScaleL;
+            const float outR = srcR[frameIdx] * voice.gainRight * env * panScaleR;
+
+            left[i] += outL;
+            right[i] += outR;
+
+            if (voice.fxSend > 0.001f && !fxDelayL_.empty())
+            {
+                const std::size_t idx = (fxWriteIdx_ + static_cast<std::size_t>(i)) % fxDelayL_.size();
+                fxDelayL_[idx] += outL * voice.fxSend * 0.45f;
+                fxDelayR_[idx] += outR * voice.fxSend * 0.45f;
+            }
+
             ++voice.readPosition;
         }
         voice.startDelay = 0;
+    }
+
+    if (!fxDelayL_.empty())
+    {
+        const std::size_t delaySize = fxDelayL_.size();
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const std::size_t readIdx = (fxWriteIdx_ + static_cast<std::size_t>(i)) % delaySize;
+            const float dL = fxDelayL_[readIdx];
+            const float dR = fxDelayR_[readIdx];
+            if (anyFxActive || std::abs(dL) > 1e-6f || std::abs(dR) > 1e-6f)
+            {
+                left[i] += dL;
+                right[i] += dR;
+                // Stereo ping-pong feedback
+                fxDelayL_[readIdx] = dR * 0.35f;
+                fxDelayR_[readIdx] = dL * 0.35f;
+            }
+            else
+            {
+                fxDelayL_[readIdx] = 0.0f;
+                fxDelayR_[readIdx] = 0.0f;
+            }
+        }
+        fxWriteIdx_ = (fxWriteIdx_ + static_cast<std::size_t>(numSamples)) % delaySize;
     }
 }
 

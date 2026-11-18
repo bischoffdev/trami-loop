@@ -4,6 +4,64 @@
 
 namespace trami
 {
+namespace
+{
+const char* kindToString(SampleKind kind) noexcept
+{
+    if (kind == SampleKind::Loop)
+        return "loop";
+    if (kind == SampleKind::DiskStream)
+        return "disk";
+    return "oneshot";
+}
+
+SampleKind kindFromString(const juce::String& str) noexcept
+{
+    if (str == "loop")
+        return SampleKind::Loop;
+    if (str == "disk")
+        return SampleKind::DiskStream;
+    return SampleKind::OneShot;
+}
+
+juce::Array<juce::var> serializeEnvelope(const std::vector<EnvelopePoint>& pts)
+{
+    juce::Array<juce::var> arr;
+    for (const auto& pt : pts)
+    {
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("pos", pt.position);
+        obj->setProperty("val", pt.value);
+        if (pt.curve != EnvelopeCurve::Linear)
+            obj->setProperty("curve", static_cast<int>(pt.curve));
+        arr.add(obj.get());
+    }
+    return arr;
+}
+
+std::vector<EnvelopePoint> deserializeEnvelope(const juce::var& v)
+{
+    std::vector<EnvelopePoint> pts;
+    if (const auto* arr = v.getArray())
+    {
+        for (const auto& item : *arr)
+        {
+            EnvelopePoint pt;
+            pt.position = static_cast<double>(item.getProperty("pos", 0.0));
+            pt.value = static_cast<float>(item.getProperty("val", 1.0f));
+            const int c = static_cast<int>(item.getProperty("curve", 0));
+            if (c == 1)
+                pt.curve = EnvelopeCurve::Fast;
+            else if (c == 2)
+                pt.curve = EnvelopeCurve::Slow;
+            else
+                pt.curve = EnvelopeCurve::Linear;
+            pts.push_back(pt);
+        }
+    }
+    return pts;
+}
+} // namespace
 
 bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretchCache,
                                     const std::filesystem::path& projectDir)
@@ -12,10 +70,12 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     std::filesystem::create_directories(projectDir / "samples", ec);
 
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version", 1);
+    root->setProperty("version", 2);
     root->setProperty("bpm", song.bpm());
     root->setProperty("swing", song.swing());
     root->setProperty("masterVolume", song.masterVolume());
+    if (song.projectRootNote() >= 0)
+        root->setProperty("projectRootNote", song.projectRootNote());
     root->setProperty("patternZoomX", song.patternZoomX());
     root->setProperty("patternZoomY", song.patternZoomY());
     root->setProperty("arrangerZoomX", song.arrangerZoomX());
@@ -30,7 +90,7 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
         obj->setProperty("name", juce::String(s.name));
         obj->setProperty("fileName", juce::String(s.fileName));
         obj->setProperty("durationSeconds", s.durationSeconds);
-        obj->setProperty("kind", s.kind == SampleKind::Loop ? "loop" : "oneshot");
+        obj->setProperty("kind", kindToString(s.kind));
         obj->setProperty("loopBars", s.loopBars);
         if (s.loopBeats > 0.0)
             obj->setProperty("loopBeats", s.loopBeats);
@@ -38,6 +98,21 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
             obj->setProperty("rootNote", s.rootNote);
         if (s.acidBpm > 0.0)
             obj->setProperty("acidBpm", s.acidBpm);
+        if (s.missing)
+            obj->setProperty("missing", true);
+        if (!s.stretchMarkers.empty())
+        {
+            juce::Array<juce::var> markersArr;
+            for (double m : s.stretchMarkers)
+                markersArr.add(m);
+            obj->setProperty("stretchMarkers", markersArr);
+        }
+        if (!s.author.empty())
+            obj->setProperty("author", juce::String(s.author));
+        if (!s.copyright.empty())
+            obj->setProperty("copyright", juce::String(s.copyright));
+        if (!s.comments.empty())
+            obj->setProperty("comments", juce::String(s.comments));
         sampleList.add(obj.get());
 
         // Save raw audio to samples/ folder if not already there
@@ -80,12 +155,28 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
         for (const auto& t : p.tracks)
         {
             juce::DynamicObject::Ptr trackObj = new juce::DynamicObject();
+            if (!t.name.empty())
+                trackObj->setProperty("name", juce::String(t.name));
             trackObj->setProperty("volume", t.mix.volume);
             trackObj->setProperty("pan", t.mix.pan);
             trackObj->setProperty("muted", t.muted);
             trackObj->setProperty("solo", t.solo);
+            if (t.armed)
+                trackObj->setProperty("armed", true);
+            if (t.fxSend > 0.0f)
+                trackObj->setProperty("fxSend", t.fxSend);
+            if (t.visibleEnvelope != TrackEnvelopeType::None)
+                trackObj->setProperty("visibleEnvelope", static_cast<int>(t.visibleEnvelope));
             if (t.sampleId.isValid())
                 trackObj->setProperty("sampleId", static_cast<juce::int64>(t.sampleId.value));
+            if (t.kindOverride.has_value())
+                trackObj->setProperty("kindOverride", kindToString(*t.kindOverride));
+            if (!t.volumeAutomation.empty())
+                trackObj->setProperty("volumeAutomation", serializeEnvelope(t.volumeAutomation));
+            if (!t.panAutomation.empty())
+                trackObj->setProperty("panAutomation", serializeEnvelope(t.panAutomation));
+            if (!t.fxAutomation.empty())
+                trackObj->setProperty("fxAutomation", serializeEnvelope(t.fxAutomation));
 
             juce::Array<juce::var> clipList;
             for (const auto& c : t.clips)
@@ -108,12 +199,29 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                     clipObj->setProperty("reversed", true);
                 if (c.transposeSemitones != 0)
                     clipObj->setProperty("transposeSemitones", c.transposeSemitones);
+                if (!c.volumeEnvelope.empty())
+                    clipObj->setProperty("volumeEnvelope", serializeEnvelope(c.volumeEnvelope));
+                if (!c.panEnvelope.empty())
+                    clipObj->setProperty("panEnvelope", serializeEnvelope(c.panEnvelope));
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
             trackList.add(trackObj.get());
         }
         patObj->setProperty("tracks", trackList);
+        if (!p.markers.empty())
+        {
+            juce::Array<juce::var> markerList;
+            for (const auto& m : p.markers)
+            {
+                juce::DynamicObject::Ptr mObj = new juce::DynamicObject();
+                mObj->setProperty("id", m.id);
+                mObj->setProperty("step", m.step);
+                mObj->setProperty("name", juce::String(m.name));
+                markerList.add(mObj.get());
+            }
+            patObj->setProperty("markers", markerList);
+        }
         patternList.add(patObj.get());
     }
     root->setProperty("patterns", patternList);
@@ -176,6 +284,9 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
     song.setBpm(json.getProperty("bpm", 120.0));
     song.setSwing(json.getProperty("swing", 0.0));
     song.setMasterVolume(static_cast<float>(json.getProperty("masterVolume", 1.0f)));
+    if (json.hasProperty("projectRootNote"))
+        song.setProjectRootNote(static_cast<int>(json.getProperty("projectRootNote", -1)));
+    stretchCache.clear();
 
     const float pzx = static_cast<float>(json.getProperty("patternZoomX", 1.0));
     const float pzy = static_cast<float>(json.getProperty("patternZoomY", 1.0));
@@ -198,7 +309,7 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
             s.name = sVar["name"].toString().toStdString();
             s.fileName = sVar["fileName"].toString().toStdString();
             s.durationSeconds = sVar["durationSeconds"];
-            s.kind = (sVar["kind"].toString() == "loop") ? SampleKind::Loop : SampleKind::OneShot;
+            s.kind = kindFromString(sVar["kind"].toString());
             s.loopBars = std::max(1, static_cast<int>(sVar["loopBars"]));
             if (sVar.hasProperty("loopBeats"))
                 s.loopBeats = static_cast<double>(sVar["loopBeats"]);
@@ -206,13 +317,37 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                 s.rootNote = static_cast<int>(sVar["rootNote"]);
             if (sVar.hasProperty("acidBpm"))
                 s.acidBpm = static_cast<double>(sVar["acidBpm"]);
+            if (sVar.hasProperty("missing"))
+                s.missing = static_cast<bool>(sVar["missing"]);
+            if (const auto* smArr = sVar["stretchMarkers"].getArray())
+            {
+                for (const auto& mv : *smArr)
+                    s.stretchMarkers.push_back(static_cast<double>(mv));
+            }
+            if (sVar.hasProperty("author"))
+                s.author = sVar["author"].toString().toStdString();
+            if (sVar.hasProperty("copyright"))
+                s.copyright = sVar["copyright"].toString().toStdString();
+            if (sVar.hasProperty("comments"))
+                s.comments = sVar["comments"].toString().toStdString();
+
+            // Load decoded audio into stretchCache (check samples/ subfolder first, then project directory)
+            std::filesystem::path sampleFilePath = baseDir / "samples" / s.fileName;
+            std::error_code ec;
+            if (!std::filesystem::exists(sampleFilePath, ec))
+            {
+                const auto altPath = baseDir / s.fileName;
+                if (std::filesystem::exists(altPath, ec))
+                    sampleFilePath = altPath;
+            }
+
+            auto audioOpt = importer.loadAudioData(sampleFilePath, sampleRate);
+            s.missing = !audioOpt.has_value();
 
             const auto newId = song.addSample(s);
             sampleIdMap[oldId] = newId;
 
-            // Load decoded audio into stretchCache
-            const auto sampleFilePath = baseDir / "samples" / s.fileName;
-            if (auto audioOpt = importer.loadAudioData(sampleFilePath, sampleRate))
+            if (audioOpt.has_value())
                 stretchCache.setRawAudio(newId, std::make_shared<const AudioData>(std::move(*audioOpt)));
         }
     }
@@ -242,16 +377,35 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                         if (trackIdx >= static_cast<int>(pat->tracks.size()))
                             pat->tracks.resize(static_cast<std::size_t>(trackIdx + 1));
                         auto& trk = pat->tracks[static_cast<std::size_t>(trackIdx)];
+                        if (tVar.hasProperty("name"))
+                            trk.name = tVar["name"].toString().toStdString();
                         trk.mix.volume = static_cast<float>(tVar.getProperty("volume", 1.0f));
                         trk.mix.pan = static_cast<float>(tVar.getProperty("pan", 0.0f));
                         trk.muted = tVar.getProperty("muted", false);
                         trk.solo = tVar.getProperty("solo", false);
+                        trk.armed = tVar.getProperty("armed", false);
+                        trk.fxSend = static_cast<float>(tVar.getProperty("fxSend", 0.0f));
+                        if (tVar.hasProperty("visibleEnvelope"))
+                        {
+                            const int ve = static_cast<int>(tVar.getProperty("visibleEnvelope", 0));
+                            if (ve == 1) trk.visibleEnvelope = TrackEnvelopeType::Volume;
+                            else if (ve == 2) trk.visibleEnvelope = TrackEnvelopeType::Pan;
+                            else if (ve == 3) trk.visibleEnvelope = TrackEnvelopeType::FxSend;
+                        }
                         if (tVar.hasProperty("sampleId"))
                         {
                             const auto oldSid = static_cast<std::uint32_t>(static_cast<juce::int64>(tVar["sampleId"]));
                             if (sampleIdMap.contains(oldSid))
                                 trk.sampleId = sampleIdMap[oldSid];
                         }
+                        if (tVar.hasProperty("kindOverride"))
+                            trk.kindOverride = kindFromString(tVar["kindOverride"].toString());
+                        if (tVar.hasProperty("volumeAutomation"))
+                            trk.volumeAutomation = deserializeEnvelope(tVar["volumeAutomation"]);
+                        if (tVar.hasProperty("panAutomation"))
+                            trk.panAutomation = deserializeEnvelope(tVar["panAutomation"]);
+                        if (tVar.hasProperty("fxAutomation"))
+                            trk.fxAutomation = deserializeEnvelope(tVar["fxAutomation"]);
                     }
 
                     if (const auto* clipsVar = tVar["clips"].getArray())
@@ -278,11 +432,25 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                                     const int transpose = static_cast<int>(cVar.getProperty("transposeSemitones", 0));
                                     if (transpose != 0)
                                         song.setClipTranspose(newPatId, *placedClipId, transpose);
+                                    if (cVar.hasProperty("volumeEnvelope"))
+                                        song.setClipVolumeEnvelope(newPatId, *placedClipId, deserializeEnvelope(cVar["volumeEnvelope"]));
+                                    if (cVar.hasProperty("panEnvelope"))
+                                        song.setClipPanEnvelope(newPatId, *placedClipId, deserializeEnvelope(cVar["panEnvelope"]));
                                 }
                             }
                         }
                     }
                     ++trackIdx;
+                }
+            }
+
+            if (const auto* markersVar = pVar["markers"].getArray())
+            {
+                for (const auto& mVar : *markersVar)
+                {
+                    const double step = static_cast<double>(mVar.getProperty("step", 0.0));
+                    const std::string mName = mVar.getProperty("name", "Marker").toString().toStdString();
+                    song.addMarker(newPatId, step, mName);
                 }
             }
         }

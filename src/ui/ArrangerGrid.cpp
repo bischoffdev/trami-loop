@@ -169,9 +169,6 @@ void ArrangerGrid::paint(juce::Graphics& g)
         const int y = kRulerHeight + t * trackHeight_;
         g.setColour(t % 2 == 0 ? Palette::gridFloor : Palette::gridLaneAlt);
         g.fillRect(0, y, renderWidth, trackHeight_);
-
-        g.setColour(Palette::gridLine.withAlpha(0.6f));
-        g.drawHorizontalLine(y + trackHeight_, 0.0f, static_cast<float>(renderWidth));
     }
 
     for (int bar = 0; bar <= totalBars; ++bar)
@@ -182,6 +179,13 @@ void ArrangerGrid::paint(juce::Graphics& g)
 
         g.setColour(bar % 4 == 0 ? Palette::gridBarLine : Palette::gridLine);
         g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+    }
+
+    for (int t = 0; t < numTracks; ++t)
+    {
+        const int sepY = kRulerHeight + (t + 1) * trackHeight_ - 1;
+        g.setColour(Palette::gridBeatLine.withAlpha(0.85f));
+        g.drawHorizontalLine(sepY, 0.0f, static_cast<float>(renderWidth));
     }
 
     // 3. Blocks
@@ -364,7 +368,7 @@ void ArrangerGrid::mouseDown(const juce::MouseEvent& e)
         }
 
         const int totalBars = std::max(16, song_.lengthBars() + 4);
-        const int clickBar = std::clamp(e.getPosition().x / barWidth_, 0, totalBars);
+        const int clickBar = std::clamp(juce::roundToInt(static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_)), 0, totalBars);
 
         const int startX = loopStartBar_ * barWidth_;
         const int endX = loopEndBar_ * barWidth_;
@@ -509,7 +513,7 @@ void ArrangerGrid::mouseDrag(const juce::MouseEvent& e)
         }
 
         const int totalBars = std::max(16, song_.lengthBars() + 4);
-        const int currentBar = std::clamp(e.getPosition().x / barWidth_, 0, totalBars);
+        const int currentBar = std::clamp(juce::roundToInt(static_cast<double>(e.getPosition().x) / static_cast<double>(barWidth_)), 0, totalBars);
 
         if (rulerDragMode_ == RulerDragMode::SetRegion)
         {

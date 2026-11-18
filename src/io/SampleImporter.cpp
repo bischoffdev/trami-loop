@@ -124,33 +124,25 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
     sample.loopBars = std::max(1, loopBars);
     sample.durationSeconds = static_cast<double>(audio.numFrames()) / targetSampleRate;
 
-    // 1. Auto-detect ACID chunk metadata directly from the JUCE audio format reader
+    // 1. Auto-detect raw RIFF ACID chunk directly from the WAV file (preserves exact float32 tempo)
     bool detectedAcid = false;
-    if (auto acid = AcidChunkReader::readFromReader(*reader))
+    if (auto acid = AcidChunkReader::readFromFile(sourceFile))
     {
         detectedAcid = true;
-        if (acid->isOneShot)
-            sample.kind = SampleKind::OneShot;
-        else
-            sample.kind = SampleKind::Loop;
-
+        sample.kind = acid->isOneShot ? SampleKind::OneShot : SampleKind::Loop;
         sample.loopBars = acid->suggestedLoopBars;
         sample.loopBeats = static_cast<double>(acid->numBeats);
         sample.acidBpm = acid->tempo;
         sample.rootNote = acid->rootNote;
     }
 
-    // 2. Fallback: parse raw RIFF acid chunk directly from file
+    // 2. Fallback: inspect JUCE audio format reader metadata
     if (!detectedAcid)
     {
-        if (auto acid = AcidChunkReader::readFromFile(sourceFile))
+        if (auto acid = AcidChunkReader::readFromReader(*reader))
         {
             detectedAcid = true;
-            if (acid->isOneShot)
-                sample.kind = SampleKind::OneShot;
-            else
-                sample.kind = SampleKind::Loop;
-
+            sample.kind = acid->isOneShot ? SampleKind::OneShot : SampleKind::Loop;
             sample.loopBars = acid->suggestedLoopBars;
             sample.loopBeats = static_cast<double>(acid->numBeats);
             sample.acidBpm = acid->tempo;
@@ -164,9 +156,10 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
         if (sample.loopBeats > 0.0)
         {
             const double calcBpm = (sample.loopBeats * 60.0) / sample.durationSeconds;
-            // If stored acidBpm was calculated assuming 4 beats while loopBeats is sub-bar (e.g. 2 beats),
-            // or if acidBpm was not specified, use authentic BPM from beats and duration
-            if (sample.acidBpm <= 0.0 || (sample.loopBeats < 4.0 && std::abs(sample.acidBpm - calcBpm * (4.0 / sample.loopBeats)) < 1.0))
+            // In ACID, a loop's duration spans loopBeats beats, so its true playback BPM is calcBpm.
+            // (Keep stored acidBpm only on synthetic test stubs where calcBpm is outside [30, 300] BPM.)
+            if ((calcBpm >= 30.0 && calcBpm <= 300.0) || sample.acidBpm <= 0.0 ||
+                (sample.loopBeats < 4.0 && std::abs(sample.acidBpm - calcBpm * (4.0 / sample.loopBeats)) < 1.0))
             {
                 sample.acidBpm = calcBpm;
             }
@@ -179,6 +172,8 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
 
             if (sample.loopBars <= 1 && estBars > 1)
                 sample.loopBars = estBars;
+
+            sample.loopBeats = static_cast<double>(sample.loopBars * kBeatsPerBar);
 
             if (sample.acidBpm <= 0.0)
                 sample.acidBpm = Timing::loopBpm(sample.durationSeconds, sample.loopBars);

@@ -2,6 +2,7 @@
 
 #include "engine/AudioEngine.h"
 #include "engine/StretchCache.h"
+#include "io/AcidChunkReader.h"
 #include "io/SampleImporter.h"
 #include "model/Song.h"
 #include "ui/IconButton.h"
@@ -64,8 +65,10 @@ private:
 
     IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
     juce::ToggleButton autoPreviewToggle_{"Auto Preview"};
+    juce::ToggleButton syncPreviewToggle_{"Sync Tempo/Key"};
     IconButton addLoopButton_{"AddLoop", IconButton::Icon::Duplicate, "Add as Loop"};
     IconButton addOneShotButton_{"AddOneShot", IconButton::Icon::Duplicate, "Add as One-Shot"};
+    IconButton addDiskButton_{"AddDisk", IconButton::Icon::Duplicate, "Add as Disk"};
 
     juce::Label titleLabel_;
     juce::Label pathLabel_;
@@ -73,6 +76,7 @@ private:
     juce::Label fileDetailsLabel_;
 
     std::shared_ptr<const AudioData> selectedAudio_;
+    std::optional<AcidMetadata> selectedAcidMeta_;
     std::string currentPreviewPath_;
     double previewDuration_ = 0.0;
     double previewProgress_ = 0.0;

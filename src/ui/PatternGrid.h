@@ -14,7 +14,7 @@ class PatternGrid : public juce::Component,
                     public juce::FileDragAndDropTarget,
                     public juce::DragAndDropTarget
 {
-public:
+  public:
     juce::String getTooltip() override { return currentTooltip_; }
     struct ClipResizeInfo
     {
@@ -31,9 +31,17 @@ public:
         double newStep = 0.0;
     };
 
+    enum class EditTool
+    {
+        Select = 0,
+        Paint = 1,
+        Erase = 2,
+        Split = 3
+    };
+
     class Listener
     {
-    public:
+      public:
         virtual ~Listener() = default;
         virtual void clipClicked(ClipId clipId) = 0;
         virtual void clipMoved(ClipId clipId, int newTrack, double newStep) = 0;
@@ -48,7 +56,21 @@ public:
             for (const auto& r : resizes)
                 clipResized(r.clipId, r.newStartStep, r.newLengthSteps, r.newOffsetSteps);
         }
-        virtual void clipEnvelopeChanged(ClipId /*clipId*/, float /*gain*/, float /*fadeInSteps*/, float /*fadeOutSteps*/) {}
+        virtual void clipEnvelopeChanged(ClipId /*clipId*/, float /*gain*/, float /*fadeInSteps*/,
+                                         float /*fadeOutSteps*/)
+        {
+        }
+        virtual void clipVolumeEnvelopeChanged(ClipId /*clipId*/, std::vector<EnvelopePoint> /*points*/) {}
+        virtual void clipPanEnvelopeChanged(ClipId /*clipId*/, std::vector<EnvelopePoint> /*points*/) {}
+        virtual void trackAutomationChanged(int /*track*/, TrackEnvelopeType /*type*/, std::vector<EnvelopePoint> /*points*/) {}
+        virtual void clipSplitRequested(const std::vector<ClipId>& /*clipIds*/, double /*splitStep*/) {}
+        virtual void clipsJoinRequested(const std::vector<ClipId>& /*clipIds*/) {}
+        virtual void clipPainted(int /*track*/, double /*startStep*/, double /*lengthSteps*/) {}
+        virtual void markerAddRequested(double /*step*/) {}
+        virtual void markerMoved(int /*markerId*/, double /*newStep*/) {}
+        virtual void markerRenameRequested(int /*markerId*/) {}
+        virtual void markerDeleteRequested(int /*markerId*/) {}
+        virtual void tabLoopToMarkerSection(int /*direction*/) {}
         virtual void clipReverseRequested(ClipId /*clipId*/) {}
         virtual void clipsReverseRequested(const std::vector<ClipId>& /*clipIds*/) {}
         virtual void clipsTransposeDelta(const std::vector<ClipId>& /*clipIds*/, int /*deltaSemitones*/) {}
@@ -93,6 +115,7 @@ public:
     void clearCursor();
     int cursorTrack() const noexcept { return cursorTrack_; }
     int cursorStep() const noexcept { return cursorStep_; }
+    double lastClickedStepOnClip() const noexcept { return lastClickedStepOnClip_; }
     void setPlayheadStep(double step);
     double playheadStep() const noexcept { return playheadStep_; }
     double clipSpan(const Clip& clip, int trackIndex = -1) const;
@@ -110,9 +133,14 @@ public:
 
     int stepToX(double step) const;
     double xToStep(int x) const;
+    int effectiveGridSnapSteps() const noexcept;
+    int snapXToGridStep(int x, int totalSteps) const noexcept;
 
     void setRasterSteps(int steps);
     int rasterSteps() const noexcept { return rasterSteps_; }
+
+    void setEditTool(EditTool tool) noexcept { editTool_ = tool; repaint(); }
+    EditTool editTool() const noexcept { return editTool_; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -141,14 +169,14 @@ public:
     void itemDragExit(const SourceDetails& dragSourceDetails) override;
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
-    static constexpr int kRulerHeight = 28;
+    static constexpr int kRulerHeight = 36;
     static constexpr int kDefaultTrackHeight = 48;
     static constexpr int kMinTrackHeight = 48;
     static constexpr int kDefaultStepWidth = 16;
     static constexpr int kTrackHeight = kDefaultTrackHeight;
     static constexpr int kStepWidth = kDefaultStepWidth;
 
-private:
+  private:
     enum class DragMode
     {
         None,
@@ -157,7 +185,11 @@ private:
         ResizeRight,
         FadeIn,
         FadeOut,
-        Gain
+        Gain,
+        EnvelopeNode,
+        TrackAutoNode,
+        PaintClip,
+        EraseClips
     };
 
     using DragClipItem = DragClipOverride;
@@ -173,14 +205,16 @@ private:
         const DragClipItem* find(ClipId id) const noexcept
         {
             for (const auto& it : items)
-                if (it.clipId == id) return &it;
+                if (it.clipId == id)
+                    return &it;
             return nullptr;
         }
 
         DragClipItem* find(ClipId id) noexcept
         {
             for (auto& it : items)
-                if (it.clipId == id) return &it;
+                if (it.clipId == id)
+                    return &it;
             return nullptr;
         }
     };
@@ -189,6 +223,7 @@ private:
     std::pair<int, int> pointToTrackAndStep(juce::Point<int> pt) const;
     const Clip* findClipAt(juce::Point<int> pt) const;
     DragMode hitTestResize(juce::Point<int> pt) const;
+    int hitTestMarkerInRuler(juce::Point<int> pt) const noexcept;
     juce::Colour sampleColour(SampleId id) const;
 
     const Song& song_;
@@ -201,9 +236,13 @@ private:
     juce::Point<int> marqueeStart_;
     juce::Point<int> marqueeEnd_;
     std::vector<ClipId> preMarqueeSelectedClips_;
+    std::vector<ClipId> preShiftClickSelectedClips_;
     bool primaryClipWasSelectedOnDown_ = false;
     int cursorTrack_ = -1;
     int cursorStep_ = -1;
+    double lastClickedStepOnClip_ = -1.0;
+    int splitHoverTrack_ = -1;
+    double splitHoverStep_ = -1.0;
     double playheadStep_ = -1.0;
     DragState drag_;
     juce::String dragTooltipText_;
@@ -216,6 +255,24 @@ private:
     double stepWidth_ = static_cast<double>(kDefaultStepWidth);
     int trackHeight_ = kDefaultTrackHeight;
     int rasterSteps_ = 2; // Default 1/16 (2 steps in 1/32 grid)
+    EditTool editTool_ = EditTool::Select;
+
+    // Paint / Envelope / Automation drag state
+    int paintTrack_ = -1;
+    double paintAnchorStep_ = 0.0;
+    double paintCurrentStart_ = 0.0;
+    double paintCurrentLen_ = 0.0;
+
+    ClipId envDragClipId_;
+    int envDragTrack_ = -1;
+    int envDragPointIdx_ = -1;
+    bool envDragIsPan_ = false;
+    std::vector<EnvelopePoint> envDragPoints_;
+
+    int autoDragTrack_ = -1;
+    int autoDragPointIdx_ = -1;
+    TrackEnvelopeType autoDragType_ = TrackEnvelopeType::None;
+    std::vector<EnvelopePoint> autoDragPoints_;
 
     enum class RulerDragMode
     {
@@ -226,12 +283,15 @@ private:
         SetRegion,
         MoveRegion,
         ResizeStart,
-        ResizeEnd
+        ResizeEnd,
+        MoveMarker
     };
 
     int loopStartStep_ = 0;
     int loopEndStep_ = 16;
     RulerDragMode rulerDragMode_ = RulerDragMode::None;
+    int draggingMarkerId_ = -1;
+    double draggingMarkerStep_ = 0.0;
     juce::Point<int> rulerDragStartScreenPos_;
     float rulerDragStartZoomX_ = 1.0f;
     double rulerDragAnchorStep_ = 0.0;

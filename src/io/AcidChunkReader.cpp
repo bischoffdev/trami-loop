@@ -84,6 +84,7 @@ std::optional<AcidMetadata> AcidChunkReader::parseChunkData(const void* data, st
     AcidMetadata result;
     result.isAcidized = true;
     result.isOneShot = (flags & 0x01) != 0;
+    result.isDiskBased = (flags & 0x10) != 0;
     result.hasRootNote = (flags & 0x02) != 0;
     result.rootNote = result.hasRootNote ? static_cast<int>(rootNote) : -1;
     result.numBeats = (numBeats > 0) ? static_cast<int>(numBeats) : 4;
