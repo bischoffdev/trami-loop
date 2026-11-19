@@ -109,7 +109,7 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
 
     syncPreviewToggle_.setColour(juce::ToggleButton::textColourId, Palette::accent);
     syncPreviewToggle_.setToggleState(true, juce::dontSendNotification);
-    syncPreviewToggle_.setTooltip("ACID In-Sync Auditioning: Time-stretch loops to project BPM, conform to project Key, and beat-sync preview when playing");
+    syncPreviewToggle_.setTooltip("In-Sync Auditioning: Time-stretch loops to project BPM, conform to project Key, and beat-sync preview when playing");
     addAndMakeVisible(syncPreviewToggle_);
 
     previewButton_.setTooltip("Preview selected sample (Space)");
@@ -190,18 +190,18 @@ void SampleBrowserPanel::selectionChanged()
                 {
                     if (selectedAcidMeta_->isDiskBased)
                     {
-                        acidInfo = "  |  ACID Disk-Based";
+                        acidInfo = "  |  Disk-Based";
                     }
                     else if (selectedAcidMeta_->isOneShot)
                     {
-                        acidInfo = "  |  ACID One-Shot";
+                        acidInfo = "  |  One-Shot";
                     }
                     else
                     {
                         const double trueBpm = (selectedAcidMeta_->numBeats > 0 && previewDuration_ > 0.0)
                             ? ((static_cast<double>(selectedAcidMeta_->numBeats) * 60.0) / previewDuration_)
                             : selectedAcidMeta_->tempo;
-                        acidInfo = "  |  ACID Loop (" + juce::String(selectedAcidMeta_->numBeats) + " beats, " +
+                        acidInfo = "  |  Loop (" + juce::String(selectedAcidMeta_->numBeats) + " beats, " +
                                    juce::String(trueBpm, 1) + " BPM";
                         if (selectedAcidMeta_->rootNote >= 0)
                             acidInfo += juce::String(", Key: ") + Sample::pitchClassName(selectedAcidMeta_->rootNote);

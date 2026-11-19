@@ -205,7 +205,7 @@ void ArrangerGrid::paint(juce::Graphics& g)
 
             const Pattern* pattern = song_.findPattern(block.patternId);
             const int lengthBars = pattern != nullptr ? pattern->lengthBars : 1;
-            const juce::String name = pattern != nullptr ? pattern->name : "Pattern";
+            const juce::String name = pattern != nullptr ? pattern->name : "Song";
 
             auto bounds = blockBounds(renderTrack, renderBar, lengthBars).reduced(2, 4);
             const juce::Colour col = patternColour(block.patternId);
@@ -245,7 +245,7 @@ void ArrangerGrid::paint(juce::Graphics& g)
 
         g.setColour(juce::Colours::white);
         g.setFont(Typography::bold(12.0f));
-        juce::String name = "Pattern";
+        juce::String name = "Song";
         if (const auto* p = song_.findPattern(dragHoverPatternId_))
             name = p->name;
         g.drawText("+ " + name, b.reduced(6, 2), juce::Justification::centredLeft, true);

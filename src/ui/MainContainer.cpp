@@ -89,7 +89,7 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
     addAndMakeVisible(toastOverlay_);
 
     if (song_.patterns().empty())
-        song_.addPattern("Song", 1);
+        song_.addPattern("Unnamed Song", 1);
 
     patternView_->setPattern(song_.patterns().front().id);
     patternView_->fitZoomToProject(8, 32);
@@ -200,7 +200,7 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
     engine_.sequencer().requestRewind();
 
     song_ = Song{};
-    const auto songPattern = song_.addPattern(dir.stem().string().empty() ? "Song" : dir.stem().string(), 1);
+    const auto songPattern = song_.addPattern(dir.stem().string().empty() ? "Unnamed Song" : dir.stem().string(), 1);
 
     stretchCache_.clear();
     currentProjectDir_ = dir;
@@ -350,14 +350,14 @@ void MainContainer::openProjectDialog()
                             }
                         }
                         if (missingAudio > 0)
-                            showToast("Opened ACID project: " + juce::String(chosen.stem().string()) + " (" + juce::String(missingAudio) + " missing samples)");
+                            showToast("Opened project: " + juce::String(chosen.stem().string()) + " (" + juce::String(missingAudio) + " missing samples)");
                         else
-                            showToast("Opened ACID project: " + juce::String(chosen.stem().string()));
+                            showToast("Opened project: " + juce::String(chosen.stem().string()));
                         return;
                     }
                     else
                     {
-                        showToast("Failed to open ACID project", true);
+                        showToast("Failed to open project", true);
                         return;
                     }
                 }
@@ -458,8 +458,16 @@ void MainContainer::showToast(const juce::String& message, bool isError)
 
 void MainContainer::performUndo()
 {
+    const float curPatZoomX = song_.patternZoomX();
+    const float curPatZoomY = song_.patternZoomY();
+    const float curArrZoomX = song_.arrangerZoomX();
+    const float curArrZoomY = song_.arrangerZoomY();
+
     if (history_.undo(song_))
     {
+        // Keep the user's current zoom level and tool mode intact across undo
+        song_.setPatternZoom(curPatZoomX, curPatZoomY);
+        song_.setArrangerZoom(curArrZoomX, curArrZoomY);
         engine_.sequencer().setMasterVolume(song_.masterVolume());
         updateAllViews();
         showToast("Undo");
@@ -468,8 +476,16 @@ void MainContainer::performUndo()
 
 void MainContainer::performRedo()
 {
+    const float curPatZoomX = song_.patternZoomX();
+    const float curPatZoomY = song_.patternZoomY();
+    const float curArrZoomX = song_.arrangerZoomX();
+    const float curArrZoomY = song_.arrangerZoomY();
+
     if (history_.redo(song_))
     {
+        // Keep the user's current zoom level and tool mode intact across redo
+        song_.setPatternZoom(curPatZoomX, curPatZoomY);
+        song_.setArrangerZoom(curArrZoomX, curArrZoomY);
         engine_.sequencer().setMasterVolume(song_.masterVolume());
         updateAllViews();
         showToast("Redo");

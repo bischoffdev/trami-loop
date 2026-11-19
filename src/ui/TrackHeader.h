@@ -75,7 +75,7 @@ public:
     static constexpr int kHeaderWidth = 360;
     static constexpr int kMinHeaderWidth = 280;
     static constexpr int kMaxHeaderWidth = 560;
-    static constexpr int kMinTrackHeight = 52;
+    static constexpr int kMinTrackHeight = 66;
 
 private:
     class TrackSliderLookAndFeel;

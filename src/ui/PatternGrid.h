@@ -170,8 +170,8 @@ class PatternGrid : public juce::Component,
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     static constexpr int kRulerHeight = 36;
-    static constexpr int kDefaultTrackHeight = 52;
-    static constexpr int kMinTrackHeight = 52;
+    static constexpr int kDefaultTrackHeight = 66;
+    static constexpr int kMinTrackHeight = 66;
     static constexpr int kDefaultStepWidth = 16;
     static constexpr int kTrackHeight = kDefaultTrackHeight;
     static constexpr int kStepWidth = kDefaultStepWidth;

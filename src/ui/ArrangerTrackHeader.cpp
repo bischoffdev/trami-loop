@@ -485,7 +485,7 @@ void ArrangerTrackHeaderList::mouseDown(const juce::MouseEvent& e)
             assignMenu.addItem(menuIdx++, juce::String(pat.name), true, isCurrent);
             patIds.push_back(pat.id);
         }
-        m.addSubMenu("Assign Pattern", assignMenu);
+        m.addSubMenu("Assign Song", assignMenu);
         m.addItem(2, "Clear Track Blocks");
         m.addSeparator();
         m.addItem(10, "Move Track Up", t > 0);
