@@ -213,12 +213,17 @@ private:
     std::atomic<bool> previewPlaying_{false};
     std::atomic<double> previewProgress_{0.0};
 
-    // Pre-allocated audio-thread scratch buffers for per-clip & per-track plugin processing + metering
+    // Pre-allocated audio-thread scratch buffers for per-clip & per-track plugin processing + metering.
+    // Heap-allocated once in the constructor so Sequencer stays small on the stack (Windows has a 1 MB stack).
     static constexpr int kMaxScratchSamples = 4096;
-    std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufL_{};
-    std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufR_{};
-    std::array<float, kMaxScratchSamples> clipBufL_{};
-    std::array<float, kMaxScratchSamples> clipBufR_{};
+    struct ScratchBuffers
+    {
+        std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufL{};
+        std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufR{};
+        std::array<float, kMaxScratchSamples> clipBufL{};
+        std::array<float, kMaxScratchSamples> clipBufR{};
+    };
+    std::unique_ptr<ScratchBuffers> scratch_;
     std::array<std::atomic<float>, kMaxTracks> trackPeakL_{};
     std::array<std::atomic<float>, kMaxTracks> trackPeakR_{};
     std::atomic<AudioPluginProcessor*> pluginProcessor_{nullptr};

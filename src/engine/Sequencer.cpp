@@ -11,7 +11,10 @@ namespace trami
 {
 
 Sequencer::Sequencer(SnapshotExchange& exchange, double sampleRate)
-    : exchange_(exchange), click_(synth::click(sampleRate, 1000.0)), accentClick_(synth::click(sampleRate, 1600.0))
+    : exchange_(exchange)
+    , click_(synth::click(sampleRate, 1000.0))
+    , accentClick_(synth::click(sampleRate, 1600.0))
+    , scratch_(std::make_unique<ScratchBuffers>())
 {
     for (int t = 0; t < kMaxTracks; ++t)
     {
@@ -900,24 +903,24 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         const bool validTrack = (voice.track >= 0 && voice.track < kMaxTracks);
         if (validTrack && !trackUsed[static_cast<std::size_t>(voice.track)])
         {
-            std::fill_n(trackBufL_[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
-            std::fill_n(trackBufR_[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
+            std::fill_n(scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
+            std::fill_n(scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
             trackUsed[static_cast<std::size_t>(voice.track)] = true;
         }
 
         const bool useClipFx = (pluginProc != nullptr && voice.hasClipFx && voice.clipId != 0);
         if (useClipFx)
         {
-            std::fill_n(clipBufL_.data(), n, 0.0f);
-            std::fill_n(clipBufR_.data(), n, 0.0f);
+            std::fill_n(scratch_->clipBufL.data(), n, 0.0f);
+            std::fill_n(scratch_->clipBufR.data(), n, 0.0f);
         }
 
         float* destL = useClipFx
-            ? clipBufL_.data()
-            : (validTrack ? trackBufL_[static_cast<std::size_t>(voice.track)].data() : left);
+            ? scratch_->clipBufL.data()
+            : (validTrack ? scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data() : left);
         float* destR = useClipFx
-            ? clipBufR_.data()
-            : (validTrack ? trackBufR_[static_cast<std::size_t>(voice.track)].data() : right);
+            ? scratch_->clipBufR.data()
+            : (validTrack ? scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data() : right);
 
         for (int i = voice.startDelay; i < n; ++i)
         {
@@ -966,13 +969,13 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 
         if (useClipFx)
         {
-            pluginProc->processClip(voice.clipId, clipBufL_.data(), clipBufR_.data(), n);
-            float* trkL = validTrack ? trackBufL_[static_cast<std::size_t>(voice.track)].data() : left;
-            float* trkR = validTrack ? trackBufR_[static_cast<std::size_t>(voice.track)].data() : right;
+            pluginProc->processClip(voice.clipId, scratch_->clipBufL.data(), scratch_->clipBufR.data(), n);
+            float* trkL = validTrack ? scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data() : left;
+            float* trkR = validTrack ? scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data() : right;
             for (int i = 0; i < n; ++i)
             {
-                trkL[i] += clipBufL_[static_cast<std::size_t>(i)];
-                trkR[i] += clipBufR_[static_cast<std::size_t>(i)];
+                trkL[i] += scratch_->clipBufL[static_cast<std::size_t>(i)];
+                trkR[i] += scratch_->clipBufR[static_cast<std::size_t>(i)];
             }
         }
     }
@@ -988,8 +991,8 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
             continue;
         }
 
-        float* tL = trackBufL_[idx].data();
-        float* tR = trackBufR_[idx].data();
+        float* tL = scratch_->trackBufL[idx].data();
+        float* tR = scratch_->trackBufR[idx].data();
         if (pluginProc != nullptr)
             pluginProc->processTrack(t, tL, tR, n);
 
