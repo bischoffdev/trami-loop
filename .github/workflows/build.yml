@@ -2,6 +2,11 @@ name: Build & Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional version override (e.g. 0.2.0); defaults to VERSION file'
+        required: false
+        default: ''
   release:
     types: [published]
 
@@ -34,12 +39,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fetchcontent-
 
+      - name: Resolve Version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
+            RAW_VER="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            RAW_VER="${{ inputs.version }}"
+          else
+            RAW_VER=$(tr -d '[:space:]' < VERSION)
+          fi
+          CLEAN_VER="${RAW_VER#v}"
+          echo "version=$CLEAN_VER" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: v$CLEAN_VER"
+
       - name: Configure CMake (macOS)
         if: runner.os == 'macOS'
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DTRAMI_VERSION="${{ steps.ver.outputs.version }}" \
             -DTRAMI_BUILD_TESTS=ON
 
       - name: Configure CMake (Windows)
@@ -48,6 +69,7 @@ jobs:
         run: |
           cmake -B build -A x64 \
             -DCMAKE_BUILD_TYPE=Release \
+            -DTRAMI_VERSION="${{ steps.ver.outputs.version }}" \
             -DTRAMI_BUILD_TESTS=ON
 
       - name: Build Application (Release)
@@ -58,6 +80,73 @@ jobs:
         run: |
           ctest --test-dir build -C Release --output-on-failure
 
+      # Code-sign & optionally notarize macOS app (falls back to ad-hoc signing when secrets are unset)
+      - name: Sign & Notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          APP_PATH=$(find build -name "trami-loop.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: trami-loop.app not found"
+            exit 1
+          fi
+
+          if [ -n "$APPLE_CERT_BASE64" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with Developer ID..."
+            KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+            KEYCHAIN_PASS="temp-ci-pass-$(date +%s)"
+            echo "$APPLE_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security list-keychain -d user -s "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+            codesign --force --deep --options runtime --timestamp \
+              --entitlements cmake/entitlements.plist \
+              --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
+
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+              echo "Submitting for Apple Notarization..."
+              ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/notarize.zip"
+              xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$APPLE_TEAM_ID" \
+                --password "$APPLE_APP_PASSWORD" \
+                --wait
+              xcrun stapler staple "$APP_PATH"
+            fi
+          else
+            echo "No Developer ID secrets configured — applying ad-hoc signature with entitlements..."
+            codesign --force --deep --sign - --entitlements cmake/entitlements.plist "$APP_PATH"
+          fi
+
+      # Optionally Authenticode-sign Windows executable when secrets are configured
+      - name: Sign Executable (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_CERT_BASE64: ${{ secrets.WIN_CERT_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          if ($env:WIN_CERT_BASE64) {
+            $exe = (Get-ChildItem -Path build -Filter "trami-loop.exe" -Recurse | Select-Object -First 1).FullName
+            $pfxPath = "$env:RUNNER_TEMP\win_cert.pfx"
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WIN_CERT_BASE64))
+            $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+            & $signtool sign /f $pfxPath /p $env:WIN_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+            Remove-Item $pfxPath -Force
+          } else {
+            Write-Host "No Windows signing certificate secrets configured — skipping Authenticode signing."
+          }
+
       # Package artifacts for release / download
       - name: Stage Artifacts (macOS)
         if: runner.os == 'macOS'
@@ -65,8 +154,8 @@ jobs:
           mkdir -p artifacts
           APP_PATH=$(find build -name "trami-loop.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
-            echo "Packaging $APP_PATH..."
-            ditto -c -k --keepParent "$APP_PATH" artifacts/trami-loop-macOS.zip
+            echo "Packaging $APP_PATH (v${{ steps.ver.outputs.version }})..."
+            ditto -c -k --keepParent "$APP_PATH" "artifacts/trami-loop-v${{ steps.ver.outputs.version }}-macOS.zip"
           else
             echo "Error: trami-loop.app not found"
             exit 1
@@ -79,9 +168,9 @@ jobs:
           mkdir -p artifacts
           EXE_PATH=$(find build -name "trami-loop.exe" -type f | head -n 1)
           if [ -n "$EXE_PATH" ]; then
-            echo "Packaging $EXE_PATH..."
+            echo "Packaging $EXE_PATH (v${{ steps.ver.outputs.version }})..."
             cp "$EXE_PATH" artifacts/
-            cd artifacts && 7z a trami-loop-Windows.zip trami-loop.exe && rm trami-loop.exe && cd ..
+            cd artifacts && 7z a "trami-loop-v${{ steps.ver.outputs.version }}-Windows.zip" trami-loop.exe && rm trami-loop.exe && cd ..
           else
             echo "Error: trami-loop.exe not found"
             exit 1

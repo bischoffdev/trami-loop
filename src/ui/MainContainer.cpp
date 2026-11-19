@@ -585,6 +585,12 @@ void MainContainer::paint(juce::Graphics& g)
     g.drawText("trami-loop", 14, 1, 110, kTopBarHeight, juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xfff0f0f6));
     g.drawText("trami-loop", 14, 0, 110, kTopBarHeight, juce::Justification::centredLeft);
+
+    // Subtle version badge on the right of the top bar
+    g.setColour(Palette::textDim.withAlpha(0.75f));
+    g.setFont(Typography::regular(11.5f));
+    g.drawText("v" + juce::String(JUCE_APPLICATION_VERSION_STRING),
+               mainW - 92, 0, 80, kTopBarHeight, juce::Justification::centredRight);
 }
 
 void MainContainer::resized()
