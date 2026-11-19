@@ -37,7 +37,7 @@ juce::Font TramiLookAndFeel::getLabelFont(juce::Label& label)
 
 juce::Font TramiLookAndFeel::getComboBoxFont(juce::ComboBox&)
 {
-    return juce::Font(Typography::regular(13.0f));
+    return juce::Font(Typography::bold(12.0f));
 }
 
 juce::Font TramiLookAndFeel::getPopupMenuFont()
@@ -161,24 +161,72 @@ void TramiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& but
                                            bool shouldDrawButtonAsDown)
 {
     auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
-    juce::Colour fill = backgroundColour;
+    constexpr float radius = 5.5f;
+    const bool isToggled = button.getToggleState();
 
-    if (fill == Palette::surface || fill == Palette::surface.brighter(0.04f))
-        fill = juce::Colour(0xff222832);
+    const bool isDefaultSurface = (backgroundColour == Palette::surface ||
+                                   backgroundColour == Palette::surface.brighter(0.04f));
 
-    if (shouldDrawButtonAsDown)
-        fill = fill.darker(0.2f);
-    else if (shouldDrawButtonAsHighlighted)
-        fill = fill.brighter(0.18f);
+    juce::Colour topCol;
+    juce::Colour botCol;
+    if (isDefaultSurface)
+    {
+        if (shouldDrawButtonAsDown)
+        {
+            topCol = juce::Colour(0xff232328);
+            botCol = juce::Colour(0xff2e2e34);
+        }
+        else if (isToggled)
+        {
+            topCol = juce::Colour(0xff38485a);
+            botCol = juce::Colour(0xff273442);
+        }
+        else if (shouldDrawButtonAsHighlighted)
+        {
+            topCol = juce::Colour(0xff4c4c54);
+            botCol = juce::Colour(0xff34343b);
+        }
+        else
+        {
+            topCol = juce::Colour(0xff424249);
+            botCol = juce::Colour(0xff2b2b31);
+        }
+    }
+    else
+    {
+        juce::Colour base = backgroundColour;
+        if (shouldDrawButtonAsDown)
+            base = base.darker(0.18f);
+        else if (shouldDrawButtonAsHighlighted)
+            base = base.brighter(0.14f);
+        topCol = base.brighter(0.14f);
+        botCol = base.darker(0.16f);
+    }
 
-    g.setColour(fill);
-    g.fillRoundedRectangle(bounds, 4.0f);
+    // Subtle drop shadow underneath button
+    g.setColour(juce::Colours::black.withAlpha(0.28f));
+    g.fillRoundedRectangle(bounds.translated(0.0f, 1.0f), radius);
 
-    juce::Colour border = button.getToggleState()
-                              ? (fill.getBrightness() > 0.4f ? fill.brighter(0.25f) : Palette::accent)
-                              : (shouldDrawButtonAsHighlighted ? Palette::accent.withAlpha(0.6f) : juce::Colour(0xff3f4b5c));
+    // Brushed metallic vertical gradient fill
+    juce::ColourGradient grad(topCol, bounds.getX(), bounds.getY(),
+                              botCol, bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(bounds, radius);
+
+    // Delicate inner top specular highlight (GarageBand / macOS brushed bezel)
+    if (!shouldDrawButtonAsDown)
+    {
+        g.setColour(juce::Colours::white.withAlpha(shouldDrawButtonAsHighlighted ? 0.22f : 0.14f));
+        g.drawHorizontalLine(juce::roundToInt(bounds.getY() + 1.0f),
+                             bounds.getX() + radius * 0.7f, bounds.getRight() - radius * 0.7f);
+    }
+
+    // Crisp dark outer border (or accent ring when toggled)
+    juce::Colour border = isToggled
+                              ? Palette::accent.withAlpha(0.85f)
+                              : (shouldDrawButtonAsHighlighted ? juce::Colour(0xff6a6a76) : juce::Colour(0xff141418));
     g.setColour(border);
-    g.drawRoundedRectangle(bounds, 4.0f, button.getToggleState() ? 1.5f : 1.0f);
+    g.drawRoundedRectangle(bounds, radius, isToggled ? 1.3f : 1.0f);
 }
 
 void TramiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
@@ -208,6 +256,93 @@ void TramiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& butto
     if (shouldDrawButtonAsDown)
         r.translate(0.0f, 1.0f);
     g.drawText(button.getButtonText(), r.toNearestInt(), juce::Justification::centred, false);
+}
+
+void TramiLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
+                                    int /*buttonX*/, int /*buttonY*/, int /*buttonW*/, int /*buttonH*/,
+                                    juce::ComboBox& box)
+{
+    const auto bounds = juce::Rectangle<float>(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f);
+    constexpr float radius = 5.5f;
+    const bool isHover = box.isMouseOver();
+
+    // Brushed metallic vertical bevel fill (matching toolbar & play bar buttons)
+    const juce::Colour topCol = isButtonDown ? juce::Colour(0xff222227)
+                              : isHover ? juce::Colour(0xff4a4a53)
+                                        : juce::Colour(0xff3e3e46);
+    const juce::Colour botCol = isButtonDown ? juce::Colour(0xff2c2c32)
+                              : isHover ? juce::Colour(0xff32323a)
+                                        : juce::Colour(0xff28282e);
+
+    juce::ColourGradient grad(topCol, bounds.getX(), bounds.getY(),
+                              botCol, bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(bounds, radius);
+
+    if (!isButtonDown)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        g.drawHorizontalLine(juce::roundToInt(bounds.getY() + 1.0f),
+                             bounds.getX() + radius * 0.7f, bounds.getRight() - radius * 0.7f);
+    }
+
+    g.setColour(isHover ? juce::Colour(0xff646470) : juce::Colour(0xff141418));
+    g.drawRoundedRectangle(bounds, radius, 1.0f);
+
+    // Compact crisp chevron arrow on the right
+    const float arrowCx = static_cast<float>(width) - 11.0f;
+    const float arrowCy = static_cast<float>(height) * 0.5f;
+    juce::Path p;
+    p.startNewSubPath(arrowCx - 4.0f, arrowCy - 2.0f);
+    p.lineTo(arrowCx, arrowCy + 2.5f);
+    p.lineTo(arrowCx + 4.0f, arrowCy - 2.0f);
+    g.setColour(box.findColour(juce::ComboBox::arrowColourId).withAlpha(box.isEnabled() ? 0.85f : 0.35f));
+    g.strokePath(p, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+void TramiLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
+{
+    label.setBounds(6, 1, std::max(10, box.getWidth() - 24), box.getHeight() - 2);
+    label.setFont(getComboBoxFont(box));
+    label.setMinimumHorizontalScale(1.0f);
+}
+
+void TramiLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                                        bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
+{
+    const float h = static_cast<float>(button.getHeight());
+    const float boxSz = std::min(15.0f, h - 4.0f);
+    const float boxX = 2.0f;
+    const float boxY = (h - boxSz) * 0.5f;
+    const auto tickBox = juce::Rectangle<float>(boxX, boxY, boxSz, boxSz);
+
+    const bool isOn = button.getToggleState();
+
+    // Recessed rounded checkbox
+    g.setColour(isOn ? Palette::accent.withAlpha(0.24f) : juce::Colour(0xff1c1c22));
+    g.fillRoundedRectangle(tickBox, 3.5f);
+    g.setColour(isOn ? Palette::accent.withAlpha(0.9f)
+                     : (shouldDrawButtonAsHighlighted ? juce::Colour(0xff787886) : juce::Colour(0xff4c4c58)));
+    g.drawRoundedRectangle(tickBox, 3.5f, 1.2f);
+
+    if (isOn)
+    {
+        juce::Path tick;
+        tick.startNewSubPath(boxX + boxSz * 0.22f, boxY + boxSz * 0.52f);
+        tick.lineTo(boxX + boxSz * 0.44f, boxY + boxSz * 0.74f);
+        tick.lineTo(boxX + boxSz * 0.80f, boxY + boxSz * 0.28f);
+        g.setColour(juce::Colours::white);
+        g.strokePath(tick, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    g.setColour(button.findColour(juce::ToggleButton::textColourId)
+                    .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+    g.setFont(juce::Font(Typography::bold(12.0f)));
+    const int textX = juce::roundToInt(boxX + boxSz + 6.0f);
+    g.drawText(button.getButtonText(),
+               textX, shouldDrawButtonAsDown ? 1 : 0,
+               std::max(0, button.getWidth() - textX), button.getHeight(),
+               juce::Justification::centredLeft, true);
 }
 
 void TramiLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar& /*scrollbar*/,

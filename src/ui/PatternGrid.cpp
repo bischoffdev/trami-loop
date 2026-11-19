@@ -180,9 +180,26 @@ void PatternGrid::resized() {}
 
 juce::Colour PatternGrid::sampleColour(SampleId id) const
 {
+    // Curated modern luminous DAW clip palette (inspired by GarageBand / Logic)
+    static constexpr std::uint32_t kModernPalette[] = {
+        0xff63d988, // Mint Emerald Green
+        0xffb4a2f0, // Soft Lavender Violet
+        0xff72c4fa, // Sky Blue
+        0xfff2bf66, // Warm Amber Gold
+        0xfff294ab, // Soft Coral Rose
+        0xff6ad8cc, // Aqua Teal
+        0xff9d94f2, // Periwinkle Indigo
+        0xffa2dc6d, // Fresh Lime
+        0xffefa274, // Soft Peach
+        0xff85b8f8  // Cornflower Blue
+    };
+    constexpr std::size_t kCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
+    if (id.isValid())
+        return juce::Colour(kModernPalette[(id.value - 1) % kCount]);
+
     const Sample* sample = song_.findSample(id);
     const float hue = sample != nullptr ? sample->hue() : 0.5f;
-    return juce::Colour::fromHSV(hue, 0.75f, 0.85f, 1.0f);
+    return juce::Colour::fromHSV(hue, 0.52f, 0.88f, 1.0f);
 }
 
 double PatternGrid::clipSpan(const Clip& clip, int trackIndex) const
@@ -253,10 +270,10 @@ double PatternGrid::xToStep(int x) const
 int PatternGrid::effectiveGridSnapSteps() const noexcept
 {
     int snap = std::max(1, rasterSteps_);
-    if (stepWidth_ * static_cast<double>(snap) < 10.0)
-        snap = std::max(snap, kStepsPerBeat);
-    if (stepWidth_ * static_cast<double>(kStepsPerBeat) < 12.0)
-        snap = std::max(snap, kStepsPerBar);
+    // Honor the user's chosen Grid resolution down to 2px per grid line;
+    // only step up if zooming out makes grid lines sub-2px indistinguishable.
+    while (snap < kStepsPerBar && (stepWidth_ * static_cast<double>(snap) < 2.0))
+        snap *= 2;
     return snap;
 }
 
@@ -543,11 +560,17 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
     const auto* pat = song_.findPattern(patternId_);
     const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
 
-    // 1. Ruler
-    g.setColour(juce::Colour(0xff23272d));
-    g.fillRect(0, 0, renderWidth, kRulerHeight);
-    g.setColour(juce::Colour(0xff181a1f));
-    g.drawHorizontalLine(kRulerHeight - 1, 0.0f, static_cast<float>(renderWidth));
+    // 1. Sleek brushed-metal dark ruler (GarageBand / Logic style)
+    {
+        juce::ColourGradient rulerGrad(juce::Colour(0xff34343a), 0.0f, 0.0f,
+                                       juce::Colour(0xff222226), 0.0f, static_cast<float>(kRulerHeight), false);
+        g.setGradientFill(rulerGrad);
+        g.fillRect(0, 0, renderWidth, kRulerHeight);
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.drawHorizontalLine(0, 0.0f, static_cast<float>(renderWidth));
+        g.setColour(juce::Colour(0xff141417));
+        g.drawHorizontalLine(kRulerHeight - 1, 0.0f, static_cast<float>(renderWidth));
+    }
     g.setFont(Typography::bold(11.0f));
 
     const double barWidthPx = stepWidth_ * static_cast<double>(kStepsPerBar);
@@ -567,32 +590,33 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
             const int barNum = step / kStepsPerBar + 1;
             if ((barNum - 1) % barInterval == 0)
             {
-                g.setColour(Palette::text);
+                g.setColour(juce::Colour(0xffd2d2dc));
                 const int labelW = std::max(24, juce::roundToInt(barWidthPx * static_cast<double>(barInterval)));
-                juce::String barLabel = juce::String(barNum) + ".1";
-                if (barWidthPx * static_cast<double>(barInterval) >= 68.0 && song_.bpm() > 0.0)
+                juce::String barLabel = juce::String(barNum);
+                if (barWidthPx * static_cast<double>(barInterval) >= 76.0 && song_.bpm() > 0.0)
                 {
                     const double secPerStep = (60.0 / song_.bpm()) / static_cast<double>(kStepsPerBeat);
                     const double totalSec = static_cast<double>(step) * secPerStep;
                     const int mins = static_cast<int>(totalSec) / 60;
                     const double secs = std::fmod(totalSec, 60.0);
-                    barLabel += juce::String::formatted(" (%d:%04.1f)", mins, secs);
+                    barLabel += juce::String::formatted("  %d:%04.1f", mins, secs);
                 }
-                g.drawText(barLabel, x + 4, 14, labelW, kRulerHeight - 15,
+                g.drawText(barLabel, x + 5, 13, labelW, kRulerHeight - 14,
                            juce::Justification::centredLeft);
             }
-            g.setColour(Palette::gridBarLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 6), static_cast<float>(kRulerHeight));
+            g.setColour(juce::Colour(0xff52525c));
+            g.drawVerticalLine(x, 10.0f, static_cast<float>(kRulerHeight - 1));
         }
-        else if (isBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 12.0))
+        else if (isBeat && rasterSteps_ <= kStepsPerBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 4.0))
         {
-            g.setColour(Palette::gridBeatLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 5), static_cast<float>(kRulerHeight));
+            g.setColour(juce::Colour(0xff42424a));
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 7), static_cast<float>(kRulerHeight - 1));
         }
-        else if (isRaster && (stepWidth_ * static_cast<double>(rasterSteps_) >= 10.0))
+        else if (isRaster && (stepWidth_ * static_cast<double>(rasterSteps_) >= 3.0))
         {
-            g.setColour(Palette::gridLine);
-            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 3), static_cast<float>(kRulerHeight));
+            const float densityAlpha = std::clamp(static_cast<float>((stepWidth_ * static_cast<double>(rasterSteps_) - 2.5) / 5.0), 0.35f, 1.0f);
+            g.setColour(juce::Colour(0xff383840).withMultipliedAlpha(densityAlpha));
+            g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 4), static_cast<float>(kRulerHeight - 1));
         }
     }
 
@@ -617,25 +641,42 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
             g.setColour(juce::Colour(0xfff59e0b));
             g.drawVerticalLine(mx, 14.0f, static_cast<float>(kRulerHeight));
             const auto flagRect = juce::Rectangle<float>(static_cast<float>(mx + 1), 16.0f, static_cast<float>(flagW), 16.0f);
-            g.fillRoundedRectangle(flagRect, 3.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.7f));
-            g.drawRoundedRectangle(flagRect, 3.0f, 1.0f);
+            g.fillRoundedRectangle(flagRect, 3.5f);
+            g.setColour(juce::Colours::white.withAlpha(0.75f));
+            g.drawRoundedRectangle(flagRect, 3.5f, 1.0f);
             g.setColour(juce::Colour(0xff111827));
             g.drawText(mText, flagRect.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
         }
     }
 
-    // Playhead cap
+    // Metallic pentagon/shield playhead cap (matching GarageBand reference)
     if (playheadStep_ >= 0.0)
     {
-        const int px = stepToX(playheadStep_);
-        g.setColour(Palette::accent);
+        const float px = static_cast<float>(stepToX(playheadStep_));
         juce::Path cap;
-        cap.startNewSubPath(static_cast<float>(px - 6), 0.0f);
-        cap.lineTo(static_cast<float>(px + 6), 0.0f);
-        cap.lineTo(static_cast<float>(px), static_cast<float>(kRulerHeight));
+        cap.startNewSubPath(px - 7.5f, 4.0f);
+        cap.lineTo(px + 7.5f, 4.0f);
+        cap.lineTo(px + 7.5f, 15.0f);
+        cap.lineTo(px, 24.0f);
+        cap.lineTo(px - 7.5f, 15.0f);
         cap.closeSubPath();
+
+        // Subtle drop shadow
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.fillPath(cap, juce::AffineTransform::translation(0.0f, 1.5f));
+
+        // Brushed silver gradient fill
+        juce::ColourGradient capGrad(juce::Colour(0xffe6e6ec), px, 4.0f,
+                                     juce::Colour(0xff9a9aa6), px, 24.0f, false);
+        g.setGradientFill(capGrad);
         g.fillPath(cap);
+
+        g.setColour(juce::Colour(0xff18181c));
+        g.strokePath(cap, juce::PathStrokeType(1.1f));
+
+        // Stem line from cap bottom to ruler edge
+        g.setColour(juce::Colour(0xffe6e6ec));
+        g.drawLine(px, 23.5f, px, static_cast<float>(kRulerHeight), 1.5f);
     }
 }
 
@@ -689,24 +730,27 @@ void PatternGrid::paint(juce::Graphics& g)
             g.setColour(Palette::gridBarLine);
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         }
-        else if (isBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 12.0))
+        else if (isBeat && rasterSteps_ <= kStepsPerBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 4.0))
         {
             g.setColour(Palette::gridBeatLine);
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         }
-        else if (isRaster && (stepWidth_ * static_cast<double>(rasterSteps_) >= 10.0))
+        else if (isRaster && (stepWidth_ * static_cast<double>(rasterSteps_) >= 3.0))
         {
-            g.setColour(Palette::gridLine);
+            const float densityAlpha = std::clamp(static_cast<float>((stepWidth_ * static_cast<double>(rasterSteps_) - 2.5) / 5.0), 0.35f, 1.0f);
+            g.setColour(Palette::gridLine.withMultipliedAlpha(densityAlpha));
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         }
     }
 
-    // Horizontal track separator lines across the right grid (aligned with TrackHeaderList)
+    // Horizontal track separator lines across the right grid (sleek recessed divider aligned with TrackHeaderList)
     for (int t = 0; t < numTracks; ++t)
     {
         const int sepY = kRulerHeight + (t + 1) * trackHeight_ - 1;
-        g.setColour(Palette::gridBeatLine.withAlpha(0.85f));
+        g.setColour(juce::Colour(0xff18181c));
         g.drawHorizontalLine(sepY, 0.0f, static_cast<float>(renderWidth));
+        g.setColour(juce::Colours::white.withAlpha(0.05f));
+        g.drawHorizontalLine(sepY + 1, 0.0f, static_cast<float>(renderWidth));
     }
 
     // Timeline marker vertical guide lines down the grid
@@ -836,34 +880,51 @@ void PatternGrid::paint(juce::Graphics& g)
 
                 const auto rawBounds = clipBounds(renderTrack, renderStep, span);
                 auto bounds = (rawBounds.getWidth() > 6) ? rawBounds.reduced(2, 3) : rawBounds.reduced(0, 3);
+                const auto fBounds = bounds.toFloat();
+                const float clipRadius = std::min(7.5f, std::min(fBounds.getWidth(), fBounds.getHeight()) * 0.25f);
                 const juce::Colour col = sampleColour(clip.sampleId);
-
                 const bool isOverlapping = overlappingClipIds.contains(clip.id.value);
 
                 // Stacked card tab if overlapping
                 if (isOverlapping)
                 {
                     auto tab = bounds.translated(0, -3).reduced(3, 0);
-                    g.setColour(col.darker(0.35f).withAlpha(0.6f));
-                    g.fillRoundedRectangle(tab.toFloat(), 3.0f);
-                    g.setColour(juce::Colour(0xfff59e0b).withAlpha(0.75f));
-                    g.drawRoundedRectangle(tab.toFloat(), 3.0f, 1.0f);
+                    g.setColour(col.darker(0.35f).withAlpha(0.65f));
+                    g.fillRoundedRectangle(tab.toFloat(), clipRadius);
+                    g.setColour(juce::Colour(0xfff59e0b).withAlpha(0.8f));
+                    g.drawRoundedRectangle(tab.toFloat(), clipRadius, 1.0f);
                 }
 
-                // Container
-                g.setColour(juce::Colour(0xff1a1e26).withAlpha(isOverlapping ? 0.90f : 1.0f));
-                g.fillRoundedRectangle(bounds.toFloat(), 4.0f);
-                g.setColour(isLoop ? juce::Colour(0xfff59e0b).withAlpha(0.16f) : col.withAlpha(0.12f));
-                g.fillRoundedRectangle(bounds.toFloat(), 4.0f);
+                // Soft drop shadow beneath clip card
+                g.setColour(juce::Colours::black.withAlpha(0.34f));
+                g.fillRoundedRectangle(fBounds.translated(0.0f, 1.5f), clipRadius);
 
-                // Accent stripe
-                g.setColour(isLoop ? juce::Colour(0xffffb300) : col);
-                g.fillRoundedRectangle(static_cast<float>(bounds.getX()), static_cast<float>(bounds.getY()),
-                                       static_cast<float>(bounds.getWidth()), 3.0f, 2.0f);
+                // Luminous vertical glossy gradient clip body (matching GarageBand / modern DAW reference)
+                const juce::Colour topFill = col.brighter(0.24f).withAlpha(isOverlapping ? 0.90f : 1.0f);
+                const juce::Colour botFill = col.darker(0.16f).withAlpha(isOverlapping ? 0.90f : 1.0f);
+                {
+                    juce::ColourGradient clipGrad(topFill, fBounds.getX(), fBounds.getY(),
+                                                  botFill, fBounds.getX(), fBounds.getBottom(), false);
+                    g.setGradientFill(clipGrad);
+                    g.fillRoundedRectangle(fBounds, clipRadius);
+                }
 
-                // Waveform
+                // Subtle upper glass sheen / inner top highlight
+                if (fBounds.getHeight() >= 14.0f)
+                {
+                    g.setColour(juce::Colours::white.withAlpha(0.28f));
+                    g.drawHorizontalLine(bounds.getY() + 1,
+                                         fBounds.getX() + clipRadius * 0.7f,
+                                         fBounds.getRight() - clipRadius * 0.7f);
+                }
+
+                // Waveform (deep saturated shade of the clip's own hue for crisp readability)
                 const Sample* sample = song_.findSample(clip.sampleId);
                 const bool isMissingSample = (sample != nullptr && sample->missing);
+                const bool hasTitleBand = (bounds.getHeight() >= 28 && bounds.getWidth() >= 32);
+                const int waveTop = bounds.getY() + (hasTitleBand ? 16 : 4);
+                const int waveBot = bounds.getBottom() - 4;
+                const int waveH = std::max(6, waveBot - waveTop);
                 auto rawAudio = stretchCache_.getRawAudio(clip.sampleId);
                 if (!isMissingSample && rawAudio != nullptr && rawAudio->numFrames() > 0 && bounds.getWidth() > 4)
                 {
@@ -886,19 +947,20 @@ void PatternGrid::paint(juce::Graphics& g)
                     {
                         const float* audioL = rawAudio->left();
                         const float* audioR = rawAudio->right();
-                        const float cy = static_cast<float>(bounds.getCentreY());
-                        const float maxAmp = static_cast<float>(bounds.getHeight() - 8) * 0.5f;
+                        const float cy = static_cast<float>(waveTop) + static_cast<float>(waveH) * 0.5f;
+                        const float maxAmp = static_cast<float>(waveH) * 0.46f;
 
                         g.saveState();
-                        g.reduceClipRegion(bounds.reduced(2, 2));
+                        g.reduceClipRegion(bounds.reduced(3, 2));
 
-                        g.setColour(col.withAlpha(0.25f));
-                        g.drawHorizontalLine(static_cast<int>(cy), static_cast<float>(bounds.getX() + 2),
-                                             static_cast<float>(bounds.getRight() - 2));
+                        const juce::Colour waveCol = col.darker(0.46f).withMultipliedSaturation(1.15f);
+                        g.setColour(waveCol.withAlpha(0.32f));
+                        g.drawHorizontalLine(static_cast<int>(cy), static_cast<float>(bounds.getX() + 3),
+                                             static_cast<float>(bounds.getRight() - 3));
 
-                        g.setColour(col.brighter(0.45f));
-                        const int w = bounds.getWidth() - 4;
-                        const int bx = bounds.getX() + 2;
+                        g.setColour(waveCol.withAlpha(0.88f));
+                        const int w = bounds.getWidth() - 6;
+                        const int bx = bounds.getX() + 3;
 
                         for (int px = 0; px < w; ++px)
                         {
@@ -949,7 +1011,7 @@ void PatternGrid::paint(juce::Graphics& g)
                             const float y2 = cy - minVal * maxAmp;
                             const float topY = std::min(y1, y2);
                             const float botY = std::max(y1, y2);
-                            const float lineH = std::max(1.0f, botY - topY);
+                            const float lineH = std::max(1.2f, botY - topY);
 
                             g.drawVerticalLine(bx + px, topY, topY + lineH);
                         }
@@ -958,12 +1020,25 @@ void PatternGrid::paint(juce::Graphics& g)
                 }
                 else if (isMissingSample && bounds.getWidth() > 24 && bounds.getHeight() >= 16)
                 {
-                    g.setColour(Palette::danger.withAlpha(0.18f));
-                    g.fillRoundedRectangle(bounds.toFloat(), 4.0f);
-                    g.setColour(Palette::danger.withAlpha(0.85f));
+                    g.setColour(Palette::danger.withAlpha(0.28f));
+                    g.fillRoundedRectangle(fBounds, clipRadius);
+                    g.setColour(juce::Colour(0xff5c0b0b));
                     g.setFont(Typography::bold(10.5f));
                     const juce::String missLabel = "MISSING: " + juce::String(sample->fileName.empty() ? sample->name : sample->fileName);
                     g.drawText(missLabel, bounds.reduced(6, 2), juce::Justification::centredLeft, true);
+                }
+
+                // Clean top-left clip title (deep tinted ink matching Screenshot 1)
+                if (!isMissingSample && sample != nullptr && hasTitleBand)
+                {
+                    const juce::Colour titleCol = col.darker(0.72f).withMultipliedSaturation(1.1f);
+                    g.setColour(titleCol);
+                    g.setFont(Typography::bold(11.0f));
+                    const int rightReserve = (bounds.getWidth() >= 76) ? 38 : 6;
+                    g.drawText(juce::String(sample->name),
+                               bounds.getX() + 7, bounds.getY() + 2,
+                               std::max(10, bounds.getWidth() - 7 - rightReserve), 14,
+                               juce::Justification::centredLeft, true);
                 }
 
                 // Loop notches (only drawn for Loop tracks)
@@ -975,30 +1050,32 @@ void PatternGrid::paint(juce::Graphics& g)
                     {
                         const double phase = (renderOffset > 0.0) ? std::fmod(renderOffset, loopSteps) : 0.0;
                         double firstNotch = (phase > 0.01) ? (loopSteps - phase) : loopSteps;
-                        g.setColour(col.brighter(0.7f));
+                        g.setColour(col.darker(0.60f).withAlpha(0.55f));
                         for (double st = firstNotch; st < span - 0.01; st += loopSteps)
                         {
                             const int notchX = bounds.getX() + static_cast<int>(std::round(st * stepWidth_));
-                            g.drawVerticalLine(notchX, static_cast<float>(bounds.getY() + 3),
+                            g.drawVerticalLine(notchX, static_cast<float>(bounds.getY() + 2),
                                                static_cast<float>(bounds.getY() + 8));
-                            g.drawVerticalLine(notchX, static_cast<float>(bounds.getBottom() - 6),
-                                               static_cast<float>(bounds.getBottom()));
+                            g.drawVerticalLine(notchX, static_cast<float>(bounds.getBottom() - 8),
+                                               static_cast<float>(bounds.getBottom() - 2));
                         }
                     }
                 }
 
-                // Edge handles
-                if (bounds.getWidth() >= 16)
+                // Subtle edge resize handles
+                if (bounds.getWidth() >= 20)
                 {
-                    g.setColour(juce::Colours::white.withAlpha(0.4f));
-                    g.fillRect(bounds.getX() + 2, bounds.getY() + 4, 2, bounds.getHeight() - 8);
-                    g.fillRect(bounds.getRight() - 4, bounds.getY() + 4, 2, bounds.getHeight() - 8);
+                    g.setColour(col.darker(0.65f).withAlpha(0.25f));
+                    g.fillRoundedRectangle(static_cast<float>(bounds.getX() + 2), static_cast<float>(bounds.getY() + 6),
+                                           2.0f, static_cast<float>(bounds.getHeight() - 12), 1.0f);
+                    g.fillRoundedRectangle(static_cast<float>(bounds.getRight() - 4), static_cast<float>(bounds.getY() + 6),
+                                           2.0f, static_cast<float>(bounds.getHeight() - 12), 1.0f);
                 }
 
                 // Kind badge: [L], [1], or [D], with REV and key-conformed transpose indicator
-                if (bounds.getWidth() >= 20 && trackHeight_ >= 18)
+                if (bounds.getWidth() >= 28 && trackHeight_ >= 20)
                 {
-                    const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.3f, 8.0f, 11.0f);
+                    const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.25f, 8.5f, 10.5f);
                     g.setFont(juce::FontOptions(fontSize).withStyle("Bold"));
 
                     const int effTranspose = song_.effectiveClipTranspose(sample, clip.transposeSemitones, trackKind);
@@ -1014,16 +1091,8 @@ void PatternGrid::paint(juce::Graphics& g)
                     else
                         badgeText += "[1]";
 
-                    if (clip.reversed)
-                        g.setColour(juce::Colour(0xff38bdf8));
-                    else if (trackKind == SampleKind::Loop)
-                        g.setColour(juce::Colour(0xffffca28));
-                    else if (trackKind == SampleKind::DiskStream)
-                        g.setColour(juce::Colour(0xff34d399));
-                    else
-                        g.setColour(Palette::textDim.withAlpha(0.65f));
-
-                    g.drawText(badgeText, bounds.reduced(6, 3), juce::Justification::topRight, false);
+                    g.setColour(col.darker(0.68f).withAlpha(0.85f));
+                    g.drawText(badgeText, bounds.reduced(6, 2), juce::Justification::topRight, false);
                 }
 
                 // Multi-point Volume & Pan Envelopes on Clip
@@ -1226,23 +1295,25 @@ void PatternGrid::paint(juce::Graphics& g)
 
                 if (isSelected)
                 {
+                    g.setColour(juce::Colours::white.withAlpha(0.35f));
+                    g.drawRoundedRectangle(fBounds.expanded(1.5f), clipRadius + 1.0f, 2.0f);
                     g.setColour(juce::Colours::white);
-                    g.drawRoundedRectangle(bounds.toFloat(), 4.0f, 2.0f);
+                    g.drawRoundedRectangle(fBounds, clipRadius, 2.0f);
                     if (isOverlapping)
                     {
-                        g.setColour(juce::Colour(0xfff59e0b).withAlpha(0.7f));
-                        g.drawRoundedRectangle(bounds.toFloat().expanded(1.0f), 4.5f, 1.0f);
+                        g.setColour(juce::Colour(0xfff59e0b).withAlpha(0.8f));
+                        g.drawRoundedRectangle(fBounds.expanded(1.0f), clipRadius + 0.5f, 1.0f);
                     }
                 }
                 else if (isOverlapping)
                 {
                     g.setColour(juce::Colour(0xfff59e0b)); // warm amber overlap outline
-                    g.drawRoundedRectangle(bounds.toFloat(), 4.0f, 2.0f);
+                    g.drawRoundedRectangle(fBounds, clipRadius, 2.0f);
                 }
                 else
                 {
-                    g.setColour(col.withAlpha(0.6f));
-                    g.drawRoundedRectangle(bounds.toFloat(), 4.0f, 1.0f);
+                    g.setColour(juce::Colour(0xff141418).withAlpha(0.75f));
+                    g.drawRoundedRectangle(fBounds, clipRadius, 1.1f);
                 }
             }
 
@@ -1423,22 +1494,15 @@ void PatternGrid::paint(juce::Graphics& g)
         g.drawRoundedRectangle(cellRect, 3.0f, 1.5f);
     }
 
-    // 4. Playhead
+    // 4. Playhead (sleek silver-white vertical line with subtle drop shadow + metallic cap)
     if (playheadStep_ >= 0.0)
     {
-        const int px = stepToX(playheadStep_);
-        g.setColour(Palette::accent.withAlpha(0.4f));
-        g.drawVerticalLine(px, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
-        g.setColour(Palette::accent);
-        g.drawVerticalLine(px - 1, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
-        g.drawVerticalLine(px + 1, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
+        const float px = static_cast<float>(stepToX(playheadStep_));
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.drawLine(px + 1.2f, static_cast<float>(kRulerHeight), px + 1.2f, static_cast<float>(totalHeight), 1.5f);
 
-        juce::Path cap;
-        cap.startNewSubPath(static_cast<float>(px - 6), 0.0f);
-        cap.lineTo(static_cast<float>(px + 6), 0.0f);
-        cap.lineTo(static_cast<float>(px), static_cast<float>(kRulerHeight));
-        cap.closeSubPath();
-        g.fillPath(cap);
+        g.setColour(juce::Colour(0xffe8e8f0).withAlpha(0.95f));
+        g.drawLine(px, static_cast<float>(kRulerHeight), px, static_cast<float>(totalHeight), 1.5f);
     }
 
     // 5. Drag & Drop Highlight

@@ -608,7 +608,7 @@ TEST_CASE("AcidProjectReader accurately calculates loop bars and tempo for loops
     // 2-bar loop at 120 BPM (4.0s = 176400 samples)
     const auto wav2 = testDir / "loop_2bar.wav";
     // 4-bar loop at 120 BPM (8.0s = 352800 samples)
-    const auto wav3 = testDir / "fläch.wav";
+    const auto wav3 = testDir / std::filesystem::path(std::u8string(u8"fl\u00e4ch.wav"));
 
     createSyntheticAcidWav(wav1, false, 4, 4, 4, 120.0f, 60, 88200);
     createSyntheticAcidWav(wav2, false, 8, 4, 4, 120.0f, 60, 176400);
@@ -657,7 +657,7 @@ TEST_CASE("AcidProjectReader accurately calculates loop bars and tempo for loops
 
     writeList(tlstPayload, "trak", makeTrak("loop_1bar.wav", "1BarTrack", 1536));
     writeList(tlstPayload, "trak", makeTrak("loop_2bar.wav", "2BarTrack", 3072));
-    writeList(tlstPayload, "trak", makeTrak("fläch.wav", "fläch", 6144));
+    writeList(tlstPayload, "trak", makeTrak("fl\xc3\xa4" "ch.wav", "fl\xc3\xa4" "ch", 6144));
 
     std::vector<uint8_t> riffPayload;
     riffPayload.insert(riffPayload.end(), {'A', 'C', 'I', 'D'});
@@ -916,10 +916,12 @@ TEST_CASE("AcidProjectReader correctly handles sub-bar 2-beat loops like tambu")
         std::vector<uint8_t> trkhPayload(52, 0);
         uint32_t hdrSz = 52;
         std::memcpy(trkhPayload.data(), &hdrSz, 4);
-        std::u16string s1 = u"C:\\aldi\\tambu.wav";
-        std::u16string s2 = u"tambu";
-        std::memcpy(trkhPayload.data() + 16, s1.c_str(), (s1.size() + 1) * 2);
-        std::memcpy(trkhPayload.data() + 16 + (s1.size() + 1) * 2, s2.c_str(), (s2.size() + 1) * 2);
+        const std::u16string s1 = u"C:\\samples\\tambu.wav";
+        const std::u16string s2 = u"tambu";
+        const auto* p1 = reinterpret_cast<const uint8_t*>(s1.c_str());
+        trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.size() + 1) * 2);
+        const auto* p2 = reinterpret_cast<const uint8_t*>(s2.c_str());
+        trkhPayload.insert(trkhPayload.end(), p2, p2 + (s2.size() + 1) * 2);
         writeChunk(trakPayload, "trkh", trkhPayload);
 
         // acid chunk: flags=0, root=60, numBeats=2, tempo=230.593f
@@ -1035,7 +1037,7 @@ TEST_CASE("AcidProjectReader handles 768 PPQN tmap, sample frame offsets, xlst g
     std::memcpy(tmapPayload.data() + 8, &usPerBeat, 4);
     std::memcpy(tmapPayload.data() + 12, &projRoot, 4);
 
-    // Track 0: beat2.wav (present in project dir, originally at G:\aldi\beat2.wav)
+    // Track 0: beat2.wav (present in project dir, originally at C:\samples\beat2.wav)
     // 16-beat loop here (4 bars) to test sampleOffsetFrames = 3/4 of 112618 = 84463
     std::vector<uint8_t> trak0Payload;
     {
@@ -1046,7 +1048,7 @@ TEST_CASE("AcidProjectReader handles 768 PPQN tmap, sample frame offsets, xlst g
         std::memcpy(trkhPayload.data() + 0, &hdrSz, 4);
         std::memcpy(trkhPayload.data() + 4, &trkType, 4);
         std::memcpy(trkhPayload.data() + 16, &totalSamples, 4);
-        std::u16string s1 = u"G:\\aldi\\beat2.wav";
+        std::u16string s1 = u"C:\\samples\\beat2.wav";
         std::u16string s2 = u"beat2";
         const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
         trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);
@@ -1152,7 +1154,7 @@ TEST_CASE("AcidProjectReader handles 768 PPQN tmap, sample frame offsets, xlst g
         std::memcpy(trkhPayload.data() + 0, &hdrSz, 4);
         std::memcpy(trkhPayload.data() + 4, &trkType, 4);
         std::memcpy(trkhPayload.data() + 16, &totalSamples, 4);
-        std::u16string s1 = u"G:\\aldi\\gong.wav";
+        std::u16string s1 = u"C:\\samples\\gong.wav";
         std::u16string s2 = u"gong";
         const uint8_t* p1 = reinterpret_cast<const uint8_t*>(s1.data());
         trkhPayload.insert(trkhPayload.end(), p1, p1 + (s1.length() + 1) * 2);

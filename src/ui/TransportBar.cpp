@@ -22,103 +22,119 @@ void TransportBar::TransportButton::paintButton(juce::Graphics& g, bool shouldDr
     const auto r = getLocalBounds().toFloat();
     const bool isOn = getToggleState();
 
-    juce::Colour bg = shouldDrawButtonAsDown ? juce::Colour(0xff1d2024)
-                    : shouldDrawButtonAsHighlighted ? juce::Colour(0xff343940)
-                    : juce::Colour(0xff272b30);
+    // Brushed metallic vertical bevel fill (matching Screenshot 2)
+    juce::Colour topCol = shouldDrawButtonAsDown ? juce::Colour(0xff1e1e23)
+                        : shouldDrawButtonAsHighlighted ? juce::Colour(0xff4c4c55)
+                        : (isOn && icon_ != TransportIcon::Record ? juce::Colour(0xff384654) : juce::Colour(0xff424249));
+    juce::Colour botCol = shouldDrawButtonAsDown ? juce::Colour(0xff2c2c32)
+                        : shouldDrawButtonAsHighlighted ? juce::Colour(0xff32323a)
+                        : (isOn && icon_ != TransportIcon::Record ? juce::Colour(0xff25303c) : juce::Colour(0xff27272d));
 
-    g.setColour(bg);
+    juce::ColourGradient grad(topCol, r.getX(), r.getY(), botCol, r.getX(), r.getBottom(), false);
+    g.setGradientFill(grad);
     g.fillRect(r);
+
+    // Subtle top specular highlight
+    if (!shouldDrawButtonAsDown)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.14f));
+        g.drawHorizontalLine(0, r.getX(), r.getRight());
+    }
 
     if (borderLeft_)
     {
-        g.setColour(juce::Colour(0xff393e46));
+        g.setColour(juce::Colour(0xff18181c));
         g.drawVerticalLine(0, 0.0f, r.getHeight());
+        g.setColour(juce::Colours::white.withAlpha(0.06f));
+        g.drawVerticalLine(1, 1.0f, r.getHeight() - 1.0f);
     }
     if (borderRight_)
     {
-        g.setColour(juce::Colour(0xff393e46));
+        g.setColour(juce::Colour(0xff18181c));
         g.drawVerticalLine(static_cast<int>(r.getWidth()) - 1, 0.0f, r.getHeight());
     }
 
     const float cx = r.getCentreX();
     const float cy = r.getCentreY();
-    const juce::Colour activeColour(0xff4fc3f7);
-    const juce::Colour inactiveColour = shouldDrawButtonAsHighlighted ? juce::Colour(0xffe2e8f0) : juce::Colour(0xff98a0ac);
+    const juce::Colour activeColour(0xff5ac8fa);
+    const juce::Colour inactiveColour = shouldDrawButtonAsHighlighted ? juce::Colours::white : juce::Colour(0xffdcdce4);
 
     switch (icon_)
     {
     case TransportIcon::Record:
     {
-        const float dotRadius = 5.2f;
-        g.setColour(isOn ? juce::Colour(0xffe53935) : inactiveColour);
-        g.fillEllipse(cx - dotRadius, cy - dotRadius, dotRadius * 2.0f, dotRadius * 2.0f);
+        // Glossy 3D red record sphere (matching Screenshot 2)
+        const float dotR = 5.6f;
+        if (isOn)
+        {
+            g.setColour(juce::Colour(0xffff2d2d).withAlpha(0.35f));
+            g.fillEllipse(cx - dotR - 2.5f, cy - dotR - 2.5f, (dotR + 2.5f) * 2.0f, (dotR + 2.5f) * 2.0f);
+        }
+        const juce::Colour coreCol = isOn ? juce::Colour(0xffff3b30) : juce::Colour(0xffc93b3b);
+        const juce::Colour edgeCol = isOn ? juce::Colour(0xff9e0b0b) : juce::Colour(0xff6b1717);
+        juce::ColourGradient orb(coreCol.brighter(0.45f), cx - 2.0f, cy - 2.5f,
+                                 edgeCol, cx + dotR, cy + dotR, true);
+        g.setGradientFill(orb);
+        g.fillEllipse(cx - dotR, cy - dotR, dotR * 2.0f, dotR * 2.0f);
+
+        // Specular highlight dot
+        g.setColour(juce::Colours::white.withAlpha(isOn ? 0.72f : 0.45f));
+        g.fillEllipse(cx - 2.8f, cy - 3.2f, 3.2f, 2.2f);
         break;
     }
     case TransportIcon::Play:
     {
         juce::Path p;
-        p.startNewSubPath(cx - 5.5f, cy - 6.5f);
-        p.lineTo(cx + 6.5f, cy);
-        p.lineTo(cx - 5.5f, cy + 6.5f);
+        p.startNewSubPath(cx - 5.5f, cy - 7.0f);
+        p.lineTo(cx + 7.0f, cy);
+        p.lineTo(cx - 5.5f, cy + 7.0f);
         p.closeSubPath();
-        g.setColour(isOn ? activeColour : inactiveColour);
+        g.setColour(juce::Colours::black.withAlpha(0.4f));
+        g.fillPath(p, juce::AffineTransform::translation(0.0f, 1.0f));
+        g.setColour(isOn ? juce::Colour(0xff4ade80) : inactiveColour);
         g.fillPath(p);
         break;
     }
     case TransportIcon::Rewind:
     {
+        // Return-to-start icon |◀ (exact match to Screenshot 2)
+        const juce::Colour col = shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown ? juce::Colours::white : inactiveColour;
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillRect(cx - 6.5f, cy - 5.0f, 2.2f, 12.0f);
+        g.setColour(col);
+        g.fillRect(cx - 6.5f, cy - 6.0f, 2.2f, 12.0f);
+
         juce::Path p;
-        p.startNewSubPath(cx - 1.0f, cy);
-        p.lineTo(cx + 5.5f, cy - 5.5f);
-        p.lineTo(cx + 5.5f, cy + 5.5f);
+        p.startNewSubPath(cx - 3.5f, cy);
+        p.lineTo(cx + 6.0f, cy - 6.0f);
+        p.lineTo(cx + 6.0f, cy + 6.0f);
         p.closeSubPath();
-        p.startNewSubPath(cx - 7.5f, cy);
-        p.lineTo(cx - 1.0f, cy - 5.5f);
-        p.lineTo(cx - 1.0f, cy + 5.5f);
-        p.closeSubPath();
-        g.setColour(shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown ? juce::Colours::white : inactiveColour);
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillPath(p, juce::AffineTransform::translation(0.0f, 1.0f));
+        g.setColour(col);
         g.fillPath(p);
         break;
     }
     case TransportIcon::Stop:
     {
         constexpr float s = 10.0f;
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillRoundedRectangle(cx - s * 0.5f, cy - s * 0.5f + 1.0f, s, s, 1.5f);
         g.setColour(shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown ? juce::Colours::white : inactiveColour);
-        g.fillRect(cx - s * 0.5f, cy - s * 0.5f, s, s);
+        g.fillRoundedRectangle(cx - s * 0.5f, cy - s * 0.5f, s, s, 1.5f);
         break;
     }
     case TransportIcon::Loop:
     {
+        // Sleek ribbon loop / cycle glyph (matching Screenshot 2)
         g.setColour(isOn ? activeColour : inactiveColour);
-        constexpr float rArc = 5.5f;
-
-        // Top arc
-        juce::Path topArc;
-        topArc.addArc(cx - rArc, cy - rArc, rArc * 2.0f, rArc * 2.0f,
-                      -juce::MathConstants<float>::pi * 0.75f, -juce::MathConstants<float>::pi * 0.1f, true);
-        g.strokePath(topArc, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // Top arrow
-        juce::Path topArrow;
-        topArrow.startNewSubPath(cx + rArc - 1.0f, cy - rArc - 3.0f);
-        topArrow.lineTo(cx + rArc + 3.0f, cy - rArc + 1.0f);
-        topArrow.lineTo(cx + rArc - 2.0f, cy - rArc + 4.0f);
-        topArrow.closeSubPath();
-        g.fillPath(topArrow);
-
-        // Bottom arc
-        juce::Path botArc;
-        botArc.addArc(cx - rArc, cy - rArc, rArc * 2.0f, rArc * 2.0f,
-                      juce::MathConstants<float>::pi * 0.25f, juce::MathConstants<float>::pi * 0.9f, true);
-        g.strokePath(botArc, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // Bottom arrow
-        juce::Path botArrow;
-        botArrow.startNewSubPath(cx - rArc + 1.0f, cy + rArc + 3.0f);
-        botArrow.lineTo(cx - rArc - 3.0f, cy + rArc - 1.0f);
-        botArrow.lineTo(cx - rArc + 2.0f, cy + rArc - 4.0f);
-        botArrow.closeSubPath();
-        g.fillPath(botArrow);
+        juce::Path ribbon;
+        ribbon.addArc(cx - 5.2f, cy - 6.5f, 10.4f, 10.4f,
+                      -juce::MathConstants<float>::pi * 0.85f, juce::MathConstants<float>::pi * 0.85f, true);
+        g.strokePath(ribbon, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        // Crossed tails at bottom
+        g.drawLine(cx - 4.2f, cy + 2.5f, cx + 5.8f, cy + 6.5f, 2.0f);
+        g.drawLine(cx + 4.2f, cy + 2.5f, cx - 5.8f, cy + 6.5f, 2.0f);
         break;
     }
     case TransportIcon::CountIn:
@@ -134,39 +150,32 @@ void TransportBar::TransportButton::paintButton(juce::Graphics& g, bool shouldDr
     case TransportIcon::Metronome:
     {
         g.setColour(isOn ? activeColour : inactiveColour);
-        // Studio One metronome body
         juce::Path m;
         m.startNewSubPath(cx - 3.5f, cy - 7.0f);
         m.lineTo(cx + 3.5f, cy - 7.0f);
         m.lineTo(cx + 6.5f, cy + 7.0f);
         m.lineTo(cx - 6.5f, cy + 7.0f);
         m.closeSubPath();
-        g.strokePath(m, juce::PathStrokeType(1.4f));
+        g.strokePath(m, juce::PathStrokeType(1.5f));
 
-        // Pendulum arm angled to the right
         juce::Path arm;
         arm.startNewSubPath(cx, cy + 5.5f);
         arm.lineTo(cx + 4.5f, cy - 5.0f);
         g.strokePath(arm, juce::PathStrokeType(1.6f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
 
-        // Weight on arm
         g.fillRect(cx + 2.0f, cy - 2.0f, 3.0f, 3.0f);
         break;
     }
     case TransportIcon::Groove:
     {
         g.setColour(isOn ? activeColour : inactiveColour);
-        // Notehead
         g.fillEllipse(cx - 6.5f, cy + 1.0f, 5.0f, 4.0f);
-        // Stem
         g.fillRect(cx - 2.5f, cy - 7.0f, 1.4f, 10.0f);
-        // Flag
         juce::Path flag;
         flag.startNewSubPath(cx - 1.1f, cy - 7.0f);
         flag.quadraticTo(cx + 2.5f, cy - 5.0f, cx + 1.0f, cy - 1.5f);
         g.strokePath(flag, juce::PathStrokeType(1.3f));
 
-        // Clock badge
         constexpr float clockR = 4.2f;
         const float clockX = cx + 4.5f;
         const float clockY = cy + 3.5f;
@@ -496,6 +505,148 @@ private:
 };
 
 // ==============================================================================
+// MasterMeterSlider (Screenshot 2 recessed LED level meter + brushed-silver thumb)
+// ==============================================================================
+class TransportBar::MasterMeterSlider : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    MasterMeterSlider(Song& song, AudioEngine& engine)
+        : song_(song), engine_(engine)
+    {
+        setTooltip("Master Output Level & Volume (Drag slider thumb to adjust, double-click to reset to 100%)");
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    }
+
+    void updateLevels(float peakL, float peakR, bool clipped)
+    {
+        peakL_ = std::max(peakL, peakL_ * 0.82f);
+        peakR_ = std::max(peakR, peakR_ * 0.82f);
+        clipped_ = clipped;
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced(0.5f, 3.0f);
+        const float radius = r.getHeight() * 0.5f;
+
+        // Recessed dark capsule slot
+        juce::ColourGradient slotGrad(juce::Colour(0xff0d0d10), r.getX(), r.getY(),
+                                      juce::Colour(0xff1b1b20), r.getX(), r.getBottom(), false);
+        g.setGradientFill(slotGrad);
+        g.fillRoundedRectangle(r, radius);
+
+        // Subtle inner shadow & bottom lip highlight
+        g.setColour(juce::Colour(0xff09090b));
+        g.drawRoundedRectangle(r, radius, 1.1f);
+        g.setColour(juce::Colours::white.withAlpha(0.10f));
+        g.drawHorizontalLine(juce::roundToInt(r.getBottom() + 0.5f), r.getX() + radius, r.getRight() - radius);
+
+        // Dual stereo LED dot rows (14 segments each, green -> amber -> glowing orange-red)
+        constexpr int kNumLeds = 14;
+        const float padX = 11.0f;
+        const float usableW = std::max(10.0f, r.getWidth() - padX * 2.0f);
+        const float stepX = usableW / static_cast<float>(kNumLeds - 1);
+        const float rowY[2] = {r.getCentreY() - 3.6f, r.getCentreY() + 3.6f};
+        const float levels[2] = {std::clamp(peakL_, 0.0f, 1.0f), std::clamp(peakR_, 0.0f, 1.0f)};
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            for (int i = 0; i < kNumLeds; ++i)
+            {
+                const float frac = static_cast<float>(i + 1) / static_cast<float>(kNumLeds);
+                const float lx = r.getX() + padX + static_cast<float>(i) * stepX;
+                const float ly = rowY[ch];
+                const bool isPeakDot = (i == kNumLeds - 1);
+                const bool lit = (levels[ch] >= frac * 0.85f) || (isPeakDot && clipped_);
+
+                juce::Colour dotCol;
+                if (isPeakDot)
+                    dotCol = lit ? juce::Colour(0xffff5238) : juce::Colour(0xff52251d);
+                else if (i >= kNumLeds - 3)
+                    dotCol = lit ? juce::Colour(0xffff9f1c) : juce::Colour(0xff2c2c33);
+                else
+                    dotCol = lit ? juce::Colour(0xff34d399) : juce::Colour(0xff28282f);
+
+                const float dotR = isPeakDot ? 2.4f : 1.7f;
+                if (lit)
+                {
+                    g.setColour(dotCol.withAlpha(0.35f));
+                    g.fillEllipse(lx - dotR - 1.5f, ly - dotR - 1.5f, (dotR + 1.5f) * 2.0f, (dotR + 1.5f) * 2.0f);
+                }
+                g.setColour(dotCol);
+                g.fillEllipse(lx - dotR, ly - dotR, dotR * 2.0f, dotR * 2.0f);
+            }
+        }
+
+        // Brushed-silver circular volume thumb (matching Screenshot 2)
+        const float normVol = std::clamp(song_.masterVolume() / 1.5f, 0.0f, 1.0f);
+        const float thumbR = r.getHeight() * 0.46f;
+        const float minX = r.getX() + thumbR + 2.0f;
+        const float maxX = r.getRight() - thumbR - 2.0f;
+        const float tx = minX + normVol * (maxX - minX);
+        const float ty = r.getCentreY();
+
+        // Soft drop shadow
+        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.fillEllipse(tx - thumbR, ty - thumbR + 1.2f, thumbR * 2.0f, thumbR * 2.0f);
+
+        // Brushed silver gradient
+        juce::ColourGradient thumbGrad(juce::Colour(0xffc6c6ce), tx - thumbR * 0.5f, ty - thumbR,
+                                       juce::Colour(0xff64646e), tx + thumbR * 0.5f, ty + thumbR, false);
+        thumbGrad.addColour(0.5, juce::Colour(0xff8e8e98));
+        g.setGradientFill(thumbGrad);
+        g.fillEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f);
+
+        // Subtle inner rim highlight & dark border
+        g.setColour(juce::Colours::white.withAlpha(0.38f));
+        g.drawEllipse(tx - thumbR + 1.0f, ty - thumbR + 1.0f, (thumbR - 1.0f) * 2.0f, (thumbR - 1.0f) * 2.0f, 0.8f);
+        g.setColour(juce::Colour(0xff141418));
+        g.drawEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f, 1.0f);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu())
+            return;
+        updateVolumeFromX(e.position.x);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        updateVolumeFromX(e.position.x);
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        song_.setMasterVolume(1.0f);
+        engine_.sequencer().setMasterVolume(1.0f);
+        engine_.sequencer().resetClipped();
+        repaint();
+    }
+
+private:
+    void updateVolumeFromX(float x)
+    {
+        const auto r = getLocalBounds().toFloat().reduced(0.5f, 3.0f);
+        const float thumbR = r.getHeight() * 0.46f;
+        const float minX = r.getX() + thumbR + 2.0f;
+        const float maxX = r.getRight() - thumbR - 2.0f;
+        const float norm = std::clamp((x - minX) / std::max(1.0f, maxX - minX), 0.0f, 1.0f);
+        const float vol = norm * 1.5f;
+        song_.setMasterVolume(vol);
+        engine_.sequencer().setMasterVolume(vol);
+        repaint();
+    }
+
+    Song& song_;
+    AudioEngine& engine_;
+    float peakL_ = 0.0f;
+    float peakR_ = 0.0f;
+    bool clipped_ = false;
+};
+
+// ==============================================================================
 // TransportBar Implementation
 // ==============================================================================
 TransportBar::TransportBar(Song& song, AudioEngine& engine,
@@ -558,9 +709,9 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
     addAndMakeVisible(positionLabel_);
 
     // Mode button
-    modeButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3ea2c5));
-    modeButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff0d151c));
-    modeButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff4fb5d6));
+    modeButton_.setColour(juce::TextButton::buttonColourId, Palette::surface);
+    modeButton_.setColour(juce::TextButton::textColourOffId, Palette::text);
+    modeButton_.setColour(juce::TextButton::buttonOnColourId, Palette::accent.withAlpha(0.35f));
     modeButton_.setTooltip("Toggle Time Display Mode (Measure / Seconds)");
     modeButton_.onClick = [this]() {
         showSeconds_ = !showSeconds_;
@@ -641,6 +792,10 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
         });
     };
 
+    // Master Level & Volume Capsule (Screenshot 2)
+    masterMeterSlider_ = std::make_unique<MasterMeterSlider>(song_, engine_);
+    addAndMakeVisible(masterMeterSlider_.get());
+
     // Master Project Key selector
     keyCombo_.setTooltip("Master Project Key (ACID automatic loop key conforming)");
     keyCombo_.addItem("Key: Off", 100);
@@ -694,13 +849,14 @@ void TransportBar::setLoopRange(int start, int end, bool isBars)
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
 {
-    constexpr int totalW = 764;
-    const int startX = std::max(6, (getWidth() - totalW) / 2);
-    constexpr int barY = 6;
-    constexpr int barH = 32;
-    const int posBoxX = startX + 216 + 12;
-    const int loopBoxX = posBoxX + 150 + 6;
-    const auto loopBox = juce::Rectangle<int>(loopBoxX, barY, 110, barH);
+    constexpr int totalW = 1028;
+    const int startX = (getWidth() >= totalW + 24) ? std::max(12, (getWidth() - totalW) / 2) : 8;
+    constexpr int barY = 7;
+    constexpr int barH = 34;
+    const int meterX = startX + 218 + 10;
+    const int posBoxX = meterX + 136 + 10;
+    const int loopBoxX = posBoxX + 122 + 6;
+    const auto loopBox = juce::Rectangle<int>(loopBoxX, barY, 104, barH);
 
     if (loopBox.contains(e.getPosition()))
     {
@@ -777,94 +933,74 @@ void TransportBar::updateDisplay()
 
 void TransportBar::paint(juce::Graphics& g)
 {
-    // Studio One transport bar background
-    g.fillAll(juce::Colour(0xff2d3137));
-
-    // Top border line
-    g.setColour(juce::Colour(0xff1e2126));
-    g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
-
-    constexpr int totalW = 848;
-    constexpr int barY = 6;
-    constexpr int barH = 32;
-
-    int startX = 6;
-    if (getWidth() >= totalW + 24)
-        startX = std::max(12, (getWidth() - totalW) / 2);
-    else
-        startX = 6;
-
-    const auto drawBox = [&g](juce::Rectangle<int> box) {
-        g.setColour(juce::Colour(0xff24282e));
-        g.fillRoundedRectangle(box.toFloat(), 3.0f);
-        g.setColour(juce::Colour(0xff393e46));
-        g.drawRoundedRectangle(box.toFloat(), 3.0f, 1.0f);
-    };
-
-    // 1. Transport cluster box
-    const auto transBox = juce::Rectangle<int>(startX, barY, 216, barH);
-    drawBox(transBox);
-
-    // 2. Position Display box
-    const int posBoxX = startX + 216 + 12;
-    const auto posBox = juce::Rectangle<int>(posBoxX, barY, 150, barH);
-    drawBox(posBox);
-
-    // Cyan strip inside position box on left
-    constexpr int cyanStripW = 20;
-    const auto cyanRect = juce::Rectangle<float>(static_cast<float>(posBoxX + 1), static_cast<float>(barY + 1),
-                                                 static_cast<float>(cyanStripW), static_cast<float>(barH - 2));
-    g.setColour(juce::Colour(0xff3aa0c8));
-    g.fillRoundedRectangle(cyanRect, 2.0f);
-
-    // Small speaker icon in cyan strip
+    // Brushed dark-metallic play bar gradient (matching Screenshot 2)
     {
-        const float scx = cyanRect.getCentreX();
-        const float scy = cyanRect.getCentreY();
-
-        // Speaker body: base rectangle + expanding cone
-        juce::Path spk;
-        spk.startNewSubPath(scx - 6.0f, scy - 2.5f);
-        spk.lineTo(scx - 3.0f, scy - 2.5f);
-        spk.lineTo(scx + 0.5f, scy - 5.5f);
-        spk.lineTo(scx + 0.5f, scy + 5.5f);
-        spk.lineTo(scx - 3.0f, scy + 2.5f);
-        spk.lineTo(scx - 6.0f, scy + 2.5f);
-        spk.closeSubPath();
-        g.setColour(juce::Colour(0xff1a2630));
-        g.fillPath(spk);
-
-        // Sound waves radiating to the right (smooth quadratic arcs)
-        const auto stroke = juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-
-        // Inner sound wave
-        juce::Path wave1;
-        wave1.startNewSubPath(scx + 2.2f, scy - 3.2f);
-        wave1.quadraticTo(scx + 4.8f, scy, scx + 2.2f, scy + 3.2f);
-        g.strokePath(wave1, stroke);
-
-        // Outer sound wave
-        juce::Path wave2;
-        wave2.startNewSubPath(scx + 4.6f, scy - 5.5f);
-        wave2.quadraticTo(scx + 8.2f, scy, scx + 4.6f, scy + 5.5f);
-        g.strokePath(wave2, stroke);
+        juce::ColourGradient barGrad(juce::Colour(0xff48484f), 0.0f, 0.0f,
+                                     juce::Colour(0xff232328), 0.0f, static_cast<float>(getHeight()), false);
+        barGrad.addColour(0.48, juce::Colour(0xff323238));
+        g.setGradientFill(barGrad);
+        g.fillAll();
     }
 
-    // 3. Loop Range Box (Start / End)
-    const int loopBoxX = posBoxX + 150 + 6;
-    const auto loopBox = juce::Rectangle<int>(loopBoxX, barY, 110, barH);
-    drawBox(loopBox);
+    // Crisp top seam & specular highlight
+    g.setColour(juce::Colour(0xff141418));
+    g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.drawHorizontalLine(1, 0.0f, static_cast<float>(getWidth()));
 
-    // Dividers inside Loop box
-    g.setColour(juce::Colour(0xff343941));
-    g.drawHorizontalLine(barY + 16, static_cast<float>(loopBoxX + 1), static_cast<float>(loopBoxX + 109));
-    g.drawVerticalLine(loopBoxX + 44, static_cast<float>(barY + 1), static_cast<float>(barY + barH - 1));
+    constexpr int totalW = 1028;
+    constexpr int barY = 7;
+    constexpr int barH = 34;
 
-    // Start / End labels & values
+    const int startX = (getWidth() >= totalW + 24) ? std::max(12, (getWidth() - totalW) / 2) : 8;
+
+    const auto drawRecessedLcd = [&g](juce::Rectangle<int> box) {
+        const auto f = box.toFloat();
+        juce::ColourGradient lcdGrad(juce::Colour(0xff141418), f.getX(), f.getY(),
+                                     juce::Colour(0xff1f1f25), f.getX(), f.getBottom(), false);
+        g.setGradientFill(lcdGrad);
+        g.fillRoundedRectangle(f, 5.5f);
+        g.setColour(juce::Colour(0xff0d0d10));
+        g.drawRoundedRectangle(f, 5.5f, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.09f));
+        g.drawHorizontalLine(box.getBottom(), f.getX() + 5.0f, f.getRight() - 5.0f);
+    };
+
+    const auto drawMetallicCapsule = [&g](juce::Rectangle<int> box) {
+        const auto f = box.toFloat();
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillRoundedRectangle(f.translated(0.0f, 1.0f), 6.0f);
+        g.setColour(juce::Colour(0xff141418));
+        g.fillRoundedRectangle(f, 6.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        g.drawRoundedRectangle(f.expanded(0.5f), 6.2f, 0.8f);
+    };
+
+    // 1. Unified Metallic Transport Capsule ([ |◀ | ▶ | ● | ■ | Loop | 1234 ])
+    const auto transBox = juce::Rectangle<int>(startX, barY, 218, barH);
+    drawMetallicCapsule(transBox);
+
+    // 2. Recessed Master Level & Volume Capsule (drawn by masterMeterSlider_)
+    const int meterX = startX + 218 + 10;
+
+    // 3. Position Display LCD
+    const int posBoxX = meterX + 136 + 10;
+    const auto posBox = juce::Rectangle<int>(posBoxX, barY, 122, barH);
+    drawRecessedLcd(posBox);
+
+    // 4. Loop Range LCD (Start / End)
+    const int loopBoxX = posBoxX + 122 + 6;
+    const auto loopBox = juce::Rectangle<int>(loopBoxX, barY, 104, barH);
+    drawRecessedLcd(loopBox);
+
+    g.setColour(juce::Colour(0xff2c2c34));
+    g.drawHorizontalLine(barY + 17, static_cast<float>(loopBoxX + 2), static_cast<float>(loopBoxX + 102));
+    g.drawVerticalLine(loopBoxX + 40, static_cast<float>(barY + 2), static_cast<float>(barY + barH - 2));
+
     g.setFont(Typography::bold(9.5f));
     g.setColour(Palette::textDim);
-    g.drawText("Start", loopBoxX + 4, barY + 1, 38, 15, juce::Justification::centredLeft);
-    g.drawText("End", loopBoxX + 4, barY + 16, 38, 15, juce::Justification::centredLeft);
+    g.drawText("Start", loopBoxX + 4, barY + 1, 34, 16, juce::Justification::centredLeft);
+    g.drawText("End", loopBoxX + 4, barY + 17, 34, 16, juce::Justification::centredLeft);
 
     juce::String startStr, endStr;
     if (loopIsBars_)
@@ -884,116 +1020,119 @@ void TransportBar::paint(juce::Graphics& g)
     }
 
     g.setFont(Typography::bold(10.5f));
-    g.setColour(juce::Colour(0xffe2e8f0));
-    g.drawText(startStr, loopBoxX + 46, barY + 1, 60, 15, juce::Justification::centred);
-    g.drawText(endStr, loopBoxX + 46, barY + 16, 60, 15, juce::Justification::centred);
+    g.setColour(juce::Colour(0xffe8e8f2));
+    g.drawText(startStr, loopBoxX + 42, barY + 1, 58, 16, juce::Justification::centred);
+    g.drawText(endStr, loopBoxX + 42, barY + 17, 58, 16, juce::Justification::centred);
 
-    // 4. Mode button box is self-drawn
+    // 5. Mode button is self-drawn
+    const int modeBtnX = loopBoxX + 104 + 6;
 
-    // 5. Tempo Box
-    const int tempoBoxX = loopBoxX + 110 + 6 + 76 + 6;
+    // 6. Tempo LCD Box
+    const int tempoBoxX = modeBtnX + 68 + 6;
     const auto tempoBox = juce::Rectangle<int>(tempoBoxX, barY, 66, barH);
-    drawBox(tempoBox);
+    drawRecessedLcd(tempoBox);
 
     g.setFont(Typography::bold(9.0f));
     g.setColour(Palette::textDim);
-    g.drawText("Bpm", tempoBoxX + 4, barY + 2, 42, 11, juce::Justification::centred);
+    g.drawText("BPM", tempoBoxX + 4, barY + 2, 42, 11, juce::Justification::centred);
 
-    // Vertical divider before steppers
-    g.setColour(juce::Colour(0xff393e46));
-    g.drawVerticalLine(tempoBoxX + 46, static_cast<float>(barY + 1), static_cast<float>(barY + barH - 1));
+    g.setColour(juce::Colour(0xff2c2c34));
+    g.drawVerticalLine(tempoBoxX + 46, static_cast<float>(barY + 2), static_cast<float>(barY + barH - 2));
 
-    // 6. Metronome box
+    // 7. Metronome metallic capsule
     const int metroBoxX = tempoBoxX + 66 + 6;
-    drawBox(juce::Rectangle<int>(metroBoxX, barY, 36, barH));
+    drawMetallicCapsule(juce::Rectangle<int>(metroBoxX, barY, 36, barH));
 
-    // 7. Time Signature is drawn by timeSigButton_
+    // 8. Time Signature is drawn by timeSigButton_
+    const int timeSigX = metroBoxX + 36 + 6;
 
-    // 8. Swing / Groove box
-    const int swingBoxX = metroBoxX + 36 + 6 + 32 + 6;
-    constexpr int swingBoxW = 120;
-    drawBox(juce::Rectangle<int>(swingBoxX, barY, swingBoxW, barH));
+    // 9. Swing / Groove LCD box
+    const int swingBoxX = timeSigX + 32 + 6;
+    constexpr int swingBoxW = 108;
+    drawRecessedLcd(juce::Rectangle<int>(swingBoxX, barY, swingBoxW, barH));
 
     g.setFont(Typography::bold(9.5f));
     const bool hasSwing = song_.swing() > 0.001;
     g.setColour(hasSwing ? Palette::accent : Palette::textDim);
-    g.drawText("Swing", swingBoxX + 4, barY + 2, 44, 10, juce::Justification::centred);
+    g.drawText("Swing", swingBoxX + 4, barY + 2, 42, 10, juce::Justification::centred);
 
-    // Vertical divider between text field and slider
-    g.setColour(juce::Colour(0xff393e46));
-    g.drawVerticalLine(swingBoxX + 50, static_cast<float>(barY + 1), static_cast<float>(barY + barH - 1));
+    g.setColour(juce::Colour(0xff2c2c34));
+    g.drawVerticalLine(swingBoxX + 48, static_cast<float>(barY + 2), static_cast<float>(barY + barH - 2));
 }
 
 void TransportBar::resized()
 {
-    constexpr int totalW = 848;
-    constexpr int barY = 6;
-    constexpr int barH = 32;
+    constexpr int totalW = 1028;
+    constexpr int barY = 7;
+    constexpr int barH = 34;
 
-    int startX = 6;
-    if (getWidth() >= totalW + 24)
-        startX = std::max(12, (getWidth() - totalW) / 2);
-    else
-        startX = 6;
+    const int startX = (getWidth() >= totalW + 24) ? std::max(12, (getWidth() - totalW) / 2) : 8;
 
-    // Transport buttons inside 216px container
+    // Unified Metallic Transport Cluster (Screenshot 2 order: |◀  ▶  ●  ■  Loop  1234)
     int btnX = startX + 1;
-    constexpr int btnW = 35;
-
-    recordButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
-    btnX += btnW;
-    recordButton_.setBorderSides(false, true);
-
-    playButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
-    btnX += btnW;
-    playButton_.setBorderSides(false, true);
+    constexpr int btnW = 36;
 
     rewindButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
-    btnX += btnW;
     rewindButton_.setBorderSides(false, true);
+    btnX += btnW;
+
+    playButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
+    playButton_.setBorderSides(false, true);
+    btnX += btnW;
+
+    recordButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
+    recordButton_.setBorderSides(false, true);
+    btnX += btnW;
 
     stopButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
-    btnX += btnW;
     stopButton_.setBorderSides(false, true);
+    btnX += btnW;
 
     loopButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
-    btnX += btnW;
     loopButton_.setBorderSides(false, true);
+    btnX += btnW;
 
-    countInButton_.setBounds(btnX, barY + 1, btnW + 4, barH - 2);
+    countInButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
+    countInButton_.setBorderSides(false, false);
 
-    // Position label inside position box
-    const int posBoxX = startX + 216 + 12;
-    positionLabel_.setBounds(posBoxX + 24, barY + 1, 122, barH - 2);
+    // Recessed Master Level & Volume Capsule (Screenshot 2)
+    const int meterX = startX + 218 + 10;
+    if (masterMeterSlider_ != nullptr)
+        masterMeterSlider_->setBounds(meterX, barY, 136, barH);
 
-    // Mode button
-    const int loopBoxX = posBoxX + 150 + 6;
-    const int modeBtnX = loopBoxX + 110 + 6;
-    modeButton_.setBounds(modeBtnX, barY, 76, barH);
+    // Position LCD label
+    const int posBoxX = meterX + 136 + 10;
+    positionLabel_.setBounds(posBoxX + 4, barY + 1, 114, barH - 2);
+
+    // Loop box + Mode button
+    const int loopBoxX = posBoxX + 122 + 6;
+    const int modeBtnX = loopBoxX + 104 + 6;
+    modeButton_.setBounds(modeBtnX, barY, 68, barH);
 
     // Tempo controls
-    const int tempoBoxX = modeBtnX + 76 + 6;
-    tempoLabel_.setBounds(tempoBoxX + 2, barY + 12, 44, barH - 14);
-    tempoUp_.setBounds(tempoBoxX + 47, barY + 1, 18, 15);
-    tempoDown_.setBounds(tempoBoxX + 47, barY + 16, 18, 15);
+    const int tempoBoxX = modeBtnX + 68 + 6;
+    tempoLabel_.setBounds(tempoBoxX + 2, barY + 13, 44, barH - 14);
+    tempoUp_.setBounds(tempoBoxX + 47, barY + 1, 18, 16);
+    tempoDown_.setBounds(tempoBoxX + 47, barY + 17, 18, 16);
 
     // Metronome
     const int metroBoxX = tempoBoxX + 66 + 6;
     metroButton_.setBounds(metroBoxX + 1, barY + 1, 34, barH - 2);
 
     // Time Signature
-    timeSigButton_.setBounds(metroBoxX + 36 + 6, barY, 32, barH);
+    const int timeSigX = metroBoxX + 36 + 6;
+    timeSigButton_.setBounds(timeSigX, barY, 32, barH);
 
     // Swing controls
-    const int swingBoxX = metroBoxX + 36 + 6 + 32 + 6;
+    const int swingBoxX = timeSigX + 32 + 6;
     if (swingLabel_ != nullptr)
-        swingLabel_->setBounds(swingBoxX + 2, barY + 12, 46, barH - 14);
+        swingLabel_->setBounds(swingBoxX + 2, barY + 13, 44, barH - 14);
     if (swingSlider_ != nullptr)
-        swingSlider_->setBounds(swingBoxX + 53, barY + 6, 62, barH - 12);
+        swingSlider_->setBounds(swingBoxX + 51, barY + 7, 52, barH - 14);
 
     // Master Key selector
-    const int keyBoxX = swingBoxX + 120 + 6;
-    keyCombo_.setBounds(keyBoxX, barY, 76, barH);
+    const int keyBoxX = swingBoxX + 108 + 6;
+    keyCombo_.setBounds(keyBoxX, barY, 90, barH);
 }
 
 void TransportBar::timerCallback()
@@ -1003,6 +1142,12 @@ void TransportBar::timerCallback()
 
     const auto recState = engine_.recorder().state();
     recordButton_.setToggleState(recState != RecordState::Idle, juce::dontSendNotification);
+
+    if (masterMeterSlider_ != nullptr)
+    {
+        const auto lvl = engine_.sequencer().outputLevels();
+        masterMeterSlider_->updateLevels(lvl.peakL, lvl.peakR, lvl.clipped);
+    }
 
     const std::int64_t pos = engine_.sequencer().position();
 

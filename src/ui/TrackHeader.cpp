@@ -36,12 +36,166 @@ public:
     }
 };
 
+namespace
+{
+juce::String formatVolumeDb(float gain)
+{
+    if (gain <= 0.0005f)
+        return "-inf";
+    const float db = 20.0f * std::log10(gain);
+    if (std::abs(db) < 0.05f)
+        return "0.0dB";
+    return juce::String::formatted("%+.1fdB", db);
+}
+
+juce::String formatPanText(float pan)
+{
+    const int pct = juce::roundToInt(std::clamp(pan, -1.0f, 1.0f) * 100.0f);
+    if (pct == 0)
+        return "C";
+    return (pct < 0 ? "L" : "R") + juce::String(std::abs(pct));
+}
+
+std::optional<float> parseVolumeInput(const juce::String& raw)
+{
+    const juce::String s = raw.trim().toLowerCase();
+    if (s.isEmpty())
+        return std::nullopt;
+    if (s == "-inf" || s == "inf" || s == "mute" || s == "off")
+        return 0.0f;
+    if (s.endsWith("%"))
+    {
+        const double pct = s.dropLastCharacters(1).trim().getDoubleValue();
+        return std::clamp(static_cast<float>(pct / 100.0), 0.0f, 2.0f);
+    }
+    juce::String cleaned = s;
+    if (cleaned.endsWith("db"))
+        cleaned = cleaned.dropLastCharacters(2).trim();
+    const double db = cleaned.getDoubleValue();
+    if (db <= -60.0)
+        return 0.0f;
+    return std::clamp(static_cast<float>(std::pow(10.0, db / 20.0)), 0.0f, 2.0f);
+}
+
+std::optional<float> parsePanInput(const juce::String& raw)
+{
+    const juce::String s = raw.trim().toUpperCase();
+    if (s.isEmpty())
+        return std::nullopt;
+    if (s == "C" || s == "CENTER" || s == "0")
+        return 0.0f;
+    if (s.startsWith("L"))
+    {
+        const double v = s.substring(1).trim().getDoubleValue();
+        const double norm = (v > 1.0) ? (v / 100.0) : v;
+        return std::clamp(static_cast<float>(-std::abs(norm)), -1.0f, 1.0f);
+    }
+    if (s.startsWith("R"))
+    {
+        const double v = s.substring(1).trim().getDoubleValue();
+        const double norm = (v > 1.0) ? (v / 100.0) : v;
+        return std::clamp(static_cast<float>(std::abs(norm)), -1.0f, 1.0f);
+    }
+    const double v = s.getDoubleValue();
+    if (std::abs(v) > 1.0)
+        return std::clamp(static_cast<float>(v / 100.0), -1.0f, 1.0f);
+    return std::clamp(static_cast<float>(v), -1.0f, 1.0f);
+}
+} // namespace
+
+// ==============================================================================
+// TrackSliderLookAndFeel (GarageBand-style recessed dotted pill + silver thumb)
+// ==============================================================================
+class TrackHeaderList::TrackSliderLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
+                          float sliderPos, float /*minSliderPos*/, float /*maxSliderPos*/,
+                          const juce::Slider::SliderStyle /*style*/, juce::Slider& slider) override
+    {
+        const bool isPan = (slider.getMinimum() < 0.0);
+        const float slotH = std::clamp(static_cast<float>(height) - 2.0f, 14.0f, 20.0f);
+        const float slotY = static_cast<float>(y) + (static_cast<float>(height) - slotH) * 0.5f;
+        const auto r = juce::Rectangle<float>(static_cast<float>(x) + 1.0f, slotY,
+                                              std::max(12.0f, static_cast<float>(width) - 2.0f), slotH);
+        const float radius = r.getHeight() * 0.5f;
+
+        // Recessed dark capsule slot
+        juce::ColourGradient slotGrad(juce::Colour(0xff0d0d10), r.getX(), r.getY(),
+                                      juce::Colour(0xff1c1c21), r.getX(), r.getBottom(), false);
+        g.setGradientFill(slotGrad);
+        g.fillRoundedRectangle(r, radius);
+
+        g.setColour(juce::Colour(0xff09090b));
+        g.drawRoundedRectangle(r, radius, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.09f));
+        g.drawHorizontalLine(juce::roundToInt(r.getBottom() + 0.5f), r.getX() + radius, r.getRight() - radius);
+
+        const float thumbR = r.getHeight() * 0.45f;
+        const float minX = r.getX() + thumbR + 1.5f;
+        const float maxX = r.getRight() - thumbR - 1.5f;
+        const float norm = static_cast<float>((slider.getValue() - slider.getMinimum()) /
+                                              std::max(0.0001, slider.getMaximum() - slider.getMinimum()));
+        const float tx = minX + std::clamp(norm, 0.0f, 1.0f) * std::max(0.0f, maxX - minX);
+        const float ty = r.getCentreY();
+
+        if (!isPan)
+        {
+            // Dual horizontal rows of subtle LED dots inside the recessed capsule (matching screenshot)
+            const float padX = 7.0f;
+            const float usableW = std::max(6.0f, r.getWidth() - padX * 2.0f);
+            const int numDots = std::clamp(static_cast<int>(usableW / 6.0f), 6, 16);
+            const float stepX = (numDots > 1) ? (usableW / static_cast<float>(numDots - 1)) : 0.0f;
+            const float rowY[2] = {ty - 2.8f, ty + 2.8f};
+
+            for (int row = 0; row < 2; ++row)
+            {
+                for (int i = 0; i < numDots; ++i)
+                {
+                    const float dx = r.getX() + padX + static_cast<float>(i) * stepX;
+                    const bool active = (dx <= tx);
+                    g.setColour(active ? juce::Colour(0xff4a5562) : juce::Colour(0xff2a2a31));
+                    g.fillEllipse(dx - 1.25f, rowY[row] - 1.25f, 2.5f, 2.5f);
+                }
+            }
+        }
+        else
+        {
+            // Center tick for Pan slider
+            const float cx = r.getCentreX();
+            g.setColour(juce::Colours::white.withAlpha(0.22f));
+            g.drawVerticalLine(juce::roundToInt(cx), r.getY() + 3.0f, r.getBottom() - 3.0f);
+        }
+
+        // Brushed-silver circular thumb (matching GarageBand screenshot)
+        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.fillEllipse(tx - thumbR, ty - thumbR + 1.0f, thumbR * 2.0f, thumbR * 2.0f);
+
+        const bool hover = slider.isMouseOverOrDragging();
+        juce::ColourGradient thumbGrad(hover ? juce::Colour(0xffdcdce4) : juce::Colour(0xffc6c6ce),
+                                       tx - thumbR * 0.4f, ty - thumbR,
+                                       hover ? juce::Colour(0xff787884) : juce::Colour(0xff62626c),
+                                       tx + thumbR * 0.4f, ty + thumbR, false);
+        thumbGrad.addColour(0.5, juce::Colour(0xff8e8e98));
+        g.setGradientFill(thumbGrad);
+        g.fillEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f);
+
+        g.setColour(juce::Colours::white.withAlpha(0.35f));
+        g.drawEllipse(tx - thumbR + 0.8f, ty - thumbR + 0.8f, (thumbR - 0.8f) * 2.0f, (thumbR - 0.8f) * 2.0f, 0.8f);
+        g.setColour(juce::Colour(0xff141418));
+        g.drawEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f, 1.0f);
+        juce::ignoreUnused(sliderPos);
+    }
+};
+
 TrackHeaderList::TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged)
     : song_(song), patternId_(patternId), onMixChanged_(std::move(onMixChanged))
 {
+    sliderLnf_ = std::make_unique<TrackSliderLookAndFeel>();
+
     addTrackButton_ = std::make_unique<juce::TextButton>("+ Add Track");
-    addTrackButton_->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
-    addTrackButton_->setColour(juce::TextButton::textColourOffId, Palette::accent);
+    addTrackButton_->setColour(juce::TextButton::buttonColourId, Palette::surface);
+    addTrackButton_->setColour(juce::TextButton::textColourOffId, Palette::text);
     addTrackButton_->onClick = [this]() {
         if (onAddTrack_)
             onAddTrack_();
@@ -49,6 +203,17 @@ TrackHeaderList::TrackHeaderList(Song& song, PatternId patternId, MixChangedCall
     addAndMakeVisible(addTrackButton_.get());
 
     updateFromModel();
+}
+
+TrackHeaderList::~TrackHeaderList()
+{
+    for (auto& c : controls_)
+    {
+        if (c.volumeSlider != nullptr)
+            c.volumeSlider->setLookAndFeel(nullptr);
+        if (c.panSlider != nullptr)
+            c.panSlider->setLookAndFeel(nullptr);
+    }
 }
 
 void TrackHeaderList::setPattern(PatternId patternId)
@@ -77,6 +242,13 @@ void TrackHeaderList::updateFromModel()
 
     if (static_cast<int>(controls_.size()) != numTracks)
     {
+        for (auto& oldC : controls_)
+        {
+            if (oldC.volumeSlider != nullptr)
+                oldC.volumeSlider->setLookAndFeel(nullptr);
+            if (oldC.panSlider != nullptr)
+                oldC.panSlider->setLookAndFeel(nullptr);
+        }
         controls_.clear();
         controls_.resize(static_cast<std::size_t>(numTracks));
 
@@ -84,7 +256,7 @@ void TrackHeaderList::updateFromModel()
         {
             auto& c = controls_[static_cast<std::size_t>(t)];
 
-            c.nameLabel = std::make_unique<TrackNameLabel>("lbl", juce::String(t + 1) + ": (empty)");
+            c.nameLabel = std::make_unique<TrackNameLabel>("lbl", "[empty]");
             c.nameLabel->setFont(Typography::bold(13.0f));
             c.nameLabel->setColour(juce::Label::textColourId, Palette::textDim.withAlpha(0.7f));
             c.nameLabel->setJustificationType(juce::Justification::centredLeft);
@@ -175,26 +347,61 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.armButton.get());
 
-            c.volLabel = std::make_unique<juce::Label>("vol", "Vol");
-            c.volLabel->setFont(Typography::bold(10.0f));
-            c.volLabel->setBorderSize(juce::BorderSize<int>(0));
-            c.volLabel->setColour(juce::Label::textColourId, Palette::textDim);
+            c.volLabel = std::make_unique<juce::Label>("vol", "0.0dB");
+            c.volLabel->setFont(Typography::bold(9.5f));
+            c.volLabel->setBorderSize(juce::BorderSize<int>(1, 2, 1, 2));
+            c.volLabel->setColour(juce::Label::backgroundColourId, juce::Colour(0xff16161b));
+            c.volLabel->setColour(juce::Label::outlineColourId, juce::Colour(0xff32323c));
+            c.volLabel->setColour(juce::Label::textColourId, juce::Colour(0xffd8d8e4));
+            c.volLabel->setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff101015));
+            c.volLabel->setColour(juce::Label::textWhenEditingColourId, juce::Colours::white);
             c.volLabel->setJustificationType(juce::Justification::centred);
-            c.volLabel->setInterceptsMouseClicks(false, false);
+            c.volLabel->setEditable(true, true, false);
+            c.volLabel->setMouseCursor(juce::MouseCursor::IBeamCursor);
+            c.volLabel->setTooltip("Track " + juce::String(t + 1) + " Volume (Click to type dB, e.g. -6, +3, 0, -inf, or 80%)");
+            c.volLabel->onEditorShow = [lbl = c.volLabel.get()] {
+                if (auto* ed = lbl->getCurrentTextEditor())
+                {
+                    ed->setFont(Typography::bold(9.5f));
+                    ed->setJustification(juce::Justification::centred);
+                    ed->selectAll();
+                }
+            };
+            c.volLabel->onTextChange = [this, t]() {
+                if (auto* p = song_.findPattern(patternId_))
+                {
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
+                    {
+                        auto& ctrl = controls_[static_cast<std::size_t>(t)];
+                        if (auto parsed = parseVolumeInput(ctrl.volLabel->getText()))
+                        {
+                            p->tracks[static_cast<std::size_t>(t)].mix.volume = *parsed;
+                            ctrl.volumeSlider->setValue(*parsed, juce::dontSendNotification);
+                            if (onMixChanged_)
+                                onMixChanged_(t);
+                        }
+                        ctrl.volLabel->setText(formatVolumeDb(p->tracks[static_cast<std::size_t>(t)].mix.volume),
+                                               juce::dontSendNotification);
+                    }
+                }
+            };
             addAndMakeVisible(c.volLabel.get());
 
             c.volumeSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+            c.volumeSlider->setLookAndFeel(sliderLnf_.get());
             c.volumeSlider->setScrollWheelEnabled(false);
             c.volumeSlider->setRange(0.0, 2.0, 0.01);
+            c.volumeSlider->setDoubleClickReturnValue(true, 1.0);
             c.volumeSlider->setValue(1.0, juce::dontSendNotification);
-            c.volumeSlider->setTooltip("Track " + juce::String(t + 1) + " Volume");
+            c.volumeSlider->setTooltip("Track " + juce::String(t + 1) + " Volume (Double-click to reset to 0.0 dB)");
             c.volumeSlider->onValueChange = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
-                    if (t < static_cast<int>(p->tracks.size()))
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
-                        p->tracks[static_cast<std::size_t>(t)].mix.volume =
-                            static_cast<float>(controls_[static_cast<std::size_t>(t)].volumeSlider->getValue());
+                        const float vol = static_cast<float>(controls_[static_cast<std::size_t>(t)].volumeSlider->getValue());
+                        p->tracks[static_cast<std::size_t>(t)].mix.volume = vol;
+                        controls_[static_cast<std::size_t>(t)].volLabel->setText(formatVolumeDb(vol), juce::dontSendNotification);
                         if (onMixChanged_)
                             onMixChanged_(t);
                     }
@@ -202,26 +409,61 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.volumeSlider.get());
 
-            c.panLabel = std::make_unique<juce::Label>("pan", "Pan");
-            c.panLabel->setFont(Typography::bold(10.0f));
-            c.panLabel->setBorderSize(juce::BorderSize<int>(0));
-            c.panLabel->setColour(juce::Label::textColourId, Palette::textDim);
+            c.panLabel = std::make_unique<juce::Label>("pan", "C");
+            c.panLabel->setFont(Typography::bold(9.5f));
+            c.panLabel->setBorderSize(juce::BorderSize<int>(1, 2, 1, 2));
+            c.panLabel->setColour(juce::Label::backgroundColourId, juce::Colour(0xff16161b));
+            c.panLabel->setColour(juce::Label::outlineColourId, juce::Colour(0xff32323c));
+            c.panLabel->setColour(juce::Label::textColourId, juce::Colour(0xffd8d8e4));
+            c.panLabel->setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff101015));
+            c.panLabel->setColour(juce::Label::textWhenEditingColourId, juce::Colours::white);
             c.panLabel->setJustificationType(juce::Justification::centred);
-            c.panLabel->setInterceptsMouseClicks(false, false);
+            c.panLabel->setEditable(true, true, false);
+            c.panLabel->setMouseCursor(juce::MouseCursor::IBeamCursor);
+            c.panLabel->setTooltip("Track " + juce::String(t + 1) + " Pan (Click to type, e.g. C, L50, R75, -25, +100)");
+            c.panLabel->onEditorShow = [lbl = c.panLabel.get()] {
+                if (auto* ed = lbl->getCurrentTextEditor())
+                {
+                    ed->setFont(Typography::bold(9.5f));
+                    ed->setJustification(juce::Justification::centred);
+                    ed->selectAll();
+                }
+            };
+            c.panLabel->onTextChange = [this, t]() {
+                if (auto* p = song_.findPattern(patternId_))
+                {
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
+                    {
+                        auto& ctrl = controls_[static_cast<std::size_t>(t)];
+                        if (auto parsed = parsePanInput(ctrl.panLabel->getText()))
+                        {
+                            p->tracks[static_cast<std::size_t>(t)].mix.pan = *parsed;
+                            ctrl.panSlider->setValue(*parsed, juce::dontSendNotification);
+                            if (onMixChanged_)
+                                onMixChanged_(t);
+                        }
+                        ctrl.panLabel->setText(formatPanText(p->tracks[static_cast<std::size_t>(t)].mix.pan),
+                                               juce::dontSendNotification);
+                    }
+                }
+            };
             addAndMakeVisible(c.panLabel.get());
 
             c.panSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+            c.panSlider->setLookAndFeel(sliderLnf_.get());
             c.panSlider->setScrollWheelEnabled(false);
             c.panSlider->setRange(-1.0, 1.0, 0.01);
+            c.panSlider->setDoubleClickReturnValue(true, 0.0);
             c.panSlider->setValue(0.0, juce::dontSendNotification);
-            c.panSlider->setTooltip("Track " + juce::String(t + 1) + " Pan");
+            c.panSlider->setTooltip("Track " + juce::String(t + 1) + " Pan (Double-click to center)");
             c.panSlider->onValueChange = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
-                    if (t < static_cast<int>(p->tracks.size()))
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
-                        p->tracks[static_cast<std::size_t>(t)].mix.pan =
-                            static_cast<float>(controls_[static_cast<std::size_t>(t)].panSlider->getValue());
+                        const float pan = static_cast<float>(controls_[static_cast<std::size_t>(t)].panSlider->getValue());
+                        p->tracks[static_cast<std::size_t>(t)].mix.pan = pan;
+                        controls_[static_cast<std::size_t>(t)].panLabel->setText(formatPanText(pan), juce::dontSendNotification);
                         if (onMixChanged_)
                             onMixChanged_(t);
                     }
@@ -240,7 +482,9 @@ void TrackHeaderList::updateFromModel()
             auto& c = controls_[static_cast<std::size_t>(t)];
 
             c.volumeSlider->setValue(track.mix.volume, juce::dontSendNotification);
+            c.volLabel->setText(formatVolumeDb(track.mix.volume), juce::dontSendNotification);
             c.panSlider->setValue(track.mix.pan, juce::dontSendNotification);
+            c.panLabel->setText(formatPanText(track.mix.pan), juce::dontSendNotification);
             c.muteButton->setToggleState(track.muted, juce::dontSendNotification);
             c.soloButton->setToggleState(track.solo, juce::dontSendNotification);
             c.armButton->setToggleState(track.armed, juce::dontSendNotification);
@@ -307,9 +551,9 @@ void TrackHeaderList::updateFromModel()
             }
             else
             {
-                c.nameLabel->setText(juce::String(t + 1) + ". (empty)", juce::dontSendNotification);
-                c.nameLabel->setColour(juce::Label::textColourId, Palette::textDim.withAlpha(0.6f));
-                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + " (Double-click to rename)");
+                c.nameLabel->setText("[empty]", juce::dontSendNotification);
+                c.nameLabel->setColour(juce::Label::textColourId, Palette::textDim.withAlpha(0.65f));
+                c.nameLabel->setTooltip("Track " + juce::String(t + 1) + " [empty] (Double-click to rename)");
             }
         }
     }
@@ -329,56 +573,61 @@ void TrackHeaderList::setTrackHeight(int height)
 
 void TrackHeaderList::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff22252b));
+    g.fillAll(juce::Colour(0xff26262b));
 
-    // Header top area (matching ruler)
-    g.setColour(Palette::patternHeaderBg);
-    g.fillRect(0, 0, getWidth(), PatternGrid::kRulerHeight);
-    g.setColour(Palette::patternAccent);
-    g.drawHorizontalLine(PatternGrid::kRulerHeight - 1, 0.0f, static_cast<float>(getWidth()));
+    // Header top area (matching brushed-metal ruler)
+    {
+        juce::ColourGradient rulerGrad(juce::Colour(0xff34343a), 0.0f, 0.0f,
+                                       juce::Colour(0xff222226), 0.0f, static_cast<float>(PatternGrid::kRulerHeight), false);
+        g.setGradientFill(rulerGrad);
+        g.fillRect(0, 0, getWidth(), PatternGrid::kRulerHeight);
+        g.setColour(juce::Colour(0xff141417));
+        g.drawHorizontalLine(PatternGrid::kRulerHeight - 1, 0.0f, static_cast<float>(getWidth()));
+    }
 
     const auto* pat = song_.findPattern(patternId_);
     const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
-    constexpr int kStripWidth = 14;
+    constexpr int kStripWidth = 6;
+
+    // Matching modern luminous clip palette for the subtle left track accent bar
+    static constexpr std::uint32_t kModernPalette[] = {
+        0xff63d988, 0xffb4a2f0, 0xff72c4fa, 0xfff2bf66, 0xfff294ab,
+        0xff6ad8cc, 0xff9d94f2, 0xffa2dc6d, 0xffefa274, 0xff85b8f8
+    };
+    constexpr std::size_t kPaletteCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
 
     for (int t = 0; t < numTracks; ++t)
     {
         const int y = PatternGrid::kRulerHeight + t * trackHeight_;
 
-        // Track surface background
-        g.setColour(t % 2 == 0 ? juce::Colour(0xff24282f) : juce::Colour(0xff282c34));
+        // Sleek brushed dark-charcoal track row gradient (matching GarageBand track header reference)
+        const juce::Colour topRow = (t % 2 == 0) ? juce::Colour(0xff36363c) : juce::Colour(0xff323238);
+        const juce::Colour botRow = (t % 2 == 0) ? juce::Colour(0xff2b2b30) : juce::Colour(0xff27272c);
+        juce::ColourGradient rowGrad(topRow, 0.0f, static_cast<float>(y),
+                                     botRow, 0.0f, static_cast<float>(y + trackHeight_), false);
+        g.setGradientFill(rowGrad);
         g.fillRect(0, y, getWidth(), trackHeight_);
 
-        // Studio One left color strip
-        juce::Colour badgeCol = Palette::patternAccent.withAlpha(0.6f);
+        // Subtle top inner highlight
+        g.setColour(juce::Colours::white.withAlpha(0.06f));
+        g.drawHorizontalLine(y, 0.0f, static_cast<float>(getWidth()));
+
+        // Sleek left color indicator bar
+        juce::Colour badgeCol = Palette::accent.withAlpha(0.75f);
         const auto& track = pat->tracks[static_cast<std::size_t>(t)];
         SampleId sid = track.sampleId;
         if (!sid.isValid() && !track.clips.empty())
             sid = track.clips.front().sampleId;
 
         if (const Sample* s = song_.findSample(sid))
-            badgeCol = s->missing ? Palette::danger.withAlpha(0.8f) : juce::Colour::fromHSV(s->hue(), 0.8f, 0.88f, 1.0f);
+            badgeCol = s->missing ? Palette::danger.withAlpha(0.85f)
+                                  : juce::Colour(kModernPalette[(sid.value - 1) % kPaletteCount]);
 
         g.setColour(badgeCol);
-        g.fillRect(0, y, kStripWidth, trackHeight_);
-
-        // Dark divider on right edge of color strip
-        g.setColour(juce::Colours::black.withAlpha(0.45f));
-        g.drawVerticalLine(kStripWidth - 1, static_cast<float>(y), static_cast<float>(y + trackHeight_));
-
-        // Chevron fold icon at top of color strip
-        DAWTrackIcons::drawTrackFoldChevron(g, kStripWidth * 0.5f, static_cast<float>(y + 8), 7.0f);
-
-        // Waveform icon before track name (if row height allows)
-        if (trackHeight_ >= 30)
-        {
-            DAWTrackIcons::drawAudioWaveformIcon(g, juce::Rectangle<float>(static_cast<float>(kStripWidth + 4),
-                                                                           static_cast<float>(y + 2), 16.0f, 18.0f),
-                                                 juce::Colour(0xff9ca3af));
-        }
+        g.fillRect(0, y, kStripWidth, trackHeight_ - 1);
 
         // Horizontal separator between tracks
-        g.setColour(juce::Colour(0xff181a1f));
+        g.setColour(juce::Colour(0xff16161a));
         g.drawHorizontalLine(y + trackHeight_ - 1, 0.0f, static_cast<float>(getWidth()));
 
         // Drag hover highlight
@@ -386,7 +635,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
         {
             if (isReorderDrag_)
             {
-                g.setColour(Palette::patternAccent);
+                g.setColour(Palette::accent);
                 g.fillRect(0, y, getWidth(), 3);
             }
             else
@@ -402,71 +651,90 @@ void TrackHeaderList::paint(juce::Graphics& g)
     if (dragHoverTrack_ >= numTracks && addTrackButton_ != nullptr)
     {
         g.setColour(Palette::accent.withAlpha(0.25f));
-        g.fillRoundedRectangle(addTrackButton_->getBounds().toFloat().expanded(2.0f), 4.0f);
+        g.fillRoundedRectangle(addTrackButton_->getBounds().toFloat().expanded(2.0f), 5.0f);
         g.setColour(Palette::accent);
-        g.drawRoundedRectangle(addTrackButton_->getBounds().toFloat().expanded(2.0f), 4.0f, 2.0f);
+        g.drawRoundedRectangle(addTrackButton_->getBounds().toFloat().expanded(2.0f), 5.0f, 1.5f);
     }
 
     // Right border dividing from PatternGrid
-    g.setColour(juce::Colour(0xff181a1f));
-    g.drawVerticalLine(getWidth() - 2, 0.0f, static_cast<float>(getHeight()));
+    g.setColour(juce::Colour(0xff141418));
     g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
 }
 
 void TrackHeaderList::resized()
 {
     const int numTracks = static_cast<int>(controls_.size());
-    constexpr int kStripWidth = 14;
+    constexpr int kStripWidth = 6;
 
     for (int t = 0; t < numTracks; ++t)
     {
         const int y = PatternGrid::kRulerHeight + t * trackHeight_;
         auto& c = controls_[static_cast<std::size_t>(t)];
 
-        // 2-row layout:
-        // Top: Waveform icon + Name Label + Props Button + Type Button + Delete Button
-        const int nameX = kStripWidth + 24;
-        const int nameW = std::max(40, getWidth() - nameX - 104);
-        c.nameLabel->setBounds(nameX, y + 2, nameW, 20);
+        // Top row: Clean bold track name + Props + Type + Delete
+        const int nameX = kStripWidth + 8;
+        const int rightBtnsW = 104;
+        const int nameW = std::max(40, getWidth() - nameX - rightBtnsW);
+        c.nameLabel->setBounds(nameX, y + 3, nameW, 20);
         if (c.propsButton != nullptr)
-            c.propsButton->setBounds(getWidth() - 102, y + 2, 22, 20);
+            c.propsButton->setBounds(getWidth() - 102, y + 3, 22, 19);
         if (c.typeButton != nullptr)
-            c.typeButton->setBounds(getWidth() - 78, y + 2, 50, 20);
+            c.typeButton->setBounds(getWidth() - 78, y + 3, 50, 19);
         if (c.deleteButton != nullptr)
-            c.deleteButton->setBounds(getWidth() - 24, y + 2, 20, 20);
+            c.deleteButton->setBounds(getWidth() - 24, y + 3, 20, 19);
 
-        // Bottom: [ M | S ]  ( • )  Vol [===] Pan [===]
-        const int btnY = y + 24;
-        const int btnH = std::clamp(trackHeight_ - 26, 18, 22);
+        // Bottom row (GarageBand layout keeping existing M/S/Arm icons):
+        // [ M | S ]  ( • )   [=== Volume Pill ===]   Pan [==]
+        const int btnY = y + 26;
+        const int btnH = std::clamp(trackHeight_ - 30, 19, 23);
 
-        c.muteButton->setBounds(kStripWidth + 4, btnY, 22, btnH);
-        c.soloButton->setBounds(kStripWidth + 28, btnY, 22, btnH);
-        c.armButton->setBounds(kStripWidth + 54, btnY, 18, btnH);
+        c.muteButton->setBounds(kStripWidth + 8, btnY, 24, btnH);
+        c.soloButton->setBounds(kStripWidth + 32, btnY, 24, btnH);
+        c.armButton->setBounds(kStripWidth + 60, btnY, 19, btnH);
 
-        const int remainX = kStripWidth + 76;
-        const int remainW = std::max(20, getWidth() - remainX - 6);
-        constexpr int lblW = 26;
-        const int sliderW = std::max(20, (remainW - (lblW * 2 + 8)) / 2);
+        const int slidersX = kStripWidth + 85;
+        const int availW = std::max(40, getWidth() - slidersX - 8);
 
-        c.volLabel->setVisible(true);
+        // Bottom row: [ M | S ] (•)  [=== Volume ===] [0.0dB]  [=== Pan ===] [ C ]
         c.volumeSlider->setVisible(true);
-        c.panLabel->setVisible(true);
-        c.panSlider->setVisible(true);
+        c.volLabel->setVisible(true);
 
-        int curX = remainX;
-        c.volLabel->setBounds(curX, btnY, lblW, btnH);
-        curX += lblW + 2;
-        c.volumeSlider->setBounds(curX, btnY, sliderW, btnH);
-        curX += sliderW + 6;
-        c.panLabel->setBounds(curX, btnY, lblW, btnH);
-        curX += lblW + 2;
-        c.panSlider->setBounds(curX, btnY, sliderW, btnH);
+        constexpr int volReadoutW = 42;
+        constexpr int panReadoutW = 32;
+        constexpr int gap = 4;
+
+        if (availW >= 180)
+        {
+            const int totalSlidersW = availW - volReadoutW - panReadoutW - gap * 3;
+            const int panW = std::clamp(totalSlidersW * 42 / 100, 56, 130);
+            const int volW = std::max(56, totalSlidersW - panW);
+
+            int curX = slidersX;
+            c.volumeSlider->setBounds(curX, btnY, volW, btnH);
+            curX += volW + gap;
+            c.volLabel->setBounds(curX, btnY + 1, volReadoutW, btnH - 2);
+            curX += volReadoutW + gap;
+
+            c.panSlider->setVisible(true);
+            c.panLabel->setVisible(true);
+            c.panSlider->setBounds(curX, btnY, panW, btnH);
+            curX += panW + gap;
+            c.panLabel->setBounds(curX, btnY + 1, panReadoutW, btnH - 2);
+        }
+        else
+        {
+            const int volW = std::max(40, availW - volReadoutW - gap);
+            c.volumeSlider->setBounds(slidersX, btnY, volW, btnH);
+            c.volLabel->setBounds(slidersX + volW + gap, btnY + 1, volReadoutW, btnH - 2);
+            c.panLabel->setVisible(false);
+            c.panSlider->setVisible(false);
+        }
     }
 
     if (addTrackButton_ != nullptr)
     {
-        const int y = PatternGrid::kRulerHeight + numTracks * trackHeight_ + 6;
-        addTrackButton_->setBounds(kStripWidth + 4, y, getWidth() - kStripWidth - 12, 24);
+        const int y = PatternGrid::kRulerHeight + numTracks * trackHeight_ + 8;
+        addTrackButton_->setBounds(kStripWidth + 8, y, getWidth() - kStripWidth - 16, 26);
     }
 }
 

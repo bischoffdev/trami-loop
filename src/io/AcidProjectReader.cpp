@@ -233,6 +233,20 @@ std::string findAudioReferenceInBytes(const std::uint8_t* data, std::size_t size
     return {};
 }
 
+namespace
+{
+std::string pathToUtf8(const std::filesystem::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+std::filesystem::path utf8ToPath(const std::string& s)
+{
+    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+}
+} // namespace
+
 std::filesystem::path findFileCaseInsensitive(const std::filesystem::path& dir, const std::string& targetName)
 {
     const auto target = cleanFilename(targetName);
@@ -247,7 +261,7 @@ std::filesystem::path findFileCaseInsensitive(const std::filesystem::path& dir, 
     {
         if (entry.is_regular_file(ec))
         {
-            if (filenamesMatch(entry.path().filename().string(), target))
+            if (filenamesMatch(pathToUtf8(entry.path().filename()), target))
                 return entry.path();
         }
     }
@@ -256,7 +270,7 @@ std::filesystem::path findFileCaseInsensitive(const std::filesystem::path& dir, 
     {
         if (entry.is_regular_file(ec))
         {
-            if (filenamesMatch(entry.path().filename().string(), target))
+            if (filenamesMatch(pathToUtf8(entry.path().filename()), target))
                 return entry.path();
         }
     }
@@ -746,10 +760,12 @@ std::optional<Song> AcidProjectReader::loadProject(const std::filesystem::path& 
         std::filesystem::remove_all(tempRoot, ec);
         std::filesystem::create_directories(tempRoot, ec);
 
-        const juce::File jArchive(juce::String::fromUTF8(projectFile.string().c_str()));
+        const auto archiveUtf8 = pathToUtf8(projectFile);
+        const juce::File jArchive(juce::String::fromUTF8(archiveUtf8.c_str(), static_cast<int>(archiveUtf8.size())));
         juce::ZipFile zip(jArchive);
 
-        const juce::File jDest(juce::String::fromUTF8(tempRoot.string().c_str()));
+        const auto destUtf8 = pathToUtf8(tempRoot);
+        const juce::File jDest(juce::String::fromUTF8(destUtf8.c_str(), static_cast<int>(destUtf8.size())));
         const auto uncompressResult = zip.uncompressTo(jDest);
         if (uncompressResult.failed())
             return std::nullopt;
@@ -832,7 +848,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
         // 1. Direct match in dir
         for (const auto& cand : candidates)
         {
-            const auto candidateDirect = dir / cand;
+            const auto candidateDirect = dir / utf8ToPath(cand);
             if (std::filesystem::exists(candidateDirect, ec) && std::filesystem::is_regular_file(candidateDirect, ec))
                 return candidateDirect;
         }
@@ -840,7 +856,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
         // 2. Direct match in dir / "samples"
         for (const auto& cand : candidates)
         {
-            const auto candidateSamples = dir / "samples" / cand;
+            const auto candidateSamples = dir / "samples" / utf8ToPath(cand);
             if (std::filesystem::exists(candidateSamples, ec) && std::filesystem::is_regular_file(candidateSamples, ec))
                 return candidateSamples;
         }

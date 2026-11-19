@@ -29,6 +29,7 @@ public:
     using TrackPropertiesCallback = std::function<void(int track)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
+    ~TrackHeaderList() override;
 
     void setPattern(PatternId patternId);
     void updateFromModel();
@@ -71,10 +72,14 @@ public:
     void itemDragExit(const SourceDetails& dragSourceDetails) override;
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
-    static constexpr int kHeaderWidth = 260;
-    static constexpr int kMinTrackHeight = 48;
+    static constexpr int kHeaderWidth = 360;
+    static constexpr int kMinHeaderWidth = 280;
+    static constexpr int kMaxHeaderWidth = 560;
+    static constexpr int kMinTrackHeight = 52;
 
 private:
+    class TrackSliderLookAndFeel;
+    std::unique_ptr<TrackSliderLookAndFeel> sliderLnf_;
     struct TrackControls
     {
         std::unique_ptr<juce::Label> nameLabel;

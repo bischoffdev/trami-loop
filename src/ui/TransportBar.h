@@ -35,7 +35,7 @@ public:
 
     void updateDisplay();
 
-    static constexpr int kHeight = 44;
+    static constexpr int kHeight = 48;
 
 private:
     enum class TransportIcon
@@ -130,6 +130,10 @@ private:
     std::unique_ptr<SwingLabel> swingLabel_;
     class SwingSlider;
     std::unique_ptr<SwingSlider> swingSlider_;
+
+    // Master Level & Volume Capsule (Screenshot 2 style recessed LED meter + silver thumb)
+    class MasterMeterSlider;
+    std::unique_ptr<MasterMeterSlider> masterMeterSlider_;
 
     // Master Project Key selector (ACID automatic key conforming)
     juce::ComboBox keyCombo_;

@@ -177,6 +177,79 @@ private:
     int scrollX_ = 0;
 };
 
+class PatternView::ResizeSplitter final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit ResizeSplitter(bool isVertical)
+        : isVertical_(isVertical)
+    {
+        setMouseCursor(isVertical_ ? juce::MouseCursor::LeftRightResizeCursor
+                                   : juce::MouseCursor::UpDownResizeCursor);
+        setTooltip(isVertical_ ? "Drag to resize Track Control Area width"
+                               : "Drag to resize Sound Browser height");
+    }
+
+    std::function<void(int deltaPx)> onDragDelta;
+    std::function<void()> onDragStart;
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat();
+        g.setColour(isDragging_ ? Palette::accent.withAlpha(0.45f)
+                                : (isHovered_ ? juce::Colour(0xff42424c) : juce::Colour(0xff18181d)));
+        g.fillRect(r);
+
+        // Subtle centered grip dots / pill
+        g.setColour(isDragging_ ? Palette::accent : (isHovered_ ? juce::Colour(0xffb4b4c2) : juce::Colour(0xff52525e)));
+        const float cx = r.getCentreX();
+        const float cy = r.getCentreY();
+        if (isVertical_)
+        {
+            for (int i = -1; i <= 1; ++i)
+                g.fillEllipse(cx - 1.2f, cy + static_cast<float>(i) * 5.0f - 1.2f, 2.4f, 2.4f);
+        }
+        else
+        {
+            for (int i = -1; i <= 1; ++i)
+                g.fillEllipse(cx + static_cast<float>(i) * 6.0f - 1.2f, cy - 1.2f, 2.4f, 2.4f);
+        }
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override { isHovered_ = true; repaint(); }
+    void mouseExit(const juce::MouseEvent&) override { isHovered_ = false; repaint(); }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        isDragging_ = true;
+        dragStartScreen_ = e.getScreenPosition();
+        if (onDragStart)
+            onDragStart();
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (!isDragging_)
+            return;
+        const auto cur = e.getScreenPosition();
+        const int delta = isVertical_ ? (cur.x - dragStartScreen_.x) : (cur.y - dragStartScreen_.y);
+        if (onDragDelta)
+            onDragDelta(delta);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        isDragging_ = false;
+        repaint();
+    }
+
+private:
+    bool isVertical_ = true;
+    bool isHovered_ = false;
+    bool isDragging_ = false;
+    juce::Point<int> dragStartScreen_;
+};
+
 PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchCache)
     : song_(song), engine_(engine), stretchCache_(stretchCache)
 {
@@ -409,11 +482,12 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
 
     trackHeadersViewport_ = std::make_unique<juce::Viewport>();
     trackHeadersViewport_->setViewedComponent(trackHeaders_.get(), false);
-    trackHeadersViewport_->setScrollBarsShown(false, false);
+    trackHeadersViewport_->setScrollBarsShown(false, false, false, false);
     trackHeadersViewport_->addMouseListener(this, true);
     addAndMakeVisible(trackHeadersViewport_.get());
 
     grid_ = std::make_unique<PatternGrid>(song_, stretchCache_, currentPattern_, *this);
+    trackHeaders_->setTrackHeight(grid_->trackHeight());
     setActiveTool(PatternGrid::EditTool::Select);
 
     gridViewport_ = std::make_unique<SyncViewport>();
@@ -459,6 +533,40 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
 
     ruler_ = std::make_unique<PatternRuler>(*grid_, *gridViewport_);
     addAndMakeVisible(ruler_.get());
+
+    // Draggable vertical splitter between Track Controls and Clip Grid
+    headerSplitter_ = std::make_unique<ResizeSplitter>(true);
+    {
+        auto startWidth = std::make_shared<int>(trackHeaderWidth_);
+        headerSplitter_->onDragStart = [this, startWidth]() { *startWidth = trackHeaderWidth_; };
+        headerSplitter_->onDragDelta = [this, startWidth](int dx) {
+            const int maxW = std::min(TrackHeaderList::kMaxHeaderWidth, std::max(TrackHeaderList::kMinHeaderWidth, getWidth() - 240));
+            const int nextW = std::clamp(*startWidth + dx, TrackHeaderList::kMinHeaderWidth, maxW);
+            if (nextW != trackHeaderWidth_)
+            {
+                trackHeaderWidth_ = nextW;
+                resized();
+            }
+        };
+    }
+    addAndMakeVisible(headerSplitter_.get());
+
+    // Draggable horizontal splitter between Timeline and Sound Browser
+    browserSplitter_ = std::make_unique<ResizeSplitter>(false);
+    {
+        auto startHeight = std::make_shared<int>(browserHeight_);
+        browserSplitter_->onDragStart = [this, startHeight]() { *startHeight = browserHeight_; };
+        browserSplitter_->onDragDelta = [this, startHeight](int dy) {
+            const int maxH = std::max(140, (getHeight() - 42) * 65 / 100);
+            const int nextH = std::clamp(*startHeight - dy, 110, maxH);
+            if (nextH != browserHeight_)
+            {
+                browserHeight_ = nextH;
+                resized();
+            }
+        };
+    }
+    addAndMakeVisible(browserSplitter_.get());
 
     const auto* initialPat = song_.findPattern(currentPattern_);
     const int initialTotalSteps = initialPat != nullptr ? initialPat->lengthSteps() : 32;
@@ -2275,7 +2383,21 @@ void PatternView::importAndAssignToTrack(const juce::String& filePath, int targe
     trackHeaders_->updateFromModel();
     publishSnapshotQuick();
     republish();
-    resized();
+
+    // Ensure newly loaded track/clip is visible at a reasonable zoom level
+    if (grid_ != nullptr && gridViewport_ != nullptr)
+    {
+        const int clipEndPx = grid_->stepToX(static_cast<double>(neededEndStep));
+        const int visibleW = std::max(100, gridViewport_->getWidth() - StudioOneZoomCorner::kThickness - 8);
+        if (clipEndPx > visibleW)
+            fitZoomToProject(8, 32);
+        else
+            resized();
+    }
+    else
+    {
+        resized();
+    }
 }
 
 bool PatternView::isInterestedInFileDrag(const juce::StringArray& files)
@@ -2398,21 +2520,63 @@ void PatternView::zoomOut()
 
 void PatternView::resetZoom()
 {
-    const auto* pat = song_.findPattern(currentPattern_);
-    const int totalSteps = pat != nullptr ? std::max(1, pat->lengthSteps()) : kStepsPerBar;
-    const int numTracks = pat != nullptr ? std::max(1, static_cast<int>(pat->tracks.size())) : 1;
+    fitZoomToProject(4, 64);
+}
 
+void PatternView::fitZoomToProject(int minBarsVisible, int maxBarsVisible)
+{
     const int viewW = gridViewport_ != nullptr
-                          ? std::max(100, gridViewport_->getWidth() - StudioOneZoomCorner::kThickness - 4)
-                          : getWidth();
-    const int viewH = gridViewport_ != nullptr
-                          ? std::max(100, gridViewport_->getHeight() - PatternGrid::kRulerHeight - StudioOneZoomCorner::kThickness - 4)
-                          : getHeight();
+                          ? std::max(0, gridViewport_->getWidth() - StudioOneZoomCorner::kThickness - 4)
+                          : std::max(0, getWidth() - trackHeaderWidth_ - 24);
+    if (viewW < 120)
+    {
+        needsInitialAutoFit_ = true;
+        return;
+    }
 
-    const float fitX = static_cast<float>(viewW) / static_cast<float>(totalSteps * PatternGrid::kDefaultStepWidth);
-    const float fitY = static_cast<float>(viewH) / static_cast<float>(numTracks * PatternGrid::kDefaultTrackHeight);
+    const auto* pat = song_.findPattern(currentPattern_);
+    double maxContentStep = 0.0;
+    int patternBars = 1;
+    if (pat != nullptr)
+    {
+        patternBars = std::max(1, pat->lengthBars);
+        for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
+        {
+            for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
+            {
+                const double span = song_.defaultClipSpanSteps(c, t, currentPattern_);
+                maxContentStep = std::max(maxContentStep, c.startStep + span);
+            }
+        }
+    }
 
-    applyZoom(fitX, std::clamp(fitY, 1.0f, 2.0f), {0, 0});
+    const int contentBars = (maxContentStep > 0.1)
+                                ? std::max(1, static_cast<int>(std::ceil(maxContentStep / static_cast<double>(kStepsPerBar))))
+                                : patternBars;
+    const int targetBars = std::clamp(contentBars, minBarsVisible, maxBarsVisible);
+    const double targetSteps = static_cast<double>(targetBars * kStepsPerBar);
+
+    const float fitX = std::clamp(
+        static_cast<float>(static_cast<double>(viewW) / (targetSteps * static_cast<double>(PatternGrid::kDefaultStepWidth))),
+        StudioOneZoomCorner::kMinZoomX, StudioOneZoomCorner::kMaxZoomX);
+    const float comfortableY = std::clamp(zoomY_, 1.0f, 1.35f);
+
+    needsInitialAutoFit_ = false;
+    isUpdatingZoom_ = true;
+    zoomX_ = fitX;
+    zoomY_ = comfortableY;
+    song_.setPatternZoom(zoomX_, zoomY_);
+
+    if (gridViewport_ != nullptr)
+        gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+    if (grid_ != nullptr)
+        grid_->setZoom(zoomX_, zoomY_);
+    if (trackHeaders_ != nullptr && grid_ != nullptr)
+        trackHeaders_->setTrackHeight(grid_->trackHeight());
+
+    isUpdatingZoom_ = false;
+    resized();
+
     if (gridViewport_ != nullptr)
         gridViewport_->setViewPosition(0, 0);
 }
@@ -2625,76 +2789,149 @@ void PatternView::paint(juce::Graphics& g)
 {
     g.fillAll(Palette::background);
 
-    constexpr int kToolbarHeight = 44;
-    g.setColour(Palette::patternHeaderBg);
+    constexpr int kToolbarHeight = 42;
+    // Sleek dark brushed-metal sub-toolbar matching Screenshot 2
+    juce::ColourGradient barGrad(juce::Colour(0xff38383f), 0.0f, 0.0f,
+                                 juce::Colour(0xff232328), 0.0f, static_cast<float>(kToolbarHeight), false);
+    g.setGradientFill(barGrad);
     g.fillRect(0, 0, getWidth(), kToolbarHeight);
-    g.setColour(Palette::patternAccent.withAlpha(0.7f));
-    g.drawHorizontalLine(kToolbarHeight, 0.0f, static_cast<float>(getWidth()));
-    g.fillRect(0, 0, 4, kToolbarHeight);
+
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(juce::Colour(0xff141418));
+    g.drawHorizontalLine(kToolbarHeight - 1, 0.0f, static_cast<float>(getWidth()));
 }
 
 void PatternView::resized()
 {
-    constexpr int kToolbarHeight = 44;
-    auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(8, 4);
+    constexpr int kToolbarHeight = 42;
+    auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(10, 6);
 
-    browserToggle_.setBounds(toolbar.removeFromLeft(64));
+    browserToggle_.setBounds(toolbar.removeFromLeft(80));
     toolbar.removeFromLeft(8);
 
-    patternTitle_.setBounds(toolbar.removeFromLeft(80));
-    toolbar.removeFromLeft(12);
+    patternTitle_.setBounds(toolbar.removeFromLeft(72));
+    toolbar.removeFromLeft(10);
 
     // Grid / Raster
     rasterLabel_.setBounds(toolbar.removeFromLeft(36));
     toolbar.removeFromLeft(2);
-    rasterCombo_.setBounds(toolbar.removeFromLeft(65));
+    rasterCombo_.setBounds(toolbar.removeFromLeft(66));
     toolbar.removeFromLeft(10);
 
-    addTrackButton_.setBounds(toolbar.removeFromLeft(72));
-    toolbar.removeFromLeft(8);
-    followToggle_.setBounds(toolbar.removeFromLeft(64));
+    addTrackButton_.setBounds(toolbar.removeFromLeft(82));
+    toolbar.removeFromLeft(6);
+    followToggle_.setBounds(toolbar.removeFromLeft(76));
     toolbar.removeFromLeft(12);
 
-    selectToolButton_.setBounds(toolbar.removeFromLeft(68).reduced(0, 4));
+    selectToolButton_.setBounds(toolbar.removeFromLeft(68));
     toolbar.removeFromLeft(4);
-    paintToolButton_.setBounds(toolbar.removeFromLeft(64).reduced(0, 4));
+    paintToolButton_.setBounds(toolbar.removeFromLeft(64));
     toolbar.removeFromLeft(4);
-    eraseToolButton_.setBounds(toolbar.removeFromLeft(64).reduced(0, 4));
+    eraseToolButton_.setBounds(toolbar.removeFromLeft(64));
     toolbar.removeFromLeft(10);
-    splitButton_.setBounds(toolbar.removeFromLeft(60).reduced(0, 4));
+    splitButton_.setBounds(toolbar.removeFromLeft(60));
     toolbar.removeFromLeft(4);
-    joinButton_.setBounds(toolbar.removeFromLeft(56).reduced(0, 4));
+    joinButton_.setBounds(toolbar.removeFromLeft(56));
     toolbar.removeFromLeft(4);
-    markerButton_.setBounds(toolbar.removeFromLeft(82).reduced(0, 4));
+    markerButton_.setBounds(toolbar.removeFromLeft(84));
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;
-    const int totalH = getHeight() - contentY;
+    const int totalH = std::max(0, getHeight() - contentY);
+    constexpr int kBrowserSplitterH = 6;
+    constexpr int kHeaderSplitterW = 5;
 
     int timelineH = totalH;
     if (showBrowser_ && browserPanel_ != nullptr)
     {
-        const int browserH = std::clamp(totalH * 38 / 100, 180, 250);
-        timelineH = totalH - browserH;
+        const int maxBrowserH = std::max(110, totalH * 65 / 100);
+        const int clampedBrowserH = std::clamp(browserHeight_, 110, maxBrowserH);
+        timelineH = std::max(100, totalH - clampedBrowserH - kBrowserSplitterH);
+
+        if (browserSplitter_ != nullptr)
+        {
+            browserSplitter_->setVisible(true);
+            browserSplitter_->setBounds(0, contentY + timelineH, getWidth(), kBrowserSplitterH);
+        }
         browserPanel_->setVisible(true);
-        browserPanel_->setBounds(0, contentY + timelineH, getWidth(), browserH);
+        browserPanel_->setBounds(0, contentY + timelineH + kBrowserSplitterH, getWidth(),
+                                 std::max(0, totalH - timelineH - kBrowserSplitterH));
     }
-    else if (browserPanel_ != nullptr)
+    else
     {
-        browserPanel_->setVisible(false);
+        if (browserSplitter_ != nullptr)
+            browserSplitter_->setVisible(false);
+        if (browserPanel_ != nullptr)
+            browserPanel_->setVisible(false);
     }
 
-    const int headerW = TrackHeaderList::kHeaderWidth;
+    const int maxHeaderW = std::min(TrackHeaderList::kMaxHeaderWidth, std::max(TrackHeaderList::kMinHeaderWidth, getWidth() - 220));
+    const int headerW = std::clamp(trackHeaderWidth_, TrackHeaderList::kMinHeaderWidth, maxHeaderW);
     trackHeadersViewport_->setBounds(0, contentY, headerW, timelineH);
 
-    const int gridW = getWidth() - headerW;
-    gridViewport_->setBounds(headerW, contentY, gridW, timelineH);
+    if (headerSplitter_ != nullptr)
+    {
+        headerSplitter_->setVisible(true);
+        headerSplitter_->setBounds(headerW, contentY, kHeaderSplitterW, timelineH);
+    }
+
+    const int gridX = headerW + kHeaderSplitterW;
+    const int gridW = std::max(0, getWidth() - gridX);
+    gridViewport_->setBounds(gridX, contentY, gridW, timelineH);
 
     if (headerCorner_ != nullptr)
         headerCorner_->setBounds(0, contentY, headerW, PatternGrid::kRulerHeight);
 
     if (ruler_ != nullptr)
-        ruler_->setBounds(headerW, contentY, gridW, PatternGrid::kRulerHeight);
+        ruler_->setBounds(gridX, contentY, gridW, PatternGrid::kRulerHeight);
+
+    // Keep clip view zoom relative to the grid viewport width (and apply good initial auto-fit on startup)
+    const int effectiveViewW = std::max(0, gridW - StudioOneZoomCorner::kThickness - 4);
+    if (!isUpdatingZoom_ && effectiveViewW >= 120)
+    {
+        if (needsInitialAutoFit_)
+        {
+            lastGridViewportW_ = effectiveViewW;
+            fitZoomToProject(8, 32);
+            return;
+        }
+        else if (lastGridViewportW_ >= 120 && effectiveViewW != lastGridViewportW_)
+        {
+            const float scale = static_cast<float>(effectiveViewW) / static_cast<float>(lastGridViewportW_);
+            const float newZoomX = std::clamp(zoomX_ * scale, StudioOneZoomCorner::kMinZoomX, StudioOneZoomCorner::kMaxZoomX);
+            const int prevVpX = gridViewport_->getViewPositionX();
+            lastGridViewportW_ = effectiveViewW;
+
+            if (std::abs(newZoomX - zoomX_) > 0.0002f)
+            {
+                isUpdatingZoom_ = true;
+                zoomX_ = newZoomX;
+                song_.setPatternZoom(zoomX_, zoomY_);
+                gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+                grid_->setZoom(zoomX_, zoomY_);
+                isUpdatingZoom_ = false;
+
+                const auto* pat = song_.findPattern(currentPattern_);
+                const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
+                const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+                const int neededGridWidth = grid_->stepToX(totalSteps);
+                const int neededGridHeight = PatternGrid::kRulerHeight + (numTracks + 1) * grid_->trackHeight();
+                const int finalGridH = std::max(timelineH, neededGridHeight);
+                trackHeaders_->setTrackHeight(grid_->trackHeight());
+                grid_->setSize(std::max(gridW, neededGridWidth), finalGridH);
+                trackHeaders_->setSize(headerW, finalGridH + StudioOneZoomCorner::kThickness);
+                gridViewport_->setViewPosition(std::max(0, juce::roundToInt(static_cast<float>(prevVpX) * scale)),
+                                               gridViewport_->getViewPositionY());
+                trackHeadersViewport_->setViewPosition(0, gridViewport_->getViewPositionY());
+                return;
+            }
+        }
+        else
+        {
+            lastGridViewportW_ = effectiveViewW;
+        }
+    }
 
     const auto* pat = song_.findPattern(currentPattern_);
     const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
@@ -2702,9 +2939,12 @@ void PatternView::resized()
 
     const int neededGridWidth = grid_->stepToX(totalSteps);
     const int neededGridHeight = PatternGrid::kRulerHeight + (numTracks + 1) * grid_->trackHeight();
+    const int finalGridH = std::max(timelineH, neededGridHeight);
 
-    grid_->setSize(std::max(gridW, neededGridWidth), std::max(timelineH, neededGridHeight));
-    trackHeaders_->setSize(headerW, std::max(timelineH, neededGridHeight));
+    trackHeaders_->setTrackHeight(grid_->trackHeight());
+    grid_->setSize(std::max(gridW, neededGridWidth), finalGridH);
+    trackHeaders_->setSize(headerW, finalGridH + StudioOneZoomCorner::kThickness);
+    trackHeadersViewport_->setViewPosition(0, gridViewport_->getViewPositionY());
 }
 
 void PatternView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
