@@ -118,6 +118,7 @@ public:
     void zoomIn();
     void zoomOut();
     void resetZoom();
+    void fitZoomToProject(int minBarsVisible = 8, int maxBarsVisible = 32);
     void resetPlayhead();
     void trackHeightIn();
     void trackHeightOut();
@@ -166,6 +167,7 @@ private:
     class SyncViewport;
     class HeaderCorner;
     class PatternRuler;
+    class ResizeSplitter;
     void timerCallback() override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
@@ -212,8 +214,15 @@ private:
 
     bool followPlayhead_ = true;
     bool showBrowser_ = true;
+    int trackHeaderWidth_ = TrackHeaderList::kHeaderWidth;
+    int browserHeight_ = 220;
+    int lastGridViewportW_ = 0;
+    bool needsInitialAutoFit_ = true;
+    bool isUpdatingZoom_ = false;
     std::function<void(const juce::String&)> onShowToast_;
     std::unique_ptr<SampleBrowserPanel> browserPanel_;
+    std::unique_ptr<ResizeSplitter> headerSplitter_;
+    std::unique_ptr<ResizeSplitter> browserSplitter_;
     std::unique_ptr<HeaderCorner> headerCorner_;
     std::unique_ptr<PatternRuler> ruler_;
     std::unique_ptr<TrackHeaderList> trackHeaders_;

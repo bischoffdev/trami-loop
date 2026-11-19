@@ -653,7 +653,7 @@ void SampleBrowserPanel::resized()
     controlBar.removeFromLeft(6);
     autoPreviewToggle_.setBounds(controlBar.removeFromLeft(102).reduced(0, 8));
     controlBar.removeFromLeft(6);
-    syncPreviewToggle_.setBounds(controlBar.removeFromLeft(118).reduced(0, 8));
+    syncPreviewToggle_.setBounds(controlBar.removeFromLeft(136).reduced(0, 8));
     controlBar.removeFromLeft(10);
     addLoopButton_.setBounds(controlBar.removeFromLeft(112).reduced(0, 4));
     controlBar.removeFromLeft(6);

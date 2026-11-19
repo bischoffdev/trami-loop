@@ -41,40 +41,44 @@ void IconButton::setActiveColour(juce::Colour colour)
 void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+    constexpr float radius = 5.5f;
     const bool isOn = getToggleState();
 
-    juce::Colour bg;
+    juce::Colour topCol;
+    juce::Colour botCol;
     juce::Colour border;
-    juce::Colour iconCol;
-    juce::Colour textCol;
+    juce::Colour iconCol = juce::Colour(0xffe0e0e8);
+    juce::Colour textCol = juce::Colour(0xffe8e8f0);
 
     if (isOn)
     {
-        bg = activeColour_.withAlpha(0.26f);
-        border = activeColour_.withAlpha(0.95f);
-        iconCol = activeColour_;
+        topCol = activeColour_.interpolatedWith(juce::Colour(0xff2c2c34), 0.58f);
+        botCol = activeColour_.interpolatedWith(juce::Colour(0xff1d1d24), 0.70f);
+        border = activeColour_.withAlpha(0.85f);
+        iconCol = activeColour_.brighter(0.25f);
         textCol = juce::Colours::white;
     }
     else if (shouldDrawButtonAsDown)
     {
-        bg = juce::Colour(0xff181c22);
-        border = Palette::accent.withAlpha(0.7f);
-        iconCol = Palette::text;
-        textCol = Palette::text;
+        topCol = juce::Colour(0xff222227);
+        botCol = juce::Colour(0xff2d2d33);
+        border = juce::Colour(0xff121216);
+        iconCol = juce::Colours::white;
+        textCol = juce::Colours::white;
     }
     else if (shouldDrawButtonAsHighlighted)
     {
-        bg = juce::Colour(0xff2d3644);
-        border = Palette::accent.withAlpha(0.6f);
+        topCol = juce::Colour(0xff4e4e57);
+        botCol = juce::Colour(0xff34343c);
+        border = juce::Colour(0xff686874);
         iconCol = juce::Colours::white;
         textCol = juce::Colours::white;
     }
     else
     {
-        bg = juce::Colour(0xff222832);
-        border = juce::Colour(0xff3f4b5c);
-        iconCol = Palette::text;
-        textCol = Palette::text;
+        topCol = juce::Colour(0xff43434b);
+        botCol = juce::Colour(0xff2a2a30);
+        border = juce::Colour(0xff141418);
     }
 
     // Standard DAW colors for key transport icons
@@ -82,7 +86,8 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     {
         if (isOn)
         {
-            bg = juce::Colour(0xffe53935).withAlpha(0.35f);
+            topCol = juce::Colour(0xff5a2224);
+            botCol = juce::Colour(0xff3b1517);
             border = juce::Colour(0xffef5350);
             iconCol = juce::Colour(0xffff5252);
             textCol = juce::Colours::white;
@@ -94,52 +99,72 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     }
     else if (icon_ == Icon::Play && isOn)
     {
-        bg = juce::Colour(0xff43a047).withAlpha(0.35f);
+        topCol = juce::Colour(0xff244830);
+        botCol = juce::Colour(0xff193322);
         border = juce::Colour(0xff66bb6a);
         iconCol = juce::Colour(0xff66bb6a);
         textCol = juce::Colours::white;
     }
     else if (icon_ == Icon::Loop && isOn)
     {
-        bg = juce::Colour(0xffffb300).withAlpha(0.28f);
+        topCol = juce::Colour(0xff524222);
+        botCol = juce::Colour(0xff382c16);
         border = juce::Colour(0xffffca28);
         iconCol = juce::Colour(0xffffca28);
         textCol = juce::Colours::white;
     }
     else if (icon_ == Icon::Follow && isOn)
     {
-        bg = Palette::accent.withAlpha(0.28f);
-        border = Palette::accent;
+        topCol = juce::Colour(0xff264354);
+        botCol = juce::Colour(0xff1a2f3d);
+        border = Palette::accent.withAlpha(0.85f);
         iconCol = Palette::accent;
         textCol = juce::Colours::white;
     }
 
-    g.setColour(bg);
-    g.fillRoundedRectangle(bounds, 4.5f);
+    // Subtle drop shadow underneath button
+    g.setColour(juce::Colours::black.withAlpha(0.28f));
+    g.fillRoundedRectangle(bounds.translated(0.0f, 1.0f), radius);
+
+    // Brushed metallic vertical bevel fill (matching TransportBar & TramiLookAndFeel)
+    juce::ColourGradient grad(topCol, bounds.getX(), bounds.getY(),
+                              botCol, bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(bounds, radius);
+
+    // Delicate inner top specular highlight
+    if (!shouldDrawButtonAsDown)
+    {
+        g.setColour(juce::Colours::white.withAlpha(shouldDrawButtonAsHighlighted ? 0.22f : 0.14f));
+        g.drawHorizontalLine(juce::roundToInt(bounds.getY() + 1.0f),
+                             bounds.getX() + radius * 0.7f, bounds.getRight() - radius * 0.7f);
+    }
 
     g.setColour(border);
-    g.drawRoundedRectangle(bounds, 4.5f, isOn ? 1.5f : 1.0f);
+    g.drawRoundedRectangle(bounds, radius, isOn ? 1.3f : 1.0f);
 
     const float totalW = bounds.getWidth();
     const float totalH = bounds.getHeight();
     juce::Rectangle<float> iconArea;
     juce::Rectangle<float> labelArea;
 
+    // Prefer clean horizontal icon + label layout on toolbar-height buttons
+    const bool useHorizontal = !label_.isEmpty() && (totalW >= 54.0f && totalW > totalH * 1.45f);
+
     if (label_.isEmpty())
     {
-        // Icon-only button: icon is nicely centered in the whole button area
         iconArea = bounds.reduced(2.0f);
     }
-    else if (totalW >= 80.0f && totalW > totalH * 1.5f)
+    else if (useHorizontal)
     {
-        // Wide button: horizontal layout (icon on left, label on right)
-        const float iconW = std::min(24.0f, totalH - 4.0f);
-        iconArea = bounds.removeFromLeft(iconW + 4.0f).reduced(2.0f, 0.0f);
-        labelArea = bounds.withTrimmedLeft(2.0f);
+        const float iconW = std::min(20.0f, totalH - 6.0f);
+        auto inner = bounds.reduced(5.0f, 2.0f);
+        iconArea = inner.removeFromLeft(iconW);
+        inner.removeFromLeft(3.0f);
+        labelArea = inner;
     }
     else
     {
-        // Standard button: vertical layout (icon on top, label underneath)
         const float iconH = std::round(totalH * 0.52f);
         iconArea = bounds.removeFromTop(iconH);
         labelArea = bounds;
@@ -156,22 +181,20 @@ void IconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlight
     if (!label_.isEmpty())
     {
         g.setColour(textCol);
-        const bool isHorizontal = (totalW >= 80.0f && totalW > totalH * 1.5f);
-        float fontSz = isHorizontal ? 12.0f : (totalH >= 38.0f ? 11.0f : 10.0f);
+        float fontSz = useHorizontal ? 11.5f : (totalH >= 38.0f ? 11.0f : 10.0f);
         auto font = juce::Font(Typography::bold(fontSz));
 
-        // Auto-scale font size if needed so text fits neatly without clipping
         const float textW = static_cast<float>(font.getStringWidth(label_));
-        const float maxTextW = labelArea.getWidth() - 4.0f;
+        const float maxTextW = labelArea.getWidth() - 2.0f;
         if (textW > maxTextW && maxTextW > 10.0f)
         {
-            fontSz = std::max(8.0f, fontSz * (maxTextW / textW));
+            fontSz = std::max(8.5f, fontSz * (maxTextW / textW));
             font = juce::Font(Typography::bold(fontSz));
         }
         g.setFont(font);
 
-        g.drawText(label_, labelArea.reduced(2.0f, 0.0f),
-                   isHorizontal ? juce::Justification::centredLeft : juce::Justification::centred,
+        g.drawText(label_, labelArea,
+                   useHorizontal ? juce::Justification::centredLeft : juce::Justification::centred,
                    false);
     }
 }

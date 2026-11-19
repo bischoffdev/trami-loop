@@ -7,6 +7,15 @@
 namespace trami
 {
 
+namespace
+{
+std::string pathToUtf8(const std::filesystem::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+} // namespace
+
 SampleImporter::SampleImporter()
 {
     formatManager_.registerBasicFormats();
@@ -14,13 +23,14 @@ SampleImporter::SampleImporter()
 
 bool SampleImporter::isSupportedFormat(const std::filesystem::path& file) const
 {
-    const auto ext = file.extension().string();
+    const auto ext = pathToUtf8(file.extension());
     return ext == ".wav" || ext == ".WAV" || ext == ".mp3" || ext == ".MP3";
 }
 
 std::optional<AudioData> SampleImporter::loadAudioData(const std::filesystem::path& file, double targetSampleRate)
 {
-    const juce::File jFile(juce::String::fromUTF8(file.string().c_str()));
+    const auto utf8 = pathToUtf8(file);
+    const juce::File jFile(juce::String::fromUTF8(utf8.c_str(), static_cast<int>(utf8.size())));
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(jFile));
     if (reader == nullptr || reader->lengthInSamples == 0)
         return std::nullopt;
@@ -67,7 +77,8 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
                                                       const std::optional<std::filesystem::path>& projectDir,
                                                       double refBpm)
 {
-    const juce::File jFile(juce::String::fromUTF8(sourceFile.string().c_str()));
+    const auto srcUtf8 = pathToUtf8(sourceFile);
+    const juce::File jFile(juce::String::fromUTF8(srcUtf8.c_str(), static_cast<int>(srcUtf8.size())));
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(jFile));
     if (reader == nullptr || reader->lengthInSamples == 0)
         return std::nullopt;
@@ -104,7 +115,7 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
         }
     }
 
-    std::string finalFileName = sourceFile.filename().string();
+    std::string finalFileName = pathToUtf8(sourceFile.filename());
 
     if (projectDir.has_value())
     {
@@ -114,11 +125,11 @@ std::optional<ImportResult> SampleImporter::importFile(const std::filesystem::pa
 
         const auto destination = samplesDir / sourceFile.filename();
         std::filesystem::copy_file(sourceFile, destination, std::filesystem::copy_options::overwrite_existing, ec);
-        finalFileName = destination.filename().string();
+        finalFileName = pathToUtf8(destination.filename());
     }
 
     Sample sample;
-    sample.name = sourceFile.stem().string();
+    sample.name = pathToUtf8(sourceFile.stem());
     sample.fileName = finalFileName;
     sample.kind = kind;
     sample.loopBars = std::max(1, loopBars);

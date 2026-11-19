@@ -92,7 +92,7 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
         song_.addPattern("Song", 1);
 
     patternView_->setPattern(song_.patterns().front().id);
-    patternView_->setZoom(song_.patternZoomX(), song_.patternZoomY());
+    patternView_->fitZoomToProject(8, 32);
     transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
 }
 
@@ -213,6 +213,7 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
     patternView_->setPattern(songPattern);
     patternView_->resetPlayhead();
     updateAllViews();
+    patternView_->fitZoomToProject(8, 32);
     showToast("New Project Created: " + juce::String(dir.filename().string()));
 }
 
@@ -333,6 +334,8 @@ void MainContainer::openProjectDialog()
                             patternView_->resetPlayhead();
                         }
                         updateAllViews();
+                        if (patternView_ != nullptr)
+                            patternView_->fitZoomToProject(8, 32);
                         int missingAudio = 0;
                         if (!song_.patterns().empty())
                         {
@@ -393,6 +396,8 @@ void MainContainer::openProjectDialog()
                         patternView_->resetPlayhead();
                     }
                     updateAllViews();
+                    if (patternView_ != nullptr)
+                        patternView_->fitZoomToProject(8, 32);
                     showToast("Project loaded: " + juce::String(chosen.stem().string()));
                 }
                 else
@@ -547,41 +552,52 @@ void MainContainer::paint(juce::Graphics& g)
     const int masterW = MasterChannelStrip::kWidth;
     const int mainW = getWidth() - masterW;
 
-    g.setColour(Palette::surface.darker(0.3f));
+    // Brushed dark-metallic top toolbar gradient (matching Screenshot 2)
+    juce::ColourGradient topGrad(juce::Colour(0xff46464d), 0.0f, 0.0f,
+                                 juce::Colour(0xff26262b), 0.0f, static_cast<float>(kTopBarHeight), false);
+    topGrad.addColour(0.50, juce::Colour(0xff333339));
+    g.setGradientFill(topGrad);
     g.fillRect(0, 0, mainW, kTopBarHeight);
-    g.setColour(Palette::gridLine);
-    g.drawHorizontalLine(kTopBarHeight, 0.0f, static_cast<float>(mainW));
 
-    g.setColour(Palette::accent);
-    g.setFont(Typography::bold(17.0f));
+    // Specular top highlight & crisp dark bottom border
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.drawHorizontalLine(0, 0.0f, static_cast<float>(mainW));
+    g.setColour(juce::Colour(0xff141417));
+    g.drawHorizontalLine(kTopBarHeight - 1, 0.0f, static_cast<float>(mainW));
+
+    // Clean modern metallic title
+    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.setFont(Typography::bold(16.5f));
+    g.drawText("trami-loop", 14, 1, 110, kTopBarHeight, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xfff0f0f6));
     g.drawText("trami-loop", 14, 0, 110, kTopBarHeight, juce::Justification::centredLeft);
 }
 
 void MainContainer::resized()
 {
     constexpr int kTopBarHeight = 44;
-    constexpr int kBottomBarHeight = 44;
+    constexpr int kBottomBarHeight = 48;
     constexpr int masterW = MasterChannelStrip::kWidth;
     const int mainW = std::max(0, getWidth() - masterW);
 
-    auto topArea = juce::Rectangle<int>(0, 0, mainW, kTopBarHeight).reduced(8, 4);
-    topArea.removeFromLeft(125);
+    auto topArea = juce::Rectangle<int>(0, 0, mainW, kTopBarHeight).reduced(10, 8);
+    topArea.removeFromLeft(114);
 
-    undoButton_.setBounds(topArea.removeFromLeft(50));
+    undoButton_.setBounds(topArea.removeFromLeft(66));
     topArea.removeFromLeft(4);
-    redoButton_.setBounds(topArea.removeFromLeft(50));
-    topArea.removeFromLeft(16);
+    redoButton_.setBounds(topArea.removeFromLeft(66));
+    topArea.removeFromLeft(14);
 
-    newButton_.setBounds(topArea.removeFromLeft(50));
+    newButton_.setBounds(topArea.removeFromLeft(62));
     topArea.removeFromLeft(4);
-    openButton_.setBounds(topArea.removeFromLeft(50));
+    openButton_.setBounds(topArea.removeFromLeft(66));
     topArea.removeFromLeft(4);
-    saveButton_.setBounds(topArea.removeFromLeft(50));
-    topArea.removeFromLeft(16);
+    saveButton_.setBounds(topArea.removeFromLeft(64));
+    topArea.removeFromLeft(14);
 
-    exportButton_.setBounds(topArea.removeFromLeft(56));
-    topArea.removeFromLeft(6);
-    settingsButton_.setBounds(topArea.removeFromLeft(56));
+    exportButton_.setBounds(topArea.removeFromLeft(74));
+    topArea.removeFromLeft(4);
+    settingsButton_.setBounds(topArea.removeFromLeft(82));
 
     // Bottom transport bar
     if (transportBar_ != nullptr)

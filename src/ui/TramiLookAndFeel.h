@@ -8,36 +8,36 @@ namespace trami
 /// Central colour palette. All UI colours come from here.
 namespace Palette
 {
-inline const juce::Colour background{0xff0e1116};
-inline const juce::Colour surface{0xff181d24};
-inline const juce::Colour panelBackground{0xff13171e};
-inline const juce::Colour panelHeader{0xff1c222c};
-inline const juce::Colour trackHeaderSurface{0xff1a1f28};
-inline const juce::Colour topBarBackground{0xff0c0e13};
-inline const juce::Colour transportBackground{0xff14171e};
-inline const juce::Colour gridFloor{0xff0b0d11};
-inline const juce::Colour gridLaneAlt{0xff101318};
-inline const juce::Colour gridLine{0xff28313d};
-inline const juce::Colour gridBeatLine{0xff3e4c5e};
-inline const juce::Colour gridBarLine{0xff647792};
-inline const juce::Colour text{0xffe6eaf0};
-inline const juce::Colour textDim{0xffa4b1c2}; // WCAG AA compliant contrast on dark panels
-inline const juce::Colour accent{0xff4fc3f7};
-inline const juce::Colour loopRegion{0xff42b4e6};
+inline const juce::Colour background{0xff1c1c1f};
+inline const juce::Colour surface{0xff2a2a2f};
+inline const juce::Colour panelBackground{0xff222226};
+inline const juce::Colour panelHeader{0xff2f2f35};
+inline const juce::Colour trackHeaderSurface{0xff28282d};
+inline const juce::Colour topBarBackground{0xff2b2b30};
+inline const juce::Colour transportBackground{0xff2b2b30};
+inline const juce::Colour gridFloor{0xff252529};
+inline const juce::Colour gridLaneAlt{0xff2b2b30};
+inline const juce::Colour gridLine{0xff323238};
+inline const juce::Colour gridBeatLine{0xff3a3a42};
+inline const juce::Colour gridBarLine{0xff4a4a54};
+inline const juce::Colour text{0xfff0f0f5};
+inline const juce::Colour textDim{0xffa4a4b0}; // WCAG AA compliant contrast on dark panels
+inline const juce::Colour accent{0xff5ac8fa};
+inline const juce::Colour loopRegion{0xff5ac8fa};
 inline const juce::Colour danger{0xffe53935};
 
-inline const juce::Colour patternAccent{0xff00b0ff};
-inline const juce::Colour patternHeaderBg{0xff111823};
-inline const juce::Colour patternTrackSurface{0xff151c27};
-inline const juce::Colour patternTrackAlt{0xff182230};
+inline const juce::Colour patternAccent{0xff5ac8fa};
+inline const juce::Colour patternHeaderBg{0xff2d2d33};
+inline const juce::Colour patternTrackSurface{0xff26262b};
+inline const juce::Colour patternTrackAlt{0xff2c2c32};
 
 inline const juce::Colour arrangerAccent{0xffb388ff};
-inline const juce::Colour arrangerHeaderBg{0xff1a1426};
-inline const juce::Colour arrangerTrackSurface{0xff1e172e};
-inline const juce::Colour arrangerTrackAlt{0xff241b37};
+inline const juce::Colour arrangerHeaderBg{0xff2a2634};
+inline const juce::Colour arrangerTrackSurface{0xff25222e};
+inline const juce::Colour arrangerTrackAlt{0xff2b2736};
 
-inline const juce::Colour sidebarBackground{0xff0d1016};
-inline const juce::Colour sidebarHeader{0xff161a22};
+inline const juce::Colour sidebarBackground{0xff1e1e22};
+inline const juce::Colour sidebarHeader{0xff2a2a30};
 } // namespace Palette
 
 /// Consistent, modern, readable typography.
@@ -76,6 +76,12 @@ public:
                               bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool shouldDrawButtonAsHighlighted,
                         bool shouldDrawButtonAsDown) override;
+
+    void drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
+                      int buttonX, int buttonY, int buttonW, int buttonH, juce::ComboBox& box) override;
+    void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override;
+    void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                          bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
     void drawScrollbar(juce::Graphics& g, juce::ScrollBar& scrollbar, int x, int y, int width, int height,
                        bool isScrollbarVertical, int thumbStartPosition, int thumbSize, bool isMouseOver,
