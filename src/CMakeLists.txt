@@ -29,6 +29,7 @@ target_sources(TramiLoop PRIVATE
     app/Main.cpp
     app/MainWindow.cpp
     engine/AudioEngine.cpp
+    engine/PluginHost.cpp
     io/SampleImporter.cpp
     io/ProjectSerializer.cpp
     io/WavExporter.cpp
@@ -39,6 +40,7 @@ target_sources(TramiLoop PRIVATE
     ui/PatternGrid.cpp
     ui/TrackHeader.cpp
     ui/TrackPropertiesDialog.cpp
+    ui/PluginRackDialog.cpp
     ui/SampleBrowserPanel.cpp
     ui/PatternView.cpp
     ui/ArrangerGrid.cpp
@@ -48,13 +50,14 @@ target_sources(TramiLoop PRIVATE
     ui/DAWTrackControls.cpp
     ui/PatternListPanel.cpp
     ui/TransportBar.cpp
-    ui/MasterChannelStrip.cpp
     ui/MainContainer.cpp
 )
 
 target_compile_definitions(TramiLoop PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:TramiLoop,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:TramiLoop,JUCE_VERSION>"
     JUCE_DISPLAY_SPLASH_SCREEN=0

@@ -73,6 +73,7 @@ class PatternGrid : public juce::Component,
         virtual void tabLoopToMarkerSection(int /*direction*/) {}
         virtual void clipReverseRequested(ClipId /*clipId*/) {}
         virtual void clipsReverseRequested(const std::vector<ClipId>& /*clipIds*/) {}
+        virtual void clipFxRequested(ClipId /*clipId*/) {}
         virtual void clipsTransposeDelta(const std::vector<ClipId>& /*clipIds*/, int /*deltaSemitones*/) {}
         virtual void clipsTransposeSet(const std::vector<ClipId>& /*clipIds*/, int /*semitones*/) {}
         virtual void clipDeleteRequested(ClipId clipId) = 0;

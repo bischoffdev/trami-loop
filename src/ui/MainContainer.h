@@ -8,7 +8,6 @@
 #include "model/Song.h"
 #include "model/UndoManager.h"
 #include "ui/IconButton.h"
-#include "ui/MasterChannelStrip.h"
 #include "ui/PatternView.h"
 #include "ui/ToastOverlay.h"
 #include "ui/TransportBar.h"
@@ -67,7 +66,6 @@ private:
 
     std::unique_ptr<PatternView> patternView_;
     std::unique_ptr<TransportBar> transportBar_;
-    std::unique_ptr<MasterChannelStrip> masterChannelStrip_;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
     juce::TooltipWindow tooltipWindow_{this, 400};

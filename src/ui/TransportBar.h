@@ -131,11 +131,7 @@ private:
     class SwingSlider;
     std::unique_ptr<SwingSlider> swingSlider_;
 
-    // Master Level & Volume Capsule (Screenshot 2 style recessed LED meter + silver thumb)
-    class MasterMeterSlider;
-    std::unique_ptr<MasterMeterSlider> masterMeterSlider_;
-
-    // Master Project Key selector (ACID automatic key conforming)
+    // Master Project Key selector
     juce::ComboBox keyCombo_;
 };
 

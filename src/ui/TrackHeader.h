@@ -14,7 +14,8 @@ namespace trami
 
 class TrackHeaderList : public juce::Component,
                         public juce::FileDragAndDropTarget,
-                        public juce::DragAndDropTarget
+                        public juce::DragAndDropTarget,
+                        private juce::Timer
 {
 public:
     using MixChangedCallback = std::function<void(int track)>;
@@ -27,6 +28,8 @@ public:
     using MoveTrackCallback = std::function<void(int from, int to)>;
     using TrackRenamedCallback = std::function<void(int track, const std::string& name)>;
     using TrackPropertiesCallback = std::function<void(int track)>;
+    using TrackFxCallback = std::function<void(int track)>;
+    using TrackPeakProvider = std::function<std::pair<float, float>(int track)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
     ~TrackHeaderList() override;
@@ -45,6 +48,8 @@ public:
     void setOnMoveTrack(MoveTrackCallback cb) { onMoveTrack_ = std::move(cb); }
     void setOnTrackRenamed(TrackRenamedCallback cb) { onTrackRenamed_ = std::move(cb); }
     void setOnTrackProperties(TrackPropertiesCallback cb) { onTrackProperties_ = std::move(cb); }
+    void setOnTrackFx(TrackFxCallback cb) { onTrackFx_ = std::move(cb); }
+    void setTrackPeakProvider(TrackPeakProvider cb);
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
     std::function<void(const juce::MouseEvent&)> onMarqueeStart;
@@ -83,6 +88,7 @@ private:
     struct TrackControls
     {
         std::unique_ptr<juce::Label> nameLabel;
+        std::unique_ptr<juce::TextButton> fxButton;
         std::unique_ptr<juce::TextButton> propsButton;
         std::unique_ptr<juce::TextButton> typeButton;
         std::unique_ptr<juce::TextButton> deleteButton;
@@ -95,6 +101,7 @@ private:
         std::unique_ptr<juce::Slider> panSlider;
     };
 
+    void timerCallback() override;
     int pointToTrack(juce::Point<int> pt) const;
 
     Song& song_;
@@ -109,6 +116,10 @@ private:
     MoveTrackCallback onMoveTrack_;
     TrackRenamedCallback onTrackRenamed_;
     TrackPropertiesCallback onTrackProperties_;
+    TrackFxCallback onTrackFx_;
+    TrackPeakProvider trackPeakProvider_;
+    std::vector<float> peakL_;
+    std::vector<float> peakR_;
     int trackHeight_ = kMinTrackHeight;
     int dragHoverTrack_ = -1;
     bool isReorderDrag_ = false;

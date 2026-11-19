@@ -344,6 +344,22 @@ juce::Rectangle<int> clipPitchBoxBounds(const juce::Rectangle<int>& clipRect) no
     const int y = clipRect.getBottom() - kClipFooterH + (kClipFooterH - boxH) / 2;
     return {x, y, boxW, boxH};
 }
+
+juce::Rectangle<int> clipFxBoxBounds(const juce::Rectangle<int>& clipRect) noexcept
+{
+    if (clipRect.getHeight() < 30 || clipRect.getWidth() < 68)
+        return {};
+    const auto pBox = clipPitchBoxBounds(clipRect);
+    if (pBox.isEmpty())
+        return {};
+    constexpr int boxW = 20;
+    constexpr int boxH = 13;
+    const int x = pBox.getX() - 4 - boxW;
+    const int y = pBox.getY();
+    if (x < clipRect.getX() + 14)
+        return {};
+    return {x, y, boxW, boxH};
+}
 } // namespace
 
 juce::Rectangle<int> PatternGrid::clipBounds(int track, double step, double lengthSteps) const
@@ -1174,17 +1190,43 @@ void PatternGrid::paint(juce::Graphics& g)
                         g.fillPath(arrow);
                     }
 
+                    // Clickable Per-Clip FX badge to the left of the Pitch Box: [fx]
+                    const auto fxBox = clipFxBoxBounds(bounds);
+                    if (!fxBox.isEmpty())
+                    {
+                        const auto fb = fxBox.toFloat();
+                        const bool hasFx = !clip.fxChain.empty();
+                        if (hasFx)
+                        {
+                            g.setColour(juce::Colour(0xff0891b2));
+                            g.fillRoundedRectangle(fb, 2.0f);
+                            g.setColour(juce::Colour(0xff67e8f9));
+                            g.drawRoundedRectangle(fb, 2.0f, 1.0f);
+                            g.setColour(juce::Colours::white);
+                        }
+                        else
+                        {
+                            g.setColour(inkCol.withAlpha(0.50f));
+                            g.drawRoundedRectangle(fb, 2.0f, 0.9f);
+                            g.setColour(inkCol.withAlpha(0.72f));
+                        }
+                        g.setFont(Typography::bold(9.5f));
+                        g.drawText("fx", fxBox, juce::Justification::centred, false);
+                    }
+
                     // Clip / Sample Name on the left of the bottom bar
                     if (sample != nullptr)
                     {
                         const int textLeft = bounds.getX() + (bounds.getWidth() >= 36 ? 12 : 4);
-                        const int textRight = !pitchBox.isEmpty() ? (pitchBox.getX() - 4) : (bounds.getRight() - 4);
-                        if (textRight - textLeft >= 12)
+                        const int rightBound = !fxBox.isEmpty()
+                                                   ? (fxBox.getX() - 4)
+                                                   : (!pitchBox.isEmpty() ? (pitchBox.getX() - 4) : (bounds.getRight() - 4));
+                        if (rightBound - textLeft >= 12)
                         {
                             g.setColour(inkCol);
                             g.setFont(Typography::regular(11.0f));
                             g.drawText(juce::String(sample->name),
-                                       textLeft, footerY, textRight - textLeft, kClipFooterH,
+                                       textLeft, footerY, rightBound - textLeft, kClipFooterH,
                                        juce::Justification::centredLeft, true);
                         }
                     }
@@ -1469,7 +1511,8 @@ void PatternGrid::paint(juce::Graphics& g)
                 }
             }
 
-            // Draw Overlap / Crossfade regions and badges on track t
+            // Draw Overlap / Crossfade regions and badges on track t (when Auto-Crossfade is enabled)
+            if (song_.autoCrossfadeEnabled())
             for (const auto& seg : overlapSegments)
             {
                 const int ox = juce::roundToInt(seg.startStep * static_cast<double>(stepWidth_));
@@ -1882,6 +1925,7 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             m.addSubMenu("Multi-Point Envelopes", envPresetMenu);
 
             m.addSeparator();
+            m.addItem(610, "Clip FX Chain (VST3 / AU)...");
             m.addItem(601, "Split Clip Here / At Playhead (S)");
             m.addItem(602, "Join Selected Clips (J)", multi);
             m.addItem(5, "Reverse (R)", true, clip->reversed);
@@ -1906,6 +1950,11 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                 juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
                             [this, cid, curGain, curFadeIn, curFadeOut, clickStep](int res)
                             {
+                                if (res == 610)
+                                {
+                                    listener_.clipFxRequested(cid);
+                                    return;
+                                }
                                 if (res == 601)
                                 {
                                     const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1)
@@ -2552,7 +2601,7 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
         }
     }
 
-    // Click directly on a Clip's bottom-bar Pitch Box -> open quick Transpose / Pitch menu
+    // Click directly on a Clip's bottom-bar FX Badge or Pitch Box
     if (editTool_ == EditTool::Select && !e.mods.isPopupMenu())
     {
         if (const Clip* clipForPitch = findClipAt(e.getPosition()))
@@ -2561,6 +2610,18 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             {
                 const double sp = std::max(0.1, clipSpan(*clipForPitch, track));
                 const auto cBounds = clipBounds(track, clipForPitch->startStep, sp).reduced(2, 3);
+                const auto fBox = clipFxBoxBounds(cBounds);
+                if (!fBox.isEmpty() && fBox.expanded(2, 2).contains(e.getPosition()))
+                {
+                    const ClipId cid = clipForPitch->id;
+                    if (!isClipSelected(cid))
+                    {
+                        setSelectedClip(cid);
+                        listener_.clipClicked(cid);
+                    }
+                    listener_.clipFxRequested(cid);
+                    return;
+                }
                 const auto pBox = clipPitchBoxBounds(cBounds);
                 if (!pBox.isEmpty() && pBox.expanded(2, 2).contains(e.getPosition()))
                 {

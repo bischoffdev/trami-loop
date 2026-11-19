@@ -3,6 +3,7 @@
 #include "model/Arrangement.h"
 #include "model/Pattern.h"
 #include "model/Sample.h"
+#include "model/Timing.h"
 
 #include <optional>
 #include <string>
@@ -20,13 +21,21 @@ public:
     // --- Global settings -----------------------------------------------------
     double bpm() const noexcept { return bpm_; }
     double swing() const noexcept { return swing_; }
+    GroovePreset groovePreset() const noexcept { return groovePreset_; }
     float masterVolume() const noexcept { return masterVolume_; }
     int projectRootNote() const noexcept { return projectRootNote_; }
+    bool autoCrossfadeEnabled() const noexcept { return autoCrossfadeEnabled_; }
+    bool envelopeLockEnabled() const noexcept { return envelopeLockEnabled_; }
+    bool rippleEditEnabled() const noexcept { return rippleEditEnabled_; }
 
     void setBpm(double bpm) noexcept;
     void setSwing(double swing) noexcept;
+    void setGroovePreset(GroovePreset preset) noexcept;
     void setMasterVolume(float volume) noexcept;
     void setProjectRootNote(int rootNote) noexcept;
+    void setAutoCrossfadeEnabled(bool enabled) noexcept { autoCrossfadeEnabled_ = enabled; }
+    void setEnvelopeLockEnabled(bool enabled) noexcept { envelopeLockEnabled_ = enabled; }
+    void setRippleEditEnabled(bool enabled) noexcept { rippleEditEnabled_ = enabled; }
 
     /// Returns total transpose in semitones combining master project key conforming (for Loops with a rootNote)
     /// and the clip's individual transposeSemitones.
@@ -71,6 +80,10 @@ public:
     std::optional<ClipId> joinClips(PatternId pattern, const std::vector<ClipId>& clipIds);
     bool setTrackAutomation(PatternId pattern, int trackIndex, TrackEnvelopeType type, std::vector<EnvelopePoint> points);
     bool setTrackFxSend(PatternId pattern, int trackIndex, float fxSend);
+    bool setMasterAutomation(PatternId pattern, std::vector<EnvelopePoint> points);
+    bool setClipFxChain(PatternId pattern, ClipId clip, std::vector<PluginSlot> chain);
+    bool setTrackFxChain(PatternId pattern, int trackIndex, std::vector<PluginSlot> chain);
+    bool setMasterFxChain(PatternId pattern, std::vector<PluginSlot> chain);
     int addMarker(PatternId pattern, double step, std::string name);
     bool moveMarker(PatternId pattern, int markerId, double newStep);
     bool renameMarker(PatternId pattern, int markerId, std::string newName);
@@ -123,8 +136,12 @@ private:
 
     double bpm_ = 120.0;
     double swing_ = 0.0;
+    GroovePreset groovePreset_ = GroovePreset::Straight;
     float masterVolume_ = 1.0f;
     int projectRootNote_ = -1; ///< -1 = None / No master key, 0..127 = MIDI note / pitch class.
+    bool autoCrossfadeEnabled_ = true;
+    bool envelopeLockEnabled_ = true;
+    bool rippleEditEnabled_ = false;
     float patternZoomX_ = 1.0f;
     float patternZoomY_ = 1.0f;
     float arrangerZoomX_ = 1.0f;

@@ -41,7 +41,18 @@ enum class TrackEnvelopeType
 /// Evaluates a sorted breakpoint envelope at `pos`, returning `defaultVal` if `points` is empty.
 float evaluateEnvelope(const std::vector<EnvelopePoint>& points, double pos, float defaultVal) noexcept;
 
-/// Named timeline marker / section anchor on a pattern ruler.
+/// Serializable descriptor for an external VST3 / AU audio effect plugin slot.
+struct PluginSlot
+{
+    std::string name;             ///< Display name (e.g. "ValhallaSupermassive")
+    std::string format;           ///< "VST3" or "AudioUnit"
+    std::string fileOrIdentifier; ///< JUCE PluginDescription::fileOrIdentifier
+    std::string identifierString; ///< JUCE PluginDescription::createIdentifierString()
+    bool bypassed = false;
+    std::string stateBase64;      ///< Persisted plugin chunk state (Base64)
+};
+
+/// Named timeline marker / section anchor on a song ruler.
 struct TimelineMarker
 {
     int id = 0;
@@ -49,7 +60,7 @@ struct TimelineMarker
     std::string name;
 };
 
-/// A sample placed on a pattern track at a grid step (supports fractional steps for unconstrained resizing/moving).
+/// A sample placed on a song track at a grid step (supports fractional steps for unconstrained resizing/moving).
 struct Clip
 {
     ClipId id;
@@ -64,6 +75,7 @@ struct Clip
     int transposeSemitones = 0;  ///< Transposition in semitones (-48 .. +48).
     std::vector<EnvelopePoint> volumeEnvelope; ///< Optional multi-point volume envelope across [0..1] of clip.
     std::vector<EnvelopePoint> panEnvelope;    ///< Optional multi-point pan envelope [-1..+1] across [0..1] of clip.
+    std::vector<PluginSlot> fxChain;           ///< Optional per-clip / per-event VST3/AU plugin chain.
 };
 
 /// Temporary clip override state during real-time dragging, resizing, or envelope adjustments.
@@ -130,10 +142,11 @@ struct PatternTrack
     std::vector<EnvelopePoint> fxAutomation;     ///< Position in steps.
     SampleId sampleId;
     std::optional<SampleKind> kindOverride;
+    std::vector<PluginSlot> fxChain; ///< Track-level VST3/AU plugin chain.
     std::vector<Clip> clips;
 };
 
-/// A pattern representing a track with its mixer settings and clips.
+/// A song representing tracks with mixer settings, clips, markers, and master bus automation/FX.
 struct Pattern
 {
     PatternId id;
@@ -141,6 +154,8 @@ struct Pattern
     int lengthBars = 1;
     std::vector<PatternTrack> tracks{1};
     std::vector<TimelineMarker> markers;
+    std::vector<EnvelopePoint> masterVolumeAutomation; ///< Master bus volume automation (position in steps).
+    std::vector<PluginSlot> masterFxChain;             ///< Master bus VST3/AU plugin chain.
 
     int lengthSteps() const noexcept;
     PatternTrack& track() noexcept { return tracks.front(); }

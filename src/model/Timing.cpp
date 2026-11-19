@@ -6,8 +6,69 @@
 namespace trami
 {
 
-Timing::Timing(double bpm, double sampleRate, double swing)
-    : bpm_(bpm), sampleRate_(sampleRate), swing_(std::clamp(swing, 0.0, 1.0))
+const char* groovePresetName(GroovePreset preset) noexcept
+{
+    switch (preset)
+    {
+    case GroovePreset::Straight:
+        return "Straight (Off)";
+    case GroovePreset::Swing16_55:
+        return "16th Note Swing (55%)";
+    case GroovePreset::Swing16_62:
+        return "16th Note Swing (62%)";
+    case GroovePreset::Swing16_68:
+        return "16th Note Swing (68%)";
+    case GroovePreset::Shuffle8_60:
+        return "8th Note Shuffle (60%)";
+    case GroovePreset::Shuffle8_67:
+        return "8th Note Shuffle (67%)";
+    case GroovePreset::Mpc58:
+        return "MPC 16th (58%)";
+    case GroovePreset::Mpc64:
+        return "MPC 16th (64%)";
+    case GroovePreset::TripletFeel:
+        return "Triplet Feel (66%)";
+    case GroovePreset::Count:
+        break;
+    }
+    return "Straight (Off)";
+}
+
+double groovePresetSwing(GroovePreset preset) noexcept
+{
+    switch (preset)
+    {
+    case GroovePreset::Straight:
+        return 0.0;
+    case GroovePreset::Swing16_55:
+        return 0.20;
+    case GroovePreset::Swing16_62:
+        return 0.48;
+    case GroovePreset::Swing16_68:
+        return 0.72;
+    case GroovePreset::Shuffle8_60:
+        return 0.40;
+    case GroovePreset::Shuffle8_67:
+        return 0.67;
+    case GroovePreset::Mpc58:
+        return 0.32;
+    case GroovePreset::Mpc64:
+        return 0.56;
+    case GroovePreset::TripletFeel:
+        return 0.66;
+    case GroovePreset::Count:
+        break;
+    }
+    return 0.0;
+}
+
+bool groovePresetIsEighthNote(GroovePreset preset) noexcept
+{
+    return preset == GroovePreset::Shuffle8_60 || preset == GroovePreset::Shuffle8_67;
+}
+
+Timing::Timing(double bpm, double sampleRate, double swing, bool eighthNoteGroove)
+    : bpm_(bpm), sampleRate_(sampleRate), swing_(std::clamp(swing, 0.0, 1.0)), eighthNoteGroove_(eighthNoteGroove)
 {
 }
 
@@ -27,20 +88,22 @@ double Timing::stepToSwungStep(double step) const noexcept
     if (swing_ <= 0.0)
         return step;
 
-    // In 1/32 grid, 1 beat = 8 steps, 1 16th note = 2 steps.
-    // Each 16th-note pair has length 4 steps (e.g. 0..4, 4..8, 8..12).
-    // The first 16th note [0..2] is onbeat and expands by (swing_ * 1.0) steps.
-    // The second 16th note [2..4] is offbeat and contracts by (swing_ * 1.0) steps.
-    const double pairBase = std::floor(step / 4.0) * 4.0;
+    // 16th-note pair = 4 steps (half = 2), 8th-note pair = 8 steps (half = 4).
+    const double pairLen = eighthNoteGroove_ ? 8.0 : 4.0;
+    const double halfLen = pairLen * 0.5;
+    const double maxShift = halfLen * 0.5; // up to 1.0 step (16th) or 2.0 steps (8th)
+    const double shift = swing_ * maxShift;
+
+    const double pairBase = std::floor(step / pairLen) * pairLen;
     const double sub = step - pairBase;
 
-    if (sub < 2.0)
+    if (sub < halfLen)
     {
-        return pairBase + sub * (2.0 + swing_) / 2.0;
+        return pairBase + sub * (halfLen + shift) / halfLen;
     }
     else
     {
-        return pairBase + (2.0 + swing_) + (sub - 2.0) * (2.0 - swing_) / 2.0;
+        return pairBase + (halfLen + shift) + (sub - halfLen) * (halfLen - shift) / halfLen;
     }
 }
 
@@ -49,20 +112,25 @@ double Timing::swungStepToStep(double swungStep) const noexcept
     if (swing_ <= 0.0)
         return swungStep;
 
-    const double pairBase = std::floor(swungStep / 4.0) * 4.0;
+    const double pairLen = eighthNoteGroove_ ? 8.0 : 4.0;
+    const double halfLen = pairLen * 0.5;
+    const double maxShift = halfLen * 0.5;
+    const double shift = swing_ * maxShift;
+
+    const double pairBase = std::floor(swungStep / pairLen) * pairLen;
     const double sub = swungStep - pairBase;
-    const double splitPoint = 2.0 + swing_;
+    const double splitPoint = halfLen + shift;
 
     if (sub < splitPoint)
     {
-        return pairBase + sub * 2.0 / splitPoint;
+        return pairBase + sub * halfLen / splitPoint;
     }
     else
     {
-        const double rem = 4.0 - splitPoint;
+        const double rem = pairLen - splitPoint;
         if (rem <= 0.0001)
-            return pairBase + 2.0;
-        return pairBase + 2.0 + (sub - splitPoint) * 2.0 / rem;
+            return pairBase + halfLen;
+        return pairBase + halfLen + (sub - splitPoint) * halfLen / rem;
     }
 }
 

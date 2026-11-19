@@ -113,7 +113,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                                                                 StretchCache* stretchCache)
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
-    const Timing timing(song.bpm(), sampleRate, song.swing());
+    const Timing timing(song.bpm(), sampleRate, song.swing(), groovePresetIsEighthNote(song.groovePreset()));
     snapshot->samplesPerBeat = timing.samplesPerStep() * kStepsPerBeat;
 
     if (song.patterns().empty())
@@ -127,6 +127,14 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * maxBars);
     snapshot->looping = true;
     snapshot->hasTrackMixes = true;
+
+    if (!p->masterVolumeAutomation.empty())
+    {
+        const double totalSteps = static_cast<double>(p->lengthSteps());
+        buildEventEnvelope({}, 0.0, 1.0, p->masterVolumeAutomation,
+                           0.0, totalSteps, 1.0f, 1.0f, true,
+                           snapshot->masterVolEnv, snapshot->masterVolEnvCount);
+    }
 
     if (loopEndStep > loopStartStep && loopStartStep >= 0)
     {
@@ -175,6 +183,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             int transposeSemitones = 0;
             std::vector<EnvelopePoint> volumeEnvelope;
             std::vector<EnvelopePoint> panEnvelope;
+            bool hasClipFx = false;
         };
 
         std::vector<EffectiveClip> trackClips;
@@ -185,7 +194,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             {
                 trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
                                       clip.gain, clip.fadeInSteps, clip.fadeOutSteps, clip.reversed, clip.transposeSemitones,
-                                      clip.volumeEnvelope, clip.panEnvelope});
+                                      clip.volumeEnvelope, clip.panEnvelope, !clip.fxChain.empty()});
             }
         }
         else
@@ -299,7 +308,9 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
             spans.push_back({clip.id, clip.startStep, spanSteps, clip.fadeInSteps, clip.fadeOutSteps});
         }
-        const auto crossfades = computeTrackCrossfades(spans);
+        const auto crossfades = song.autoCrossfadeEnabled()
+            ? computeTrackCrossfades(spans)
+            : std::unordered_map<std::uint32_t, ClipCrossfade>{};
 
         for (const auto& clip : trackClips)
         {
@@ -379,7 +390,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
                     PlaybackEvent ev{cycleEventStart, clipAudio.get(), clipGainL,
                                      clipGainR, curAudioOffset, maxFrames, static_cast<int>(t),
-                                     curFadeIn, curFadeOut, clip.id.value, clip.reversed};
+                                     curFadeIn, curFadeOut, clip.id.value, clip.reversed, clip.hasClipFx};
                     ev.fxSend = trk.fxAutomation.empty()
                         ? trk.fxSend
                         : evaluateEnvelope(trk.fxAutomation, cycleStartStep + 0.5 * actualPlayedSteps, trk.fxSend);
@@ -420,7 +431,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
                 PlaybackEvent ev{eventStartSample, clipAudio.get(), clipGainL,
                                  clipGainR, audioOffset, maxFrames, static_cast<int>(t),
-                                 fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed};
+                                 fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed, clip.hasClipFx};
 
                 // Compute exact visible clip span (matching PatternGrid) and actual played frames
                 const double rawClipSpanSteps = (clip.lengthSteps > 0.0)
@@ -576,7 +587,9 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
                     spans.push_back({clip.id, clip.startStep, spanSteps, clip.fadeInSteps, clip.fadeOutSteps});
                 }
-                const auto crossfades = computeTrackCrossfades(spans);
+                const auto crossfades = song.autoCrossfadeEnabled()
+            ? computeTrackCrossfades(spans)
+            : std::unordered_map<std::uint32_t, ClipCrossfade>{};
 
                 for (const auto& clip : patTrack.clips)
                 {

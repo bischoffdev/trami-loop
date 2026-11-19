@@ -10,20 +10,40 @@ inline constexpr int kBeatsPerBar = 4;
 inline constexpr int kStepsPerBeat = 8;
 inline constexpr int kStepsPerBar = kBeatsPerBar * kStepsPerBeat;
 
+/// Named Groove Pool presets (16th-note swing, 8th-note shuffle, MPC, triplet, human feel).
+enum class GroovePreset
+{
+    Straight = 0,
+    Swing16_55 = 1,
+    Swing16_62 = 2,
+    Swing16_68 = 3,
+    Shuffle8_60 = 4,
+    Shuffle8_67 = 5,
+    Mpc58 = 6,
+    Mpc64 = 7,
+    TripletFeel = 8,
+    Count = 9
+};
+
+const char* groovePresetName(GroovePreset preset) noexcept;
+double groovePresetSwing(GroovePreset preset) noexcept;
+bool groovePresetIsEighthNote(GroovePreset preset) noexcept;
+
 /// Converts between musical positions (bars/steps) and sample positions
 /// for a given tempo and sample rate. Immutable and cheap to copy, so it
 /// is safe to use on the audio thread.
 class Timing
 {
 public:
-    Timing(double bpm, double sampleRate, double swing = 0.0);
+    Timing(double bpm, double sampleRate, double swing = 0.0, bool eighthNoteGroove = false);
 
     double bpm() const noexcept { return bpm_; }
     double sampleRate() const noexcept { return sampleRate_; }
 
-    /// Swing in [0, 1]: 0 = straight, 1 = odd 1/16 steps delayed by a full
-    /// half step (triplet-like feel at ~0.33).
+    /// Swing in [0, 1]: 0 = straight, 1 = odd 1/16 (or 1/8) steps delayed by a full
+    /// half subdivision (triplet-like feel at ~0.33).
     double swing() const noexcept { return swing_; }
+    bool eighthNoteGroove() const noexcept { return eighthNoteGroove_; }
 
     double samplesPerStep() const noexcept;
     double samplesPerBar() const noexcept;
@@ -45,6 +65,7 @@ private:
     double bpm_;
     double sampleRate_;
     double swing_;
+    bool eighthNoteGroove_ = false;
 };
 
 } // namespace trami

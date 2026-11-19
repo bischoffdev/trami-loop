@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/AudioRecorder.h"
+#include "engine/PluginHost.h"
 #include "engine/Sequencer.h"
 #include "engine/SnapshotExchange.h"
 
@@ -25,6 +26,7 @@ public:
 
     Sequencer& sequencer() noexcept { return *sequencer_; }
     AudioRecorder& recorder() noexcept { return recorder_; }
+    PluginHost& pluginHost() noexcept { return pluginHost_; }
     juce::AudioDeviceManager& deviceManager() noexcept { return deviceManager_; }
 
     void publish(std::unique_ptr<PlaybackSnapshot> snapshot) { exchange_.publish(std::move(snapshot)); }
@@ -34,7 +36,7 @@ private:
                                           int numOutputs, int numSamples,
                                           const juce::AudioIODeviceCallbackContext& context) override;
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
-    void audioDeviceStopped() override {}
+    void audioDeviceStopped() override;
     void timerCallback() override
     {
         exchange_.collectGarbage();
@@ -44,6 +46,7 @@ private:
 
     juce::AudioDeviceManager deviceManager_;
     SnapshotExchange exchange_;
+    PluginHost pluginHost_;
     std::unique_ptr<Sequencer> sequencer_;
     AudioRecorder recorder_;
     double sampleRate_ = 0.0;
