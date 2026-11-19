@@ -23,12 +23,73 @@ void buildEventEnvelope(const std::vector<EnvelopePoint>& clipEnv,
     if (clipEnv.empty() && trackAuto.empty())
         return;
 
-    constexpr int kNumSamples = 12;
-    outCount = kNumSamples;
-    const double normRange = std::max(1e-6, subEndNorm - subStartNorm);
-    for (int i = 0; i < kNumSamples; ++i)
+    const double normRange = subEndNorm - subStartNorm;
+    if (normRange <= 1e-6 || eventSpanSteps <= 1e-6)
     {
-        const double t = static_cast<double>(i) / static_cast<double>(kNumSamples - 1);
+        const float cVal = clipEnv.empty() ? defaultClipVal : evaluateEnvelope(clipEnv, subStartNorm, defaultClipVal);
+        const float trVal = trackAuto.empty() ? defaultTrackVal : evaluateEnvelope(trackAuto, eventStartStep, defaultTrackVal);
+        outArr[0] = {0.0f, multiplicative ? (cVal * trVal) : std::clamp(cVal + trVal, -1.0f, 1.0f), 0};
+        outCount = 1;
+        return;
+    }
+
+    // Collect exact node positions from both clip envelope and track automation
+    std::vector<double> ts;
+    ts.reserve(kMaxPlaybackEnvNodes);
+    ts.push_back(0.0);
+    ts.push_back(1.0);
+
+    bool hasCurvedSegment = false;
+    for (const auto& pt : clipEnv)
+    {
+        if (pt.curve != EnvelopeCurve::Linear)
+            hasCurvedSegment = true;
+        if (pt.position > subStartNorm + 1e-6 && pt.position < subEndNorm - 1e-6)
+            ts.push_back((pt.position - subStartNorm) / normRange);
+    }
+    for (const auto& pt : trackAuto)
+    {
+        if (pt.curve != EnvelopeCurve::Linear)
+            hasCurvedSegment = true;
+        if (pt.position > eventStartStep + 1e-6 && pt.position < eventStartStep + eventSpanSteps - 1e-6)
+            ts.push_back((pt.position - eventStartStep) / eventSpanSteps);
+    }
+
+    // Add uniform intermediate samples so Fast/Slow curves and combined envelopes are rendered smoothly
+    const int baseSamples = hasCurvedSegment ? 16 : 8;
+    for (int i = 1; i < baseSamples - 1; ++i)
+        ts.push_back(static_cast<double>(i) / static_cast<double>(baseSamples - 1));
+
+    std::sort(ts.begin(), ts.end());
+    std::vector<double> uniqueTs;
+    uniqueTs.reserve(ts.size());
+    for (double t : ts)
+    {
+        if (uniqueTs.empty() || (t - uniqueTs.back()) > 1e-4)
+            uniqueTs.push_back(t);
+    }
+    if (uniqueTs.back() < 0.9999)
+        uniqueTs.push_back(1.0);
+
+    // Downsample gracefully only if exceeding kMaxPlaybackEnvNodes
+    if (static_cast<int>(uniqueTs.size()) > kMaxPlaybackEnvNodes)
+    {
+        std::vector<double> trimmed;
+        trimmed.reserve(kMaxPlaybackEnvNodes);
+        for (int i = 0; i < kMaxPlaybackEnvNodes; ++i)
+        {
+            const std::size_t idx = static_cast<std::size_t>(
+                std::round((static_cast<double>(i) / static_cast<double>(kMaxPlaybackEnvNodes - 1)) *
+                           static_cast<double>(uniqueTs.size() - 1)));
+            trimmed.push_back(uniqueTs[idx]);
+        }
+        uniqueTs = std::move(trimmed);
+    }
+
+    outCount = static_cast<int>(uniqueTs.size());
+    for (int i = 0; i < outCount; ++i)
+    {
+        const double t = std::clamp(uniqueTs[static_cast<std::size_t>(i)], 0.0, 1.0);
         const double clipPos = subStartNorm + t * normRange;
         const double trackStep = eventStartStep + t * eventSpanSteps;
 
@@ -254,12 +315,15 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             const std::int64_t framesUntilPatternEnd = std::max<std::int64_t>(0, patternEndSample - eventStartSample);
             const std::int64_t audioOffset = static_cast<std::int64_t>(std::round(clip.offsetSteps * stepDurationSamples));
 
+            const bool hasMultiPointVol = !clip.volumeEnvelope.empty();
             const auto xfIt = crossfades.find(clip.id.value);
-            const float effectiveFadeIn = (xfIt != crossfades.end()) ? xfIt->second.fadeInSteps : clip.fadeInSteps;
-            const float effectiveFadeOut = (xfIt != crossfades.end()) ? xfIt->second.fadeOutSteps : clip.fadeOutSteps;
+            const float effectiveFadeIn = hasMultiPointVol ? 0.0f : ((xfIt != crossfades.end()) ? xfIt->second.fadeInSteps : clip.fadeInSteps);
+            const float effectiveFadeOut = hasMultiPointVol ? 0.0f : ((xfIt != crossfades.end()) ? xfIt->second.fadeOutSteps : clip.fadeOutSteps);
 
-            const float clipGainL = clip.gain;
-            const float clipGainR = clip.gain;
+            // When a multi-point volume envelope is present, its node values ARE the clip gain (avoid double-applying clip.gain)
+            const float clipGainL = hasMultiPointVol ? 1.0f : clip.gain;
+            const float clipGainR = hasMultiPointVol ? 1.0f : clip.gain;
+            const double patSteps = static_cast<double>(p->lengthSteps());
 
             if (trackKind == SampleKind::Loop)
             {
@@ -267,12 +331,14 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                 const double loopCycleSteps = (sample != nullptr && sample->loopCycleSteps() > 0.0)
                     ? sample->loopCycleSteps()
                     : static_cast<double>(kStepsPerBar);
-                const double clipSpanSteps = (clip.lengthSteps > 0.0) ? clip.lengthSteps : loopCycleSteps;
+                const double rawClipSpanSteps = (clip.lengthSteps > 0.0) ? clip.lengthSteps : loopCycleSteps;
+                // Match PatternGrid's exact visible clip span (clamped to pattern end)
+                const double visibleClipSpanSteps = std::max(1e-6, std::min(rawClipSpanSteps, patSteps - globalStep));
                 const double initialPhaseSteps = (clip.offsetSteps > 0.0) ? std::fmod(clip.offsetSteps, loopCycleSteps) : 0.0;
 
                 double offsetStep = 0.0;
                 bool firstCycle = true;
-                while (offsetStep < clipSpanSteps - 1e-6)
+                while (offsetStep < visibleClipSpanSteps - 1e-6)
                 {
                     const double cycleStartStep = globalStep + offsetStep;
                     const std::int64_t cycleEventStart = timing.stepToSample(cycleStartStep);
@@ -280,7 +346,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                         break;
 
                     const double maxCycleSteps = firstCycle ? (loopCycleSteps - initialPhaseSteps) : loopCycleSteps;
-                    const double thisCycleSteps = std::min(maxCycleSteps, clipSpanSteps - offsetStep);
+                    const double thisCycleSteps = std::min(maxCycleSteps, visibleClipSpanSteps - offsetStep);
                     if (thisCycleSteps <= 1e-6)
                         break;
 
@@ -299,10 +365,14 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                     const std::int64_t curAudioOffset = firstCycle
                         ? static_cast<std::int64_t>(std::round(initialPhaseSteps * stepDurationSamples))
                         : 0;
+                    const std::int64_t actualPlayedFrames = std::max<std::int64_t>(
+                        0, std::min<std::int64_t>(maxFrames, std::max<std::int64_t>(0, clipAudio->numFrames() - curAudioOffset)));
+                    const double actualPlayedSteps = static_cast<double>(actualPlayedFrames) / std::max(1.0, stepDurationSamples);
+
                     const std::int64_t curFadeIn = firstCycle
                         ? std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeIn * stepDurationSamples)))
                         : 0;
-                    const bool isLastCycle = (offsetStep + thisCycleSteps >= clipSpanSteps - 1e-6);
+                    const bool isLastCycle = (offsetStep + thisCycleSteps >= visibleClipSpanSteps - 1e-6);
                     const std::int64_t curFadeOut = isLastCycle
                         ? std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeOut * stepDurationSamples)))
                         : 0;
@@ -312,15 +382,15 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                                      curFadeIn, curFadeOut, clip.id.value, clip.reversed};
                     ev.fxSend = trk.fxAutomation.empty()
                         ? trk.fxSend
-                        : evaluateEnvelope(trk.fxAutomation, cycleStartStep + 0.5 * thisCycleSteps, trk.fxSend);
-                    if (clipSpanSteps > 1e-6)
+                        : evaluateEnvelope(trk.fxAutomation, cycleStartStep + 0.5 * actualPlayedSteps, trk.fxSend);
+                    if (visibleClipSpanSteps > 1e-6 && actualPlayedSteps > 1e-6)
                     {
-                        const double sub0 = offsetStep / clipSpanSteps;
-                        const double sub1 = (offsetStep + thisCycleSteps) / clipSpanSteps;
+                        const double sub0 = std::clamp(offsetStep / visibleClipSpanSteps, 0.0, 1.0);
+                        const double sub1 = std::clamp((offsetStep + actualPlayedSteps) / visibleClipSpanSteps, sub0, 1.0);
                         buildEventEnvelope(clip.volumeEnvelope, sub0, sub1, trk.volumeAutomation,
-                                           cycleStartStep, thisCycleSteps, 1.0f, 1.0f, true, ev.volEnv, ev.volEnvCount);
+                                           cycleStartStep, actualPlayedSteps, 1.0f, 1.0f, true, ev.volEnv, ev.volEnvCount);
                         buildEventEnvelope(clip.panEnvelope, sub0, sub1, trk.panAutomation,
-                                           cycleStartStep, thisCycleSteps, 0.0f, 0.0f, false, ev.panEnv, ev.panEnvCount);
+                                           cycleStartStep, actualPlayedSteps, 0.0f, 0.0f, false, ev.panEnv, ev.panEnvCount);
                     }
                     snapshot->events.push_back(ev);
                     snapshot->keepAlive.push_back(clipAudio);
@@ -351,14 +421,24 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                 PlaybackEvent ev{eventStartSample, clipAudio.get(), clipGainL,
                                  clipGainR, audioOffset, maxFrames, static_cast<int>(t),
                                  fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed};
-                const double evSpanSteps = std::max(0.1, static_cast<double>(maxFrames) / std::max(1.0, stepDurationSamples));
+
+                // Compute exact visible clip span (matching PatternGrid) and actual played frames
+                const double rawClipSpanSteps = (clip.lengthSteps > 0.0)
+                    ? clip.lengthSteps
+                    : std::max(0.1, static_cast<double>(std::max<std::int64_t>(1, clipAudio->numFrames() - audioOffset)) / std::max(1.0, stepDurationSamples));
+                const double visibleClipSpanSteps = std::max(1e-6, std::min(rawClipSpanSteps, patSteps - globalStep));
+                const std::int64_t actualPlayedFrames = std::max<std::int64_t>(
+                    0, std::min<std::int64_t>(maxFrames, std::max<std::int64_t>(0, clipAudio->numFrames() - audioOffset)));
+                const double actualPlayedSteps = std::max(1e-6, static_cast<double>(actualPlayedFrames) / std::max(1.0, stepDurationSamples));
+                const double sub1 = std::clamp(actualPlayedSteps / visibleClipSpanSteps, 0.0, 1.0);
+
                 ev.fxSend = trk.fxAutomation.empty()
                     ? trk.fxSend
-                    : evaluateEnvelope(trk.fxAutomation, globalStep + 0.5 * evSpanSteps, trk.fxSend);
-                buildEventEnvelope(clip.volumeEnvelope, 0.0, 1.0, trk.volumeAutomation,
-                                   globalStep, evSpanSteps, 1.0f, 1.0f, true, ev.volEnv, ev.volEnvCount);
-                buildEventEnvelope(clip.panEnvelope, 0.0, 1.0, trk.panAutomation,
-                                   globalStep, evSpanSteps, 0.0f, 0.0f, false, ev.panEnv, ev.panEnvCount);
+                    : evaluateEnvelope(trk.fxAutomation, globalStep + 0.5 * actualPlayedSteps, trk.fxSend);
+                buildEventEnvelope(clip.volumeEnvelope, 0.0, sub1, trk.volumeAutomation,
+                                   globalStep, actualPlayedSteps, 1.0f, 1.0f, true, ev.volEnv, ev.volEnvCount);
+                buildEventEnvelope(clip.panEnvelope, 0.0, sub1, trk.panAutomation,
+                                   globalStep, actualPlayedSteps, 0.0f, 0.0f, false, ev.panEnv, ev.panEnvCount);
                 snapshot->events.push_back(ev);
                 snapshot->keepAlive.push_back(clipAudio);
             }

@@ -545,6 +545,11 @@ void Sequencer::adoptPendingSnapshot() noexcept
                         voice.fadeOutSamples = matchingEv->fadeOutSamples;
                         voice.baseGainLeft = matchingEv->gainLeft;
                         voice.baseGainRight = matchingEv->gainRight;
+                        voice.fxSend = matchingEv->fxSend;
+                        voice.volEnv = matchingEv->volEnv;
+                        voice.volEnvCount = matchingEv->volEnvCount;
+                        voice.panEnv = matchingEv->panEnv;
+                        voice.panEnvCount = matchingEv->panEnvCount;
                         const std::int64_t expectedOffset = (position_ - matchingEv->startSample) + matchingEv->audioOffset;
                         if (matchingEv->audio != nullptr)
                             voice.readPosition = std::clamp<std::int64_t>(expectedOffset, 0, matchingEv->audio->numFrames());
@@ -585,9 +590,19 @@ void Sequencer::adoptPendingSnapshot() noexcept
                         const std::int64_t remainingFrames = evEnd - position_;
                         if (offsetInClip < totalFrames && remainingFrames > 0)
                         {
+                            const std::int64_t fullEventFrames = (ev.maxFrames >= 0) ? ev.maxFrames : (totalFrames - ev.audioOffset);
                             startVoice(ev.audio, current_, 0, ev.gainLeft, ev.gainRight,
-                                       offsetInClip, remainingFrames, ev.track,
+                                       ev.audioOffset, fullEventFrames, ev.track,
                                        ev.fadeInSamples, ev.fadeOutSamples, ev.clipId, ev.reversed, &ev);
+                            // Advance readPosition to the exact seek offset while preserving startPosition for envelope timing
+                            for (auto& v : voices_)
+                            {
+                                if (v.active && v.clipId == ev.clipId && v.audio == ev.audio)
+                                {
+                                    v.readPosition = std::clamp<std::int64_t>(offsetInClip, 0, totalFrames);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

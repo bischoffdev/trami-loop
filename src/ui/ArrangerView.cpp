@@ -194,11 +194,11 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(patternCombo_);
 
-    addPatternButton_.setTooltip("Create and append a new pattern");
+    addPatternButton_.setTooltip("Create and append a new song");
     addPatternButton_.onClick = [this]() {
         if (onPushUndo_)
             onPushUndo_();
-        const auto name = ("Pattern " + juce::String(song_.patterns().size() + 1)).toStdString();
+        const auto name = ("Song " + juce::String(song_.patterns().size() + 1)).toStdString();
         const auto newId = song_.addPattern(name, 1);
         activePattern_ = newId;
         updatePatternList();
@@ -206,7 +206,7 @@ ArrangerView::ArrangerView(Song& song, AudioEngine& engine, StretchCache& stretc
     };
     addAndMakeVisible(addPatternButton_);
 
-    editPatternButton_.setTooltip("Switch to Pattern Editor for selected pattern");
+    editPatternButton_.setTooltip("Switch to Song Editor for selected song");
     editPatternButton_.onClick = [this]() {
         if (onEditPattern_)
             onEditPattern_(activePattern_);

@@ -19,7 +19,7 @@ struct PlaybackEnvelopeNode
     std::uint8_t curve = 0;    ///< 0 = Linear, 1 = Fast, 2 = Slow
 };
 
-inline constexpr int kMaxPlaybackEnvNodes = 16;
+inline constexpr int kMaxPlaybackEnvNodes = 32;
 
 inline float evaluatePlaybackEnvelope(const std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes>& nodes,
                                       int count, float normPos, float defaultVal) noexcept

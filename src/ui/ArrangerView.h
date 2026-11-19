@@ -97,8 +97,8 @@ private:
 
     // Toolbar controls
     juce::ComboBox patternCombo_;
-    IconButton addPatternButton_{"NewPattern", IconButton::Icon::Plus, "+ Pattern"};
-    IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Pattern"};
+    IconButton addPatternButton_{"NewSong", IconButton::Icon::Plus, "+ Song"};
+    IconButton editPatternButton_{"Edit", IconButton::Icon::Edit, "Edit Song"};
     IconButton addTrackButton_{"AddTrack", IconButton::Icon::Plus, "+ Track"};
     IconButton followToggle_{"Follow", IconButton::Icon::Follow, "Follow"};
 

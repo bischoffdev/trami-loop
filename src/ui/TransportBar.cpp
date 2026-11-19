@@ -797,7 +797,7 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
     addAndMakeVisible(masterMeterSlider_.get());
 
     // Master Project Key selector
-    keyCombo_.setTooltip("Master Project Key (ACID automatic loop key conforming)");
+    keyCombo_.setTooltip("Master Project Key (automatic loop key conforming)");
     keyCombo_.addItem("Key: Off", 100);
     static constexpr const char* kPitchNames[12] = {
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"

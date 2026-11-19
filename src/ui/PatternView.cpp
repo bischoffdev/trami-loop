@@ -66,9 +66,13 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.setColour(juce::Colour(0xff23272d));
+        juce::ColourGradient grad(juce::Colour(0xff34343a), 0.0f, 0.0f,
+                                  juce::Colour(0xff222226), 0.0f, static_cast<float>(getHeight()), false);
+        g.setGradientFill(grad);
         g.fillRect(getLocalBounds());
-        g.setColour(juce::Colour(0xff181a1f));
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+        g.setColour(juce::Colour(0xff141417));
         g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
         g.drawVerticalLine(getWidth() - 1, 0.0f, static_cast<float>(getHeight()));
     }
@@ -256,7 +260,7 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     setWantsKeyboardFocus(true);
 
     if (song_.patterns().empty())
-        currentPattern_ = song_.addPattern("Pattern 1", 1);
+        currentPattern_ = song_.addPattern("Unnamed Song", 1);
     else
         currentPattern_ = song_.patterns().front().id;
 
@@ -275,10 +279,12 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     };
     addAndMakeVisible(browserToggle_);
 
-    patternTitle_.setFont(Typography::bold(15.0f));
-    patternTitle_.setColour(juce::Label::textColourId, Palette::text);
+    // Song Title (placed above Track Controls in HeaderCorner)
+    patternTitle_.setFont(Typography::bold(14.0f));
+    patternTitle_.setColour(juce::Label::textColourId, juce::Colour(0xffeeeef5));
+    patternTitle_.setJustificationType(juce::Justification::centredLeft);
     patternTitle_.setEditable(false, true, false);
-    patternTitle_.setTooltip("Double-click to rename pattern");
+    patternTitle_.setTooltip("Song Name (Double-click to rename)");
     patternTitle_.onTextChange = [this]() {
         const juce::String newName = patternTitle_.getText().trim();
         if (newName.isNotEmpty())
@@ -312,7 +318,7 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     addAndMakeVisible(rasterCombo_);
 
     // Add Track Button
-    addTrackButton_.setTooltip("Add a new sample track to this pattern");
+    addTrackButton_.setTooltip("Add a new sample track to this song");
     addTrackButton_.onClick = [this]() { addTrack(); };
     addAndMakeVisible(addTrackButton_);
 
@@ -332,40 +338,16 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     selectToolButton_.onClick = [this]() { setActiveTool(PatternGrid::EditTool::Select); };
     addAndMakeVisible(selectToolButton_);
 
-    paintToolButton_.setTooltip("ACID Paint / Draw Tool: Drag horizontally to paint loop regions (P)");
+    paintToolButton_.setTooltip("Paint / Draw Tool: Drag horizontally to paint loop regions (P)");
     paintToolButton_.onClick = [this]() { setActiveTool(PatternGrid::EditTool::Paint); };
     addAndMakeVisible(paintToolButton_);
 
-    eraseToolButton_.setTooltip("ACID Erase Tool: Click or drag to erase clips (E)");
+    eraseToolButton_.setTooltip("Erase Tool: Click or drag to erase clips (E)");
     eraseToolButton_.onClick = [this]() { setActiveTool(PatternGrid::EditTool::Erase); };
     addAndMakeVisible(eraseToolButton_);
 
-    splitButton_.setTooltip("Split Tool / Split Selected Clip(s) (S): Click a clip & press Split, or activate Split Tool to slice clips on click");
-    splitButton_.onClick = [this]() {
-        if (grid_ == nullptr)
-            return;
-
-        if (!grid_->selectedClips().empty())
-        {
-            double splitPos = grid_->lastClickedStepOnClip();
-            if (splitPos < 0.0)
-                splitPos = (grid_->playheadStep() > 0.0) ? grid_->playheadStep() : static_cast<double>(grid_->cursorStep());
-            clipSplitRequested(grid_->selectedClips(), splitPos);
-        }
-        else
-        {
-            // Toggle interactive Split / Blade tool when no clip is selected, or let user click any clip to slice
-            setActiveTool(grid_->editTool() == PatternGrid::EditTool::Split
-                              ? PatternGrid::EditTool::Select
-                              : PatternGrid::EditTool::Split);
-            if (onShowToast_)
-            {
-                onShowToast_(grid_->editTool() == PatternGrid::EditTool::Split
-                                 ? "Split Tool active: Click any clip on the grid to slice it"
-                                 : "Select Tool active");
-            }
-        }
-    };
+    splitButton_.setTooltip("Split Tool (S): Click any clip on the grid to slice it");
+    splitButton_.onClick = [this]() { setActiveTool(PatternGrid::EditTool::Split); };
     addAndMakeVisible(splitButton_);
 
     joinButton_.setTooltip("Join Selected Clips on the Same Track (J)");
@@ -2752,7 +2734,7 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
     {
         setActiveTool(PatternGrid::EditTool::Paint);
         if (onShowToast_)
-            onShowToast_("Tool: ACID Paint / Draw (P)");
+            onShowToast_("Tool: Paint / Draw (P)");
         return true;
     }
 
@@ -2761,6 +2743,14 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
         setActiveTool(PatternGrid::EditTool::Erase);
         if (onShowToast_)
             onShowToast_("Tool: Erase (E)");
+        return true;
+    }
+
+    if (!isCmdOrCtrl && (key.getKeyCode() == 'S' || key.getKeyCode() == 's'))
+    {
+        setActiveTool(PatternGrid::EditTool::Split);
+        if (onShowToast_)
+            onShowToast_("Tool: Split (S)");
         return true;
     }
 
@@ -2808,9 +2798,6 @@ void PatternView::resized()
     auto toolbar = juce::Rectangle<int>(0, 0, getWidth(), kToolbarHeight).reduced(10, 6);
 
     browserToggle_.setBounds(toolbar.removeFromLeft(80));
-    toolbar.removeFromLeft(8);
-
-    patternTitle_.setBounds(toolbar.removeFromLeft(72));
     toolbar.removeFromLeft(10);
 
     // Grid / Raster
@@ -2881,7 +2868,11 @@ void PatternView::resized()
     gridViewport_->setBounds(gridX, contentY, gridW, timelineH);
 
     if (headerCorner_ != nullptr)
+    {
         headerCorner_->setBounds(0, contentY, headerW, PatternGrid::kRulerHeight);
+        patternTitle_.setBounds(10, contentY + 4, std::max(40, headerW - 20), PatternGrid::kRulerHeight - 8);
+        patternTitle_.toFront(false);
+    }
 
     if (ruler_ != nullptr)
         ruler_->setBounds(gridX, contentY, gridW, PatternGrid::kRulerHeight);

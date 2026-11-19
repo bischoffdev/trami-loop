@@ -285,6 +285,67 @@ int PatternGrid::snapXToGridStep(int x, int totalSteps) const noexcept
     return std::clamp(snapped, 0, totalSteps);
 }
 
+namespace
+{
+constexpr int kClipFooterH = 16;
+
+juce::MouseCursor makeSplitToolCursor()
+{
+    static const juce::MouseCursor cursor = []() {
+        constexpr int sz = 24;
+        juce::Image img(juce::Image::ARGB, sz, sz, true);
+        juce::Graphics g(img);
+
+        // Crisp vertical split blade line with dark outline
+        g.setColour(juce::Colours::black.withAlpha(0.85f));
+        g.fillRect(10.0f, 1.0f, 4.0f, 22.0f);
+        g.setColour(juce::Colour(0xfff43f5e));
+        g.fillRect(11.0f, 2.0f, 2.0f, 20.0f);
+
+        // Outward left/right split chevrons at center
+        juce::Path leftTri;
+        leftTri.startNewSubPath(9.0f, 9.0f);
+        leftTri.lineTo(4.0f, 12.0f);
+        leftTri.lineTo(9.0f, 15.0f);
+        leftTri.closeSubPath();
+
+        juce::Path rightTri;
+        rightTri.startNewSubPath(15.0f, 9.0f);
+        rightTri.lineTo(20.0f, 12.0f);
+        rightTri.lineTo(15.0f, 15.0f);
+        rightTri.closeSubPath();
+
+        g.setColour(juce::Colours::black.withAlpha(0.85f));
+        g.strokePath(leftTri, juce::PathStrokeType(1.8f));
+        g.strokePath(rightTri, juce::PathStrokeType(1.8f));
+        g.setColour(juce::Colours::white);
+        g.fillPath(leftTri);
+        g.fillPath(rightTri);
+
+        return juce::MouseCursor(juce::ScaledImage(img, 1.0), juce::Point<int>(12, 12));
+    }();
+    return cursor;
+}
+
+juce::Rectangle<int> clipWaveBounds(const juce::Rectangle<int>& clipRect) noexcept
+{
+    if (clipRect.getHeight() >= 30 && clipRect.getWidth() >= 24)
+        return clipRect.withTrimmedBottom(kClipFooterH);
+    return clipRect;
+}
+
+juce::Rectangle<int> clipPitchBoxBounds(const juce::Rectangle<int>& clipRect) noexcept
+{
+    if (clipRect.getHeight() < 30 || clipRect.getWidth() < 42)
+        return {};
+    constexpr int boxW = 28;
+    constexpr int boxH = 13;
+    const int x = clipRect.getRight() - 10 - boxW;
+    const int y = clipRect.getBottom() - kClipFooterH + (kClipFooterH - boxH) / 2;
+    return {x, y, boxW, boxH};
+}
+} // namespace
+
 juce::Rectangle<int> PatternGrid::clipBounds(int track, double step, double lengthSteps) const
 {
     const int x = stepToX(step);
@@ -368,23 +429,27 @@ PatternGrid::DragMode PatternGrid::hitTestResize(juce::Point<int> pt) const
         if (pt.x >= b.getRight() - edgeMargin)
             return DragMode::ResizeRight;
 
-        // 2. Top handles: Fade In / Fade Out
-        if (pt.y <= b.getY() + 14)
+        // 2. Top handles: Fade In / Fade Out & Volume Gain line (disabled when a multi-point volume envelope is active)
+        if (it->volumeEnvelope.empty())
         {
-            const int fadeInPx = juce::roundToInt(it->fadeInSteps * static_cast<float>(stepWidth_));
-            if (std::abs(pt.x - (b.getX() + fadeInPx)) <= 8 || (fadeInPx == 0 && pt.x <= b.getX() + 12))
-                return DragMode::FadeIn;
+            if (pt.y <= b.getY() + 14)
+            {
+                const int fadeInPx = juce::roundToInt(it->fadeInSteps * static_cast<float>(stepWidth_));
+                if (std::abs(pt.x - (b.getX() + fadeInPx)) <= 8 || (fadeInPx == 0 && pt.x <= b.getX() + 12))
+                    return DragMode::FadeIn;
 
-            const int fadeOutPx = juce::roundToInt(it->fadeOutSteps * static_cast<float>(stepWidth_));
-            if (std::abs(pt.x - (b.getRight() - fadeOutPx)) <= 8 || (fadeOutPx == 0 && pt.x >= b.getRight() - 12))
-                return DragMode::FadeOut;
+                const int fadeOutPx = juce::roundToInt(it->fadeOutSteps * static_cast<float>(stepWidth_));
+                if (std::abs(pt.x - (b.getRight() - fadeOutPx)) <= 8 || (fadeOutPx == 0 && pt.x >= b.getRight() - 12))
+                    return DragMode::FadeOut;
+            }
+
+            // 3. Volume Gain line and center handle (inside wave area, above bottom bar)
+            const auto wb = clipWaveBounds(b);
+            const float gainNorm = std::clamp(it->gain, 0.0f, 2.0f) * 0.5f;
+            const float gainY = static_cast<float>(wb.getY()) + static_cast<float>(wb.getHeight()) * (1.0f - gainNorm);
+            if (std::abs(static_cast<float>(pt.y) - gainY) <= 6.0f && pt.x > wb.getX() + 8 && pt.x < wb.getRight() - 8)
+                return DragMode::Gain;
         }
-
-        // 3. Volume Gain line and center handle
-        const float gainNorm = std::clamp(it->gain, 0.0f, 2.0f) * 0.5f;
-        const float gainY = static_cast<float>(b.getY()) + static_cast<float>(b.getHeight()) * (1.0f - gainNorm);
-        if (std::abs(static_cast<float>(pt.y) - gainY) <= 6.0f && pt.x > b.getX() + 8 && pt.x < b.getRight() - 8)
-            return DragMode::Gain;
 
         return DragMode::Move;
     }
@@ -445,11 +510,20 @@ void PatternGrid::mouseMove(const juce::MouseEvent& e)
         const int mx = e.getPosition().x;
         const int my = e.getPosition().y;
 
-        // Top 15px of ruler: Loop bar and handles
-        if (my <= 15 && (std::abs(mx - startX) <= 12 || std::abs(mx - endX) <= 12))
-            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
-        else if (my <= 15 && mx > startX + 12 && mx < endX - 12)
-            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        // Top 15px of ruler: Paint loop region (or fine-tune start/end handles)
+        if (my <= 15)
+        {
+            if (std::abs(mx - startX) <= 8 || std::abs(mx - endX) <= 8)
+            {
+                currentTooltip_ = "Drag to adjust loop boundary (Double-click ruler to reset)";
+                setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+            }
+            else
+            {
+                currentTooltip_ = "Click and drag to paint loop region (Double-click to reset)";
+                setMouseCursor(juce::MouseCursor::CrosshairCursor);
+            }
+        }
         else if (my > 15)
             setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
         else if (isNearPlayhead)
@@ -461,7 +535,7 @@ void PatternGrid::mouseMove(const juce::MouseEvent& e)
 
     if (editTool_ == EditTool::Split)
     {
-        setMouseCursor(juce::MouseCursor::CrosshairCursor);
+        setMouseCursor(makeSplitToolCursor());
         if (const Clip* c = findClipAt(e.getPosition()))
         {
             const auto [tIdx, sIdx] = pointToTrackAndStep(e.getPosition());
@@ -768,6 +842,10 @@ void PatternGrid::paint(juce::Graphics& g)
     }
 
     // 3. Clips & Overlap Representation
+    const bool hasClipDragOverride = drag_.active && !drag_.items.empty() &&
+                                     (drag_.mode == DragMode::Move || drag_.mode == DragMode::ResizeLeft ||
+                                      drag_.mode == DragMode::ResizeRight || drag_.mode == DragMode::Gain ||
+                                      drag_.mode == DragMode::FadeIn || drag_.mode == DragMode::FadeOut);
     if (pat != nullptr)
     {
         for (int t = 0; t < numTracks; ++t)
@@ -790,7 +868,7 @@ void PatternGrid::paint(juce::Graphics& g)
 
                 double start = clip.startStep;
                 double span = std::min(clipSpan(clip, t), static_cast<double>(patSteps) - start);
-                if (drag_.active)
+                if (hasClipDragOverride)
                 {
                     if (const auto* dItem = drag_.find(clip.id))
                     {
@@ -805,7 +883,7 @@ void PatternGrid::paint(juce::Graphics& g)
                     intervals.push_back({clip.id, start, start + span});
             }
 
-            if (drag_.active)
+            if (hasClipDragOverride)
             {
                 for (const auto& dItem : drag_.items)
                 {
@@ -854,7 +932,7 @@ void PatternGrid::paint(juce::Graphics& g)
                 double span = clipSpan(clip, renderTrack);
                 double renderOffset = clip.offsetSteps;
 
-                if (drag_.active)
+                if (hasClipDragOverride)
                 {
                     if (const auto* dItem = drag_.find(clip.id))
                     {
@@ -918,12 +996,12 @@ void PatternGrid::paint(juce::Graphics& g)
                                          fBounds.getRight() - clipRadius * 0.7f);
                 }
 
-                // Waveform (deep saturated shade of the clip's own hue for crisp readability)
+                // Waveform (deep saturated shade of the clip's own hue, above the bottom bar)
                 const Sample* sample = song_.findSample(clip.sampleId);
                 const bool isMissingSample = (sample != nullptr && sample->missing);
-                const bool hasTitleBand = (bounds.getHeight() >= 28 && bounds.getWidth() >= 32);
-                const int waveTop = bounds.getY() + (hasTitleBand ? 16 : 4);
-                const int waveBot = bounds.getBottom() - 4;
+                const bool hasFooterBar = (!isMissingSample && bounds.getHeight() >= 30 && bounds.getWidth() >= 24);
+                const int waveTop = bounds.getY() + 3;
+                const int waveBot = bounds.getBottom() - (hasFooterBar ? (kClipFooterH + 2) : 4);
                 const int waveH = std::max(6, waveBot - waveTop);
                 auto rawAudio = stretchCache_.getRawAudio(clip.sampleId);
                 if (!isMissingSample && rawAudio != nullptr && rawAudio->numFrames() > 0 && bounds.getWidth() > 4)
@@ -1028,17 +1106,90 @@ void PatternGrid::paint(juce::Graphics& g)
                     g.drawText(missLabel, bounds.reduced(6, 2), juce::Justification::centredLeft, true);
                 }
 
-                // Clean top-left clip title (deep tinted ink matching Screenshot 1)
-                if (!isMissingSample && sample != nullptr && hasTitleBand)
+                // Clip Bottom Bar (name + clickable pitch box [0 ▾] / [+7 ▾], matching reference screenshot)
+                if (hasFooterBar)
                 {
-                    const juce::Colour titleCol = col.darker(0.72f).withMultipliedSaturation(1.1f);
-                    g.setColour(titleCol);
-                    g.setFont(Typography::bold(11.0f));
-                    const int rightReserve = (bounds.getWidth() >= 76) ? 38 : 6;
-                    g.drawText(juce::String(sample->name),
-                               bounds.getX() + 7, bounds.getY() + 2,
-                               std::max(10, bounds.getWidth() - 7 - rightReserve), 14,
-                               juce::Justification::centredLeft, true);
+                    g.saveState();
+                    juce::Path clipMask;
+                    clipMask.addRoundedRectangle(fBounds, clipRadius);
+                    g.reduceClipRegion(clipMask);
+
+                    const int footerY = bounds.getBottom() - kClipFooterH;
+                    const auto footerRect = juce::Rectangle<float>(fBounds.getX(), static_cast<float>(footerY),
+                                                                   fBounds.getWidth(), static_cast<float>(kClipFooterH));
+
+                    // Slightly lighter tinted footer band + crisp top divider
+                    g.setColour(col.brighter(0.28f).withAlpha(0.92f));
+                    g.fillRect(footerRect);
+                    g.setColour(col.darker(0.38f).withAlpha(0.65f));
+                    g.drawHorizontalLine(footerY, fBounds.getX(), fBounds.getRight());
+
+                    const juce::Colour inkCol = col.darker(0.76f);
+
+                    // Small dark corner triangle accents (bottom-left & bottom-right)
+                    if (bounds.getWidth() >= 36)
+                    {
+                        g.setColour(inkCol.withAlpha(0.80f));
+                        juce::Path triL;
+                        triL.startNewSubPath(fBounds.getX() + 2.5f, static_cast<float>(footerY + 3));
+                        triL.lineTo(fBounds.getX() + 2.5f, fBounds.getBottom() - 2.0f);
+                        triL.lineTo(fBounds.getX() + 8.5f, fBounds.getBottom() - 2.0f);
+                        triL.closeSubPath();
+                        g.fillPath(triL);
+
+                        juce::Path triR;
+                        triR.startNewSubPath(fBounds.getRight() - 2.5f, static_cast<float>(footerY + 3));
+                        triR.lineTo(fBounds.getRight() - 2.5f, fBounds.getBottom() - 2.0f);
+                        triR.lineTo(fBounds.getRight() - 8.5f, fBounds.getBottom() - 2.0f);
+                        triR.closeSubPath();
+                        g.fillPath(triR);
+                    }
+
+                    // Clickable Pitch Box on the right: [ 0 ▾] or [+7 ▾]
+                    const auto pitchBox = clipPitchBoxBounds(bounds);
+                    const int effTranspose = song_.effectiveClipTranspose(sample, clip.transposeSemitones, trackKind);
+                    if (!pitchBox.isEmpty())
+                    {
+                        const auto pb = pitchBox.toFloat();
+                        if (effTranspose != 0)
+                        {
+                            g.setColour(juce::Colours::white.withAlpha(0.35f));
+                            g.fillRoundedRectangle(pb, 1.5f);
+                        }
+                        g.setColour(inkCol.withAlpha(0.88f));
+                        g.drawRoundedRectangle(pb, 1.5f, 1.0f);
+
+                        const juce::String pitchStr = (effTranspose > 0 ? "+" : "") + juce::String(effTranspose);
+                        g.setFont(Typography::bold(10.0f));
+                        g.drawText(pitchStr, pitchBox.withTrimmedRight(7), juce::Justification::centred, false);
+
+                        // Small downward dropdown triangle inside pitch box
+                        const float ax = pb.getRight() - 4.5f;
+                        const float ay = pb.getCentreY();
+                        juce::Path arrow;
+                        arrow.startNewSubPath(ax - 2.3f, ay - 1.2f);
+                        arrow.lineTo(ax + 2.3f, ay - 1.2f);
+                        arrow.lineTo(ax, ay + 2.0f);
+                        arrow.closeSubPath();
+                        g.fillPath(arrow);
+                    }
+
+                    // Clip / Sample Name on the left of the bottom bar
+                    if (sample != nullptr)
+                    {
+                        const int textLeft = bounds.getX() + (bounds.getWidth() >= 36 ? 12 : 4);
+                        const int textRight = !pitchBox.isEmpty() ? (pitchBox.getX() - 4) : (bounds.getRight() - 4);
+                        if (textRight - textLeft >= 12)
+                        {
+                            g.setColour(inkCol);
+                            g.setFont(Typography::regular(11.0f));
+                            g.drawText(juce::String(sample->name),
+                                       textLeft, footerY, textRight - textLeft, kClipFooterH,
+                                       juce::Justification::centredLeft, true);
+                        }
+                    }
+
+                    g.restoreState();
                 }
 
                 // Loop notches (only drawn for Loop tracks)
@@ -1056,8 +1207,8 @@ void PatternGrid::paint(juce::Graphics& g)
                             const int notchX = bounds.getX() + static_cast<int>(std::round(st * stepWidth_));
                             g.drawVerticalLine(notchX, static_cast<float>(bounds.getY() + 2),
                                                static_cast<float>(bounds.getY() + 8));
-                            g.drawVerticalLine(notchX, static_cast<float>(bounds.getBottom() - 8),
-                                               static_cast<float>(bounds.getBottom() - 2));
+                            g.drawVerticalLine(notchX, static_cast<float>(waveBot - 6),
+                                               static_cast<float>(waveBot));
                         }
                     }
                 }
@@ -1067,23 +1218,20 @@ void PatternGrid::paint(juce::Graphics& g)
                 {
                     g.setColour(col.darker(0.65f).withAlpha(0.25f));
                     g.fillRoundedRectangle(static_cast<float>(bounds.getX() + 2), static_cast<float>(bounds.getY() + 6),
-                                           2.0f, static_cast<float>(bounds.getHeight() - 12), 1.0f);
+                                           2.0f, static_cast<float>(std::max(4, waveBot - bounds.getY() - 8)), 1.0f);
                     g.fillRoundedRectangle(static_cast<float>(bounds.getRight() - 4), static_cast<float>(bounds.getY() + 6),
-                                           2.0f, static_cast<float>(bounds.getHeight() - 12), 1.0f);
+                                           2.0f, static_cast<float>(std::max(4, waveBot - bounds.getY() - 8)), 1.0f);
                 }
 
-                // Kind badge: [L], [1], or [D], with REV and key-conformed transpose indicator
+                // Kind badge: [L], [1], or [D], with REV indicator (pitch is now prominently in the bottom bar)
                 if (bounds.getWidth() >= 28 && trackHeight_ >= 20)
                 {
-                    const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.25f, 8.5f, 10.5f);
+                    const float fontSize = std::clamp(static_cast<float>(trackHeight_) * 0.22f, 8.5f, 10.0f);
                     g.setFont(juce::FontOptions(fontSize).withStyle("Bold"));
 
-                    const int effTranspose = song_.effectiveClipTranspose(sample, clip.transposeSemitones, trackKind);
                     juce::String badgeText;
                     if (clip.reversed)
                         badgeText += "REV ";
-                    if (effTranspose != 0)
-                        badgeText += (effTranspose > 0 ? "+" : "") + juce::String(effTranspose) + "st ";
                     if (trackKind == SampleKind::Loop)
                         badgeText += "[L]";
                     else if (trackKind == SampleKind::DiskStream)
@@ -1091,11 +1239,12 @@ void PatternGrid::paint(juce::Graphics& g)
                     else
                         badgeText += "[1]";
 
-                    g.setColour(col.darker(0.68f).withAlpha(0.85f));
+                    g.setColour(col.darker(0.68f).withAlpha(0.75f));
                     g.drawText(badgeText, bounds.reduced(6, 2), juce::Justification::topRight, false);
                 }
 
-                // Multi-point Volume & Pan Envelopes on Clip
+                // Multi-point Volume & Pan Envelopes on Clip (strictly inside wave area, above bottom bar)
+                const auto waveBounds = clipWaveBounds(bounds);
                 const auto& volPts = (drag_.active && drag_.mode == DragMode::EnvelopeNode && envDragClipId_ == clip.id && !envDragIsPan_)
                                          ? envDragPoints_
                                          : clip.volumeEnvelope;
@@ -1103,17 +1252,18 @@ void PatternGrid::paint(juce::Graphics& g)
                                          ? envDragPoints_
                                          : clip.panEnvelope;
 
-                if (!volPts.empty() && bounds.getWidth() >= 12 && bounds.getHeight() >= 16)
+                if (!volPts.empty() && waveBounds.getWidth() >= 12 && waveBounds.getHeight() >= 12)
                 {
                     juce::Path envPath;
-                    for (std::size_t pi = 0; pi < volPts.size(); ++pi)
+                    const int numCurveSegs = std::clamp(waveBounds.getWidth() / 4, 16, 96);
+                    for (int si = 0; si <= numCurveSegs; ++si)
                     {
-                        const float px = static_cast<float>(bounds.getX()) +
-                                         static_cast<float>(volPts[pi].position) * static_cast<float>(bounds.getWidth());
-                        const float vNorm = std::clamp(volPts[pi].value, 0.0f, 2.0f) * 0.5f;
-                        const float py = static_cast<float>(bounds.getY()) +
-                                         static_cast<float>(bounds.getHeight()) * (1.0f - vNorm);
-                        if (pi == 0)
+                        const double u = static_cast<double>(si) / static_cast<double>(numCurveSegs);
+                        const float val = evaluateEnvelope(volPts, u, clip.gain);
+                        const float px = static_cast<float>(waveBounds.getX()) + static_cast<float>(u) * static_cast<float>(waveBounds.getWidth());
+                        const float vNorm = std::clamp(val, 0.0f, 2.0f) * 0.5f;
+                        const float py = static_cast<float>(waveBounds.getY() + 3) + static_cast<float>(waveBounds.getHeight() - 6) * (1.0f - vNorm);
+                        if (si == 0)
                             envPath.startNewSubPath(px, py);
                         else
                             envPath.lineTo(px, py);
@@ -1123,11 +1273,11 @@ void PatternGrid::paint(juce::Graphics& g)
 
                     for (const auto& pt : volPts)
                     {
-                        const float px = static_cast<float>(bounds.getX()) +
-                                         static_cast<float>(pt.position) * static_cast<float>(bounds.getWidth());
+                        const float px = static_cast<float>(waveBounds.getX()) +
+                                         static_cast<float>(pt.position) * static_cast<float>(waveBounds.getWidth());
                         const float vNorm = std::clamp(pt.value, 0.0f, 2.0f) * 0.5f;
-                        const float py = static_cast<float>(bounds.getY()) +
-                                         static_cast<float>(bounds.getHeight()) * (1.0f - vNorm);
+                        const float py = static_cast<float>(waveBounds.getY() + 3) +
+                                         static_cast<float>(waveBounds.getHeight() - 6) * (1.0f - vNorm);
                         g.setColour(juce::Colour(0xfff59e0b));
                         g.fillEllipse(px - 3.5f, py - 3.5f, 7.0f, 7.0f);
                         g.setColour(juce::Colours::white);
@@ -1135,17 +1285,18 @@ void PatternGrid::paint(juce::Graphics& g)
                     }
                 }
 
-                if (!panPts.empty() && bounds.getWidth() >= 12 && bounds.getHeight() >= 16)
+                if (!panPts.empty() && waveBounds.getWidth() >= 12 && waveBounds.getHeight() >= 12)
                 {
                     juce::Path panPath;
-                    for (std::size_t pi = 0; pi < panPts.size(); ++pi)
+                    const int numCurveSegs = std::clamp(waveBounds.getWidth() / 4, 16, 96);
+                    for (int si = 0; si <= numCurveSegs; ++si)
                     {
-                        const float px = static_cast<float>(bounds.getX()) +
-                                         static_cast<float>(panPts[pi].position) * static_cast<float>(bounds.getWidth());
-                        const float pNorm = (std::clamp(panPts[pi].value, -1.0f, 1.0f) + 1.0f) * 0.5f;
-                        const float py = static_cast<float>(bounds.getY()) +
-                                         static_cast<float>(bounds.getHeight()) * (1.0f - pNorm);
-                        if (pi == 0)
+                        const double u = static_cast<double>(si) / static_cast<double>(numCurveSegs);
+                        const float val = evaluateEnvelope(panPts, u, 0.0f);
+                        const float px = static_cast<float>(waveBounds.getX()) + static_cast<float>(u) * static_cast<float>(waveBounds.getWidth());
+                        const float pNorm = (std::clamp(val, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                        const float py = static_cast<float>(waveBounds.getY() + 3) + static_cast<float>(waveBounds.getHeight() - 6) * (1.0f - pNorm);
+                        if (si == 0)
                             panPath.startNewSubPath(px, py);
                         else
                             panPath.lineTo(px, py);
@@ -1155,11 +1306,11 @@ void PatternGrid::paint(juce::Graphics& g)
 
                     for (const auto& pt : panPts)
                     {
-                        const float px = static_cast<float>(bounds.getX()) +
-                                         static_cast<float>(pt.position) * static_cast<float>(bounds.getWidth());
+                        const float px = static_cast<float>(waveBounds.getX()) +
+                                         static_cast<float>(pt.position) * static_cast<float>(waveBounds.getWidth());
                         const float pNorm = (std::clamp(pt.value, -1.0f, 1.0f) + 1.0f) * 0.5f;
-                        const float py = static_cast<float>(bounds.getY()) +
-                                         static_cast<float>(bounds.getHeight()) * (1.0f - pNorm);
+                        const float py = static_cast<float>(waveBounds.getY() + 3) +
+                                         static_cast<float>(waveBounds.getHeight() - 6) * (1.0f - pNorm);
                         g.setColour(juce::Colour(0xffc084fc));
                         g.fillEllipse(px - 3.0f, py - 3.0f, 6.0f, 6.0f);
                     }
@@ -1170,7 +1321,7 @@ void PatternGrid::paint(juce::Graphics& g)
                 float effectiveFadeIn = clip.fadeInSteps;
                 float effectiveFadeOut = clip.fadeOutSteps;
 
-                if (drag_.active)
+                if (hasClipDragOverride)
                 {
                     if (const auto* dItem = drag_.find(clip.id))
                     {
@@ -1183,11 +1334,12 @@ void PatternGrid::paint(juce::Graphics& g)
                     }
                 }
 
-                if (bounds.getWidth() >= 12 && bounds.getHeight() >= 16)
+                // Legacy flat Volume Gain Line & Fade In/Out handles — strictly inside waveBounds, hidden when multi-point volume envelope is active
+                if (volPts.empty() && waveBounds.getWidth() >= 12 && waveBounds.getHeight() >= 12)
                 {
                     const float gainNorm = std::clamp(effectiveGain, 0.0f, 2.0f) * 0.5f;
                     const float gainY =
-                        static_cast<float>(bounds.getY()) + static_cast<float>(bounds.getHeight()) * (1.0f - gainNorm);
+                        static_cast<float>(waveBounds.getY()) + static_cast<float>(waveBounds.getHeight()) * (1.0f - gainNorm);
                     const int fadeInPx = std::min(bounds.getWidth() - 6,
                                                   juce::roundToInt(effectiveFadeIn * static_cast<float>(stepWidth_)));
                     const int fadeOutPx = std::min(bounds.getWidth() - 6,
@@ -1197,7 +1349,7 @@ void PatternGrid::paint(juce::Graphics& g)
                     if (fadeInPx > 0)
                     {
                         juce::Path p;
-                        p.startNewSubPath(static_cast<float>(bounds.getX()), static_cast<float>(bounds.getBottom()));
+                        p.startNewSubPath(static_cast<float>(bounds.getX()), static_cast<float>(waveBounds.getBottom()));
                         p.lineTo(static_cast<float>(bounds.getX() + fadeInPx), gainY);
                         p.lineTo(static_cast<float>(bounds.getX()), gainY);
                         p.closeSubPath();
@@ -1206,7 +1358,7 @@ void PatternGrid::paint(juce::Graphics& g)
 
                         juce::Path curve;
                         curve.startNewSubPath(static_cast<float>(bounds.getX()),
-                                              static_cast<float>(bounds.getBottom()));
+                                              static_cast<float>(waveBounds.getBottom()));
                         curve.lineTo(static_cast<float>(bounds.getX() + fadeInPx), gainY);
                         g.setColour(juce::Colours::white.withAlpha(0.85f));
                         g.strokePath(curve, juce::PathStrokeType(1.5f));
@@ -1237,7 +1389,7 @@ void PatternGrid::paint(juce::Graphics& g)
                     {
                         juce::Path p;
                         p.startNewSubPath(static_cast<float>(bounds.getRight() - fadeOutPx), gainY);
-                        p.lineTo(static_cast<float>(bounds.getRight()), static_cast<float>(bounds.getBottom()));
+                        p.lineTo(static_cast<float>(bounds.getRight()), static_cast<float>(waveBounds.getBottom()));
                         p.lineTo(static_cast<float>(bounds.getRight()), gainY);
                         p.closeSubPath();
                         g.setColour(juce::Colours::black.withAlpha(0.32f));
@@ -1245,7 +1397,7 @@ void PatternGrid::paint(juce::Graphics& g)
 
                         juce::Path curve;
                         curve.startNewSubPath(static_cast<float>(bounds.getRight() - fadeOutPx), gainY);
-                        curve.lineTo(static_cast<float>(bounds.getRight()), static_cast<float>(bounds.getBottom()));
+                        curve.lineTo(static_cast<float>(bounds.getRight()), static_cast<float>(waveBounds.getBottom()));
                         g.setColour(juce::Colours::white.withAlpha(0.85f));
                         g.strokePath(curve, juce::PathStrokeType(1.5f));
 
@@ -1456,10 +1608,12 @@ void PatternGrid::paint(juce::Graphics& g)
     if (drag_.active && drag_.mode == DragMode::PaintClip && paintTrack_ >= 0 && paintCurrentLen_ > 0.0)
     {
         const auto pBounds = clipBounds(paintTrack_, paintCurrentStart_, paintCurrentLen_).reduced(2, 3);
-        g.setColour(Palette::accent.withAlpha(0.28f));
-        g.fillRoundedRectangle(pBounds.toFloat(), 4.0f);
-        g.setColour(Palette::accent);
-        g.drawRoundedRectangle(pBounds.toFloat(), 4.0f, 2.0f);
+        const SampleId paintSid = song_.patternTrackSample(patternId_, paintTrack_);
+        const juce::Colour pCol = paintSid.isValid() ? sampleColour(paintSid) : Palette::accent;
+        g.setColour(pCol.withAlpha(0.42f));
+        g.fillRoundedRectangle(pBounds.toFloat(), 7.5f);
+        g.setColour(juce::Colours::white.withAlpha(0.85f));
+        g.drawRoundedRectangle(pBounds.toFloat(), 7.5f, 1.8f);
     }
 
     // Split tool live blade guide line
@@ -1581,6 +1735,89 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isRightButtonDown())
     {
+        const auto* patForRClick = song_.findPattern(patternId_);
+        const int rClickTrack = (e.getPosition().y >= kRulerHeight) ? (e.getPosition().y - kRulerHeight) / trackHeight_ : -1;
+
+        // 1. Right-click directly on a Track Automation Envelope point -> delete that point
+        if (patForRClick != nullptr && rClickTrack >= 0 && rClickTrack < static_cast<int>(patForRClick->tracks.size()))
+        {
+            const auto& trkObj = patForRClick->tracks[static_cast<std::size_t>(rClickTrack)];
+            if (trkObj.visibleEnvelope != TrackEnvelopeType::None)
+            {
+                auto pts = (trkObj.visibleEnvelope == TrackEnvelopeType::Volume)
+                               ? trkObj.volumeAutomation
+                               : ((trkObj.visibleEnvelope == TrackEnvelopeType::Pan) ? trkObj.panAutomation
+                                                                                     : trkObj.fxAutomation);
+                const int laneY = kRulerHeight + rClickTrack * trackHeight_;
+                for (std::size_t pi = 0; pi < pts.size(); ++pi)
+                {
+                    const int px = stepToX(pts[pi].position);
+                    float norm = 0.5f;
+                    if (trkObj.visibleEnvelope == TrackEnvelopeType::Volume)
+                        norm = std::clamp(pts[pi].value, 0.0f, 2.0f) * 0.5f;
+                    else if (trkObj.visibleEnvelope == TrackEnvelopeType::Pan)
+                        norm = (std::clamp(pts[pi].value, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                    else
+                        norm = std::clamp(pts[pi].value, 0.0f, 1.0f);
+                    const int py = laneY + 4 + juce::roundToInt(static_cast<float>(trackHeight_ - 8) * (1.0f - norm));
+                    if (std::abs(e.getPosition().x - px) <= 8 && std::abs(e.getPosition().y - py) <= 8)
+                    {
+                        pts.erase(pts.begin() + static_cast<std::ptrdiff_t>(pi));
+                        if (pts.size() < 2)
+                            pts.clear();
+                        listener_.trackAutomationChanged(rClickTrack, trkObj.visibleEnvelope, std::move(pts));
+                        repaint();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 2. Right-click directly on a Clip Multi-Point Envelope point -> delete that point
+        if (const Clip* clipEnvRClick = findClipAt(e.getPosition()))
+        {
+            if (patForRClick != nullptr && rClickTrack >= 0 && rClickTrack < static_cast<int>(patForRClick->tracks.size()) &&
+                (!clipEnvRClick->volumeEnvelope.empty() || !clipEnvRClick->panEnvelope.empty()))
+            {
+                const double sp = std::max(0.1, clipSpan(*clipEnvRClick, rClickTrack));
+                const auto bounds = clipWaveBounds(clipBounds(rClickTrack, clipEnvRClick->startStep, sp).reduced(2, 3));
+
+                for (std::size_t pi = 0; pi < clipEnvRClick->volumeEnvelope.size(); ++pi)
+                {
+                    const int px = bounds.getX() + juce::roundToInt(clipEnvRClick->volumeEnvelope[pi].position * static_cast<double>(bounds.getWidth()));
+                    const float vNorm = std::clamp(clipEnvRClick->volumeEnvelope[pi].value, 0.0f, 2.0f) * 0.5f;
+                    const int py = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - vNorm));
+                    if (std::abs(e.getPosition().x - px) <= 8 && std::abs(e.getPosition().y - py) <= 8)
+                    {
+                        auto pts = clipEnvRClick->volumeEnvelope;
+                        pts.erase(pts.begin() + static_cast<std::ptrdiff_t>(pi));
+                        if (pts.size() < 2)
+                            pts.clear();
+                        listener_.clipVolumeEnvelopeChanged(clipEnvRClick->id, std::move(pts));
+                        repaint();
+                        return;
+                    }
+                }
+
+                for (std::size_t pi = 0; pi < clipEnvRClick->panEnvelope.size(); ++pi)
+                {
+                    const int px = bounds.getX() + juce::roundToInt(clipEnvRClick->panEnvelope[pi].position * static_cast<double>(bounds.getWidth()));
+                    const float pNorm = (std::clamp(clipEnvRClick->panEnvelope[pi].value, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                    const int py = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - pNorm));
+                    if (std::abs(e.getPosition().x - px) <= 8 && std::abs(e.getPosition().y - py) <= 8)
+                    {
+                        auto pts = clipEnvRClick->panEnvelope;
+                        pts.erase(pts.begin() + static_cast<std::ptrdiff_t>(pi));
+                        if (pts.size() < 2)
+                            pts.clear();
+                        listener_.clipPanEnvelopeChanged(clipEnvRClick->id, std::move(pts));
+                        repaint();
+                        return;
+                    }
+                }
+            }
+        }
+
         if (const Clip* clip = findClipAt(e.getPosition()))
         {
             const ClipId cid = clip->id;
@@ -1605,24 +1842,6 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             volMenu.addItem(106, "-12.0 dB (25%)", true, std::abs(curGain - 0.25f) < 0.05f);
             volMenu.addItem(107, "Mute Clip (0%)", true, curGain < 0.01f);
             m.addSubMenu("Volume Gain", volMenu);
-
-            juce::PopupMenu fadeInMenu;
-            fadeInMenu.addItem(201, "None (0 steps)", true, curFadeIn < 0.01f);
-            fadeInMenu.addItem(202, "1/2 Step", true, std::abs(curFadeIn - 0.5f) < 0.1f);
-            fadeInMenu.addItem(203, "1 Step (1/16)", true, std::abs(curFadeIn - 1.0f) < 0.1f);
-            fadeInMenu.addItem(204, "2 Steps (1/8)", true, std::abs(curFadeIn - 2.0f) < 0.1f);
-            fadeInMenu.addItem(205, "4 Steps (1/4)", true, std::abs(curFadeIn - 4.0f) < 0.1f);
-            fadeInMenu.addItem(206, "8 Steps (1/2 Bar)", true, std::abs(curFadeIn - 8.0f) < 0.1f);
-            m.addSubMenu("Fade In", fadeInMenu);
-
-            juce::PopupMenu fadeOutMenu;
-            fadeOutMenu.addItem(301, "None (0 steps)", true, curFadeOut < 0.01f);
-            fadeOutMenu.addItem(302, "1/2 Step", true, std::abs(curFadeOut - 0.5f) < 0.1f);
-            fadeOutMenu.addItem(303, "1 Step (1/16)", true, std::abs(curFadeOut - 1.0f) < 0.1f);
-            fadeOutMenu.addItem(304, "2 Steps (1/8)", true, std::abs(curFadeOut - 2.0f) < 0.1f);
-            fadeOutMenu.addItem(305, "4 Steps (1/4)", true, std::abs(curFadeOut - 4.0f) < 0.1f);
-            fadeOutMenu.addItem(306, "8 Steps (1/2 Bar)", true, std::abs(curFadeOut - 8.0f) < 0.1f);
-            m.addSubMenu("Fade Out", fadeOutMenu);
 
             juce::PopupMenu transposeMenu;
             transposeMenu.addItem(401, "Transpose Up (+1 st) [+]", true, false);
@@ -2019,26 +2238,20 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             }
         }
 
-        // Top 15px of ruler: Loop bar and handles
+        // Top 15px of ruler: Paint loop region directly (or drag start/end edge handles)
         if (my <= 15)
         {
-            if (std::abs(mx - startX) <= 12)
+            if (std::abs(mx - startX) <= 8)
             {
                 rulerDragMode_ = RulerDragMode::ResizeStart;
             }
-            else if (std::abs(mx - endX) <= 12)
+            else if (std::abs(mx - endX) <= 8)
             {
                 rulerDragMode_ = RulerDragMode::ResizeEnd;
             }
-            else if (mx > startX && mx < endX)
-            {
-                rulerDragMode_ = RulerDragMode::MoveRegion;
-                rulerDragRegionAnchorStep_ = snapStep;
-                rulerDragOriginalStart_ = loopStartStep_;
-                rulerDragOriginalEnd_ = loopEndStep_;
-            }
             else
             {
+                // Paint / sweep a fresh loop region directly from the clicked step
                 rulerDragMode_ = RulerDragMode::SetRegion;
                 rulerDragRegionAnchorStep_ = snapStep;
                 loopStartStep_ = std::min(snapStep, std::max(0, totalSteps - snapUnit));
@@ -2128,6 +2341,7 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
         paintAnchorStep_ = static_cast<double>(std::max(0, step));
         paintCurrentStart_ = paintAnchorStep_;
         paintCurrentLen_ = static_cast<double>(snapUnit);
+        drag_.items.clear();
         drag_.active = true;
         drag_.mode = DragMode::PaintClip;
         drag_.startMousePos = e.getPosition();
@@ -2171,22 +2385,65 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                     return;
                 }
             }
+
+            // Left-click directly on the Track Automation Envelope curve -> add a new point and start dragging it
+            if (!pts.empty())
+            {
+                const double clickStep = std::max(0.0, xToStep(e.getPosition().x));
+                const float curVal = evaluateEnvelope(pts, clickStep,
+                                                      trkObj.visibleEnvelope == TrackEnvelopeType::Volume ? 1.0f : 0.0f);
+                float curNorm = 0.5f;
+                if (trkObj.visibleEnvelope == TrackEnvelopeType::Volume)
+                    curNorm = std::clamp(curVal, 0.0f, 2.0f) * 0.5f;
+                else if (trkObj.visibleEnvelope == TrackEnvelopeType::Pan)
+                    curNorm = (std::clamp(curVal, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                else
+                    curNorm = std::clamp(curVal, 0.0f, 1.0f);
+                const int curveY = laneY + 4 + juce::roundToInt(static_cast<float>(trackHeight_ - 8) * (1.0f - curNorm));
+                if (std::abs(e.getPosition().y - curveY) <= 7)
+                {
+                    auto newPts = pts;
+                    newPts.push_back({clickStep, curVal, EnvelopeCurve::Linear});
+                    std::sort(newPts.begin(), newPts.end(), [](const EnvelopePoint& a, const EnvelopePoint& b) {
+                        return a.position < b.position;
+                    });
+                    int insertedIdx = 0;
+                    for (std::size_t k = 0; k < newPts.size(); ++k)
+                    {
+                        if (std::abs(newPts[k].position - clickStep) < 1e-6 && std::abs(newPts[k].value - curVal) < 1e-6f)
+                        {
+                            insertedIdx = static_cast<int>(k);
+                            break;
+                        }
+                    }
+                    autoDragTrack_ = track;
+                    autoDragPointIdx_ = insertedIdx;
+                    autoDragType_ = trkObj.visibleEnvelope;
+                    autoDragPoints_ = newPts;
+                    drag_.active = true;
+                    drag_.mode = DragMode::TrackAutoNode;
+                    drag_.startMousePos = e.getPosition();
+                    listener_.trackAutomationChanged(track, trkObj.visibleEnvelope, newPts);
+                    repaint();
+                    return;
+                }
+            }
         }
     }
 
-    // Check if clicking on a Clip Multi-Point Envelope node
+    // Check if clicking on a Clip Multi-Point Envelope node OR directly on its curve (left-click adds a point)
     if (const Clip* clipForEnv = findClipAt(e.getPosition()))
     {
         if ((!clipForEnv->volumeEnvelope.empty() || !clipForEnv->panEnvelope.empty()) && track >= 0 && track < numTracks)
         {
             const double sp = std::max(0.1, clipSpan(*clipForEnv, track));
-            const auto bounds = clipBounds(track, clipForEnv->startStep, sp).reduced(2, 3);
+            const auto bounds = clipWaveBounds(clipBounds(track, clipForEnv->startStep, sp).reduced(2, 3));
             for (std::size_t pi = 0; pi < clipForEnv->volumeEnvelope.size(); ++pi)
             {
-                const int px = bounds.getX() + juce::roundToInt(clipForEnv->volumeEnvelope[pi].position * bounds.getWidth());
+                const int px = bounds.getX() + juce::roundToInt(clipForEnv->volumeEnvelope[pi].position * static_cast<double>(bounds.getWidth()));
                 const float vNorm = std::clamp(clipForEnv->volumeEnvelope[pi].value, 0.0f, 2.0f) * 0.5f;
-                const int py = bounds.getY() + juce::roundToInt(bounds.getHeight() * (1.0f - vNorm));
-                if (std::abs(e.getPosition().x - px) <= 6 && std::abs(e.getPosition().y - py) <= 6)
+                const int py = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - vNorm));
+                if (std::abs(e.getPosition().x - px) <= 7 && std::abs(e.getPosition().y - py) <= 7)
                 {
                     envDragClipId_ = clipForEnv->id;
                     envDragTrack_ = track;
@@ -2202,10 +2459,10 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             }
             for (std::size_t pi = 0; pi < clipForEnv->panEnvelope.size(); ++pi)
             {
-                const int px = bounds.getX() + juce::roundToInt(clipForEnv->panEnvelope[pi].position * bounds.getWidth());
+                const int px = bounds.getX() + juce::roundToInt(clipForEnv->panEnvelope[pi].position * static_cast<double>(bounds.getWidth()));
                 const float pNorm = (std::clamp(clipForEnv->panEnvelope[pi].value, -1.0f, 1.0f) + 1.0f) * 0.5f;
-                const int py = bounds.getY() + juce::roundToInt(bounds.getHeight() * (1.0f - pNorm));
-                if (std::abs(e.getPosition().x - px) <= 6 && std::abs(e.getPosition().y - py) <= 6)
+                const int py = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - pNorm));
+                if (std::abs(e.getPosition().x - px) <= 7 && std::abs(e.getPosition().y - py) <= 7)
                 {
                     envDragClipId_ = clipForEnv->id;
                     envDragTrack_ = track;
@@ -2216,6 +2473,136 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                     drag_.mode = DragMode::EnvelopeNode;
                     drag_.startMousePos = e.getPosition();
                     repaint();
+                    return;
+                }
+            }
+
+            // Left-click directly on the Volume or Pan envelope line -> add a new point and immediately drag it
+            const double normPos = std::clamp(static_cast<double>(e.getPosition().x - bounds.getX()) /
+                                                  std::max(1.0, static_cast<double>(bounds.getWidth())),
+                                              0.01, 0.99);
+            if (!clipForEnv->volumeEnvelope.empty())
+            {
+                const float curVol = evaluateEnvelope(clipForEnv->volumeEnvelope, normPos, clipForEnv->gain);
+                const float vNorm = std::clamp(curVol, 0.0f, 2.0f) * 0.5f;
+                const int curveY = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - vNorm));
+                if (std::abs(e.getPosition().y - curveY) <= 7)
+                {
+                    auto newPts = clipForEnv->volumeEnvelope;
+                    newPts.push_back({normPos, curVol, EnvelopeCurve::Linear});
+                    std::sort(newPts.begin(), newPts.end(), [](const EnvelopePoint& a, const EnvelopePoint& b) {
+                        return a.position < b.position;
+                    });
+                    int insertedIdx = 0;
+                    for (std::size_t k = 0; k < newPts.size(); ++k)
+                    {
+                        if (std::abs(newPts[k].position - normPos) < 1e-6 && std::abs(newPts[k].value - curVol) < 1e-6f)
+                        {
+                            insertedIdx = static_cast<int>(k);
+                            break;
+                        }
+                    }
+                    envDragClipId_ = clipForEnv->id;
+                    envDragTrack_ = track;
+                    envDragPointIdx_ = insertedIdx;
+                    envDragIsPan_ = false;
+                    envDragPoints_ = newPts;
+                    drag_.active = true;
+                    drag_.mode = DragMode::EnvelopeNode;
+                    drag_.startMousePos = e.getPosition();
+                    listener_.clipVolumeEnvelopeChanged(clipForEnv->id, newPts);
+                    repaint();
+                    return;
+                }
+            }
+            if (!clipForEnv->panEnvelope.empty())
+            {
+                const float curPan = evaluateEnvelope(clipForEnv->panEnvelope, normPos, 0.0f);
+                const float pNorm = (std::clamp(curPan, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                const int curveY = bounds.getY() + 3 + juce::roundToInt(static_cast<float>(bounds.getHeight() - 6) * (1.0f - pNorm));
+                if (std::abs(e.getPosition().y - curveY) <= 7)
+                {
+                    auto newPts = clipForEnv->panEnvelope;
+                    newPts.push_back({normPos, curPan, EnvelopeCurve::Linear});
+                    std::sort(newPts.begin(), newPts.end(), [](const EnvelopePoint& a, const EnvelopePoint& b) {
+                        return a.position < b.position;
+                    });
+                    int insertedIdx = 0;
+                    for (std::size_t k = 0; k < newPts.size(); ++k)
+                    {
+                        if (std::abs(newPts[k].position - normPos) < 1e-6 && std::abs(newPts[k].value - curPan) < 1e-6f)
+                        {
+                            insertedIdx = static_cast<int>(k);
+                            break;
+                        }
+                    }
+                    envDragClipId_ = clipForEnv->id;
+                    envDragTrack_ = track;
+                    envDragPointIdx_ = insertedIdx;
+                    envDragIsPan_ = true;
+                    envDragPoints_ = newPts;
+                    drag_.active = true;
+                    drag_.mode = DragMode::EnvelopeNode;
+                    drag_.startMousePos = e.getPosition();
+                    listener_.clipPanEnvelopeChanged(clipForEnv->id, newPts);
+                    repaint();
+                    return;
+                }
+            }
+        }
+    }
+
+    // Click directly on a Clip's bottom-bar Pitch Box -> open quick Transpose / Pitch menu
+    if (editTool_ == EditTool::Select && !e.mods.isPopupMenu())
+    {
+        if (const Clip* clipForPitch = findClipAt(e.getPosition()))
+        {
+            if (track >= 0 && track < numTracks)
+            {
+                const double sp = std::max(0.1, clipSpan(*clipForPitch, track));
+                const auto cBounds = clipBounds(track, clipForPitch->startStep, sp).reduced(2, 3);
+                const auto pBox = clipPitchBoxBounds(cBounds);
+                if (!pBox.isEmpty() && pBox.expanded(2, 2).contains(e.getPosition()))
+                {
+                    const ClipId cid = clipForPitch->id;
+                    const int curTranspose = clipForPitch->transposeSemitones;
+                    if (!isClipSelected(cid))
+                    {
+                        setSelectedClip(cid);
+                        listener_.clipClicked(cid);
+                    }
+
+                    juce::PopupMenu pm;
+                    pm.addItem(101, "Transpose Up (+1 st)");
+                    pm.addItem(102, "Transpose Down (-1 st)");
+                    pm.addSeparator();
+                    for (int st = 12; st >= -12; --st)
+                    {
+                        const juce::String lbl = (st == 0)
+                                                     ? "0 st (Original)"
+                                                     : juce::String::formatted("%+d st", st);
+                        pm.addItem(200 + st + 12, lbl, true, curTranspose == st);
+                    }
+
+                    const auto screenBox = localAreaToGlobal(pBox);
+                    pm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(screenBox),
+                                     [this, cid](int res)
+                                     {
+                                         if (res == 0)
+                                             return;
+                                         const auto targets = (isClipSelected(cid) && selectedClips_.size() > 1)
+                                                                  ? selectedClips_
+                                                                  : std::vector<ClipId>{cid};
+                                         if (res == 101)
+                                             listener_.clipsTransposeDelta(targets, 1);
+                                         else if (res == 102)
+                                             listener_.clipsTransposeDelta(targets, -1);
+                                         else if (res >= 200 && res <= 224)
+                                         {
+                                             const int targetSt = (res - 200) - 12;
+                                             listener_.clipsTransposeSet(targets, targetSt);
+                                         }
+                                     });
                     return;
                 }
             }
@@ -2804,7 +3191,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
             if (envDragPointIdx_ >= 0 && envDragPointIdx_ < static_cast<int>(envDragPoints_.size()))
             {
                 const double sp = std::max(0.1, clipSpan(*c, envDragTrack_));
-                const auto bounds = clipBounds(envDragTrack_, c->startStep, sp).reduced(2, 3);
+                const auto bounds = clipWaveBounds(clipBounds(envDragTrack_, c->startStep, sp).reduced(2, 3));
                 double newPos = (static_cast<double>(e.getPosition().x - bounds.getX()) / std::max(1, bounds.getWidth()));
                 if (envDragPointIdx_ == 0)
                     newPos = 0.0;
@@ -2814,8 +3201,8 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
                     newPos = std::clamp(newPos, envDragPoints_[static_cast<std::size_t>(envDragPointIdx_ - 1)].position + 0.01,
                                         envDragPoints_[static_cast<std::size_t>(envDragPointIdx_ + 1)].position - 0.01);
 
-                const float yNorm = 1.0f - std::clamp(static_cast<float>(e.getPosition().y - bounds.getY()) /
-                                                          static_cast<float>(std::max(1, bounds.getHeight())),
+                const float yNorm = 1.0f - std::clamp(static_cast<float>(e.getPosition().y - (bounds.getY() + 3)) /
+                                                          static_cast<float>(std::max(1, bounds.getHeight() - 6)),
                                                       0.0f, 1.0f);
                 envDragPoints_[static_cast<std::size_t>(envDragPointIdx_)].position = newPos;
                 if (envDragIsPan_)

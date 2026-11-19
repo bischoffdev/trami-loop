@@ -28,7 +28,7 @@ public:
         }
 
         // Start with an empty project: 1 default pattern and 1 dedicated arranger track
-        const auto defaultPattern = song_.addPattern("Pattern 1", 1);
+        const auto defaultPattern = song_.addPattern("Unnamed Song", 1);
         song_.setArrangerTrackPattern(0, defaultPattern);
 
         mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_, song_, stretchCache_);

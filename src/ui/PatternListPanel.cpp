@@ -25,10 +25,10 @@ PatternListPanel::PatternListPanel(Song& song, PatternId activePattern,
 {
     titleLabel_.setFont(Typography::bold(13.0f));
     titleLabel_.setColour(juce::Label::textColourId, Palette::text);
-    titleLabel_.setText("PATTERNS", juce::dontSendNotification);
+    titleLabel_.setText("SONGS", juce::dontSendNotification);
     addAndMakeVisible(titleLabel_);
 
-    newPatternButton_.setTooltip("Create a new empty pattern");
+    newPatternButton_.setTooltip("Create a new empty song");
     newPatternButton_.onClick = [this]() { addNewPattern(); };
     addAndMakeVisible(newPatternButton_);
 
@@ -78,7 +78,7 @@ void PatternListPanel::updateFromModel()
         row.nameLabel->setFont(Typography::bold(12.5f));
         row.nameLabel->setColour(juce::Label::textColourId, Palette::text);
         row.nameLabel->setEditable(false, true, false);
-        row.nameLabel->setTooltip("Double-click to rename pattern");
+        row.nameLabel->setTooltip("Double-click to rename song");
         row.nameLabel->onTextChange = [this, id = p.id, lbl = row.nameLabel.get()]() {
             if (lbl != nullptr)
             {
@@ -106,7 +106,7 @@ void PatternListPanel::updateFromModel()
 
         // Rename / edit button
         row.editButton = std::make_unique<IconButton>("Ren", IconButton::Icon::Edit, "");
-        row.editButton->setTooltip("Rename this pattern");
+        row.editButton->setTooltip("Rename this song");
         row.editButton->onClick = [lbl = row.nameLabel.get()]() {
             if (lbl != nullptr)
                 lbl->showEditor();
@@ -115,13 +115,13 @@ void PatternListPanel::updateFromModel()
 
         // Duplicate button
         row.duplicateButton = std::make_unique<IconButton>("Dup", IconButton::Icon::Duplicate, "");
-        row.duplicateButton->setTooltip("Duplicate this pattern");
+        row.duplicateButton->setTooltip("Duplicate this song");
         row.duplicateButton->onClick = [this, id = p.id]() { duplicatePattern(id); };
         contentComp_->addAndMakeVisible(row.duplicateButton.get());
 
         // Delete button
         row.deleteButton = std::make_unique<IconButton>("Del", IconButton::Icon::Delete, "");
-        row.deleteButton->setTooltip("Delete this pattern");
+        row.deleteButton->setTooltip("Delete this song");
         row.deleteButton->setEnabled(patterns.size() > 1);
         row.deleteButton->onClick = [this, id = p.id]() { deletePattern(id); };
         contentComp_->addAndMakeVisible(row.deleteButton.get());
@@ -233,9 +233,9 @@ void PatternListPanel::contentMouseDown(const juce::MouseEvent& e)
             if (e.mods.isPopupMenu())
             {
                 juce::PopupMenu m;
-                m.addItem(1, "Rename Pattern");
-                m.addItem(2, "Duplicate Pattern");
-                m.addItem(3, "Delete Pattern", song_.patterns().size() > 1);
+                m.addItem(1, "Rename Song");
+                m.addItem(2, "Duplicate Song");
+                m.addItem(3, "Delete Song", song_.patterns().size() > 1);
                 m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(contentComp_.get()).withTargetScreenArea(
                                     juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
                                 [this, id = row.id, lbl = row.nameLabel.get()](int res) {
@@ -330,7 +330,7 @@ void PatternListPanel::startPatternDrag(PatternId id, const juce::String& name)
 void PatternListPanel::addNewPattern()
 {
     const int nextNum = static_cast<int>(song_.patterns().size()) + 1;
-    const auto newId = song_.addPattern("Pattern " + std::to_string(nextNum), 1);
+    const auto newId = song_.addPattern("Song " + std::to_string(nextNum), 1);
     setActivePattern(newId);
     updateFromModel();
 
