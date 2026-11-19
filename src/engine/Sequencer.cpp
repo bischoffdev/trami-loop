@@ -903,8 +903,8 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         const bool validTrack = (voice.track >= 0 && voice.track < kMaxTracks);
         if (validTrack && !trackUsed[static_cast<std::size_t>(voice.track)])
         {
-            std::fill_n(scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
-            std::fill_n(scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data(), n, 0.0f);
+            std::fill_n(scratch_->trackL(voice.track), n, 0.0f);
+            std::fill_n(scratch_->trackR(voice.track), n, 0.0f);
             trackUsed[static_cast<std::size_t>(voice.track)] = true;
         }
 
@@ -917,10 +917,10 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 
         float* destL = useClipFx
             ? scratch_->clipBufL.data()
-            : (validTrack ? scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data() : left);
+            : (validTrack ? scratch_->trackL(voice.track) : left);
         float* destR = useClipFx
             ? scratch_->clipBufR.data()
-            : (validTrack ? scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data() : right);
+            : (validTrack ? scratch_->trackR(voice.track) : right);
 
         for (int i = voice.startDelay; i < n; ++i)
         {
@@ -970,8 +970,8 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         if (useClipFx)
         {
             pluginProc->processClip(voice.clipId, scratch_->clipBufL.data(), scratch_->clipBufR.data(), n);
-            float* trkL = validTrack ? scratch_->trackBufL[static_cast<std::size_t>(voice.track)].data() : left;
-            float* trkR = validTrack ? scratch_->trackBufR[static_cast<std::size_t>(voice.track)].data() : right;
+            float* trkL = validTrack ? scratch_->trackL(voice.track) : left;
+            float* trkR = validTrack ? scratch_->trackR(voice.track) : right;
             for (int i = 0; i < n; ++i)
             {
                 trkL[i] += scratch_->clipBufL[static_cast<std::size_t>(i)];
@@ -991,8 +991,8 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
             continue;
         }
 
-        float* tL = scratch_->trackBufL[idx].data();
-        float* tR = scratch_->trackBufR[idx].data();
+        float* tL = scratch_->trackL(t);
+        float* tR = scratch_->trackR(t);
         if (pluginProc != nullptr)
             pluginProc->processTrack(t, tL, tR, n);
 

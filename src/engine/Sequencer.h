@@ -214,14 +214,32 @@ private:
     std::atomic<double> previewProgress_{0.0};
 
     // Pre-allocated audio-thread scratch buffers for per-clip & per-track plugin processing + metering.
-    // Heap-allocated once in the constructor so Sequencer stays small on the stack (Windows has a 1 MB stack).
+    // Flat heap-allocated vectors (sizeof(ScratchBuffers) ~= 96 bytes) so MSVC never materializes
+    // a 2 MB aggregate temporary on the 1 MB Windows stack inside make_unique<ScratchBuffers>().
     static constexpr int kMaxScratchSamples = 4096;
     struct ScratchBuffers
     {
-        std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufL{};
-        std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufR{};
-        std::array<float, kMaxScratchSamples> clipBufL{};
-        std::array<float, kMaxScratchSamples> clipBufR{};
+        std::vector<float> trackBufL;
+        std::vector<float> trackBufR;
+        std::vector<float> clipBufL;
+        std::vector<float> clipBufR;
+
+        ScratchBuffers()
+            : trackBufL(static_cast<std::size_t>(kMaxTracks) * kMaxScratchSamples, 0.0f)
+            , trackBufR(static_cast<std::size_t>(kMaxTracks) * kMaxScratchSamples, 0.0f)
+            , clipBufL(static_cast<std::size_t>(kMaxScratchSamples), 0.0f)
+            , clipBufR(static_cast<std::size_t>(kMaxScratchSamples), 0.0f)
+        {
+        }
+
+        float* trackL(int track) noexcept
+        {
+            return trackBufL.data() + static_cast<std::size_t>(track) * kMaxScratchSamples;
+        }
+        float* trackR(int track) noexcept
+        {
+            return trackBufR.data() + static_cast<std::size_t>(track) * kMaxScratchSamples;
+        }
     };
     std::unique_ptr<ScratchBuffers> scratch_;
     std::array<std::atomic<float>, kMaxTracks> trackPeakL_{};
