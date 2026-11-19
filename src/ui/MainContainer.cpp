@@ -80,11 +80,6 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
 
     engine_.sequencer().setMasterVolume(song_.masterVolume());
 
-    masterChannelStrip_ = std::make_unique<MasterChannelStrip>(song_, engine_, [this]() {
-        pushUndoState();
-    });
-    addAndMakeVisible(masterChannelStrip_.get());
-
     addAndMakeVisible(transportBar_.get());
     addAndMakeVisible(toastOverlay_);
 
@@ -198,6 +193,7 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
 
     engine_.sequencer().requestPlaying(false);
     engine_.sequencer().requestRewind();
+    engine_.pluginHost().clearAllChains();
 
     song_ = Song{};
     const auto songPattern = song_.addPattern(dir.stem().string().empty() ? "Unnamed Song" : dir.stem().string(), 1);
@@ -224,6 +220,12 @@ void MainContainer::createNewProject()
 
 void MainContainer::saveProjectDialog(bool promptForNewLocation)
 {
+    if (!song_.patterns().empty())
+    {
+        if (auto* pat = song_.findPattern(song_.patterns().front().id))
+            engine_.pluginHost().captureStatesIntoPattern(*pat);
+    }
+
     if (!promptForNewLocation && currentProjectDir_.has_value())
     {
         if (ProjectSerializer::saveProject(song_, stretchCache_, *currentProjectDir_))
@@ -511,9 +513,6 @@ void MainContainer::updateAllViews()
             transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
         transportBar_->updateDisplay();
     }
-
-    if (masterChannelStrip_ != nullptr)
-        masterChannelStrip_->updateFromModel();
 }
 
 bool MainContainer::keyPressed(const juce::KeyPress& key)
@@ -565,8 +564,7 @@ void MainContainer::paint(juce::Graphics& g)
     g.fillAll(Palette::background);
 
     constexpr int kTopBarHeight = 44;
-    const int masterW = MasterChannelStrip::kWidth;
-    const int mainW = getWidth() - masterW;
+    const int mainW = getWidth();
 
     // Brushed dark-metallic top toolbar gradient (matching Screenshot 2)
     juce::ColourGradient topGrad(juce::Colour(0xff46464d), 0.0f, 0.0f,
@@ -593,8 +591,7 @@ void MainContainer::resized()
 {
     constexpr int kTopBarHeight = 44;
     constexpr int kBottomBarHeight = 48;
-    constexpr int masterW = MasterChannelStrip::kWidth;
-    const int mainW = std::max(0, getWidth() - masterW);
+    const int mainW = getWidth();
 
     auto topArea = juce::Rectangle<int>(0, 0, mainW, kTopBarHeight).reduced(10, 8);
     topArea.removeFromLeft(114);
@@ -625,10 +622,6 @@ void MainContainer::resized()
 
     if (patternView_ != nullptr)
         patternView_->setBounds(0, contentY, mainW, contentH);
-
-    // Master volume indicator and control along the right side of the application
-    if (masterChannelStrip_ != nullptr)
-        masterChannelStrip_->setBounds(mainW, 0, masterW, getHeight());
 
     // Toast notification overlay (floating above transport bar)
     const int toastW = std::clamp(320, 200, std::max(200, mainW - 40));

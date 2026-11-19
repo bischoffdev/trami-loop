@@ -66,6 +66,7 @@ struct PlaybackEvent
     std::int64_t fadeOutSamples = 0;
     std::uint32_t clipId = 0;
     bool reversed = false;
+    bool hasClipFx = false;
     float fxSend = 0.0f;
     std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> volEnv{};
     int volEnvCount = 0;
@@ -94,6 +95,9 @@ struct PlaybackSnapshot
     inline static constexpr int kMaxTrackMixes = 64;
     std::array<TrackMixSnapshot, kMaxTrackMixes> trackMixes{};
     bool hasTrackMixes = false;
+
+    std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> masterVolEnv{};
+    int masterVolEnvCount = 0;
 
     /// Owns the audio referenced by events, so it outlives the snapshot's use.
     std::vector<std::shared_ptr<const AudioData>> keepAlive;

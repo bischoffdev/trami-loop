@@ -12,6 +12,16 @@
 namespace trami
 {
 
+/// Pure-C++ hook for hosting external VST3 / AU plugin chains (no built-in effects).
+class AudioPluginProcessor
+{
+public:
+    virtual ~AudioPluginProcessor() = default;
+    virtual void processClip(std::uint32_t clipId, float* left, float* right, int numSamples) noexcept = 0;
+    virtual void processTrack(int trackIndex, float* left, float* right, int numSamples) noexcept = 0;
+    virtual void processMaster(float* left, float* right, int numSamples) noexcept = 0;
+};
+
 /// Real-time sequencer. Triggers snapshot events at their exact sample
 /// position and mixes the resulting voices, dedicated preview voice, and metronome.
 ///
@@ -97,6 +107,15 @@ public:
     OutputLevels outputLevels() const noexcept;
     void resetClipped() noexcept { clipOccurred_.store(false, std::memory_order_relaxed); }
 
+    /// Live per-track stereo peak levels [0.0 .. 2.0+] for track header meters.
+    std::pair<float, float> trackPeakLevels(int track) const noexcept;
+
+    /// Attaches an external VST3 / AU plugin host processor (nullptr to disable).
+    void setPluginProcessor(AudioPluginProcessor* processor) noexcept
+    {
+        pluginProcessor_.store(processor, std::memory_order_release);
+    }
+
     /// Called on the message thread to safely delete retired preview buffers.
     void collectPreviewGarbage();
 
@@ -127,6 +146,7 @@ private:
         std::int64_t fadeOutSamples = 0;
         std::uint32_t clipId = 0;
         bool reversed = false;
+        bool hasClipFx = false;
         float fxSend = 0.0f;
         std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> volEnv{};
         int volEnvCount = 0;
@@ -193,10 +213,15 @@ private:
     std::atomic<bool> previewPlaying_{false};
     std::atomic<double> previewProgress_{0.0};
 
-    // Stereo Aux FX bus (stereo feedback delay)
-    std::vector<float> fxDelayL_;
-    std::vector<float> fxDelayR_;
-    std::size_t fxWriteIdx_ = 0;
+    // Pre-allocated audio-thread scratch buffers for per-clip & per-track plugin processing + metering
+    static constexpr int kMaxScratchSamples = 4096;
+    std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufL_{};
+    std::array<std::array<float, kMaxScratchSamples>, kMaxTracks> trackBufR_{};
+    std::array<float, kMaxScratchSamples> clipBufL_{};
+    std::array<float, kMaxScratchSamples> clipBufR_{};
+    std::array<std::atomic<float>, kMaxTracks> trackPeakL_{};
+    std::array<std::atomic<float>, kMaxTracks> trackPeakR_{};
+    std::atomic<AudioPluginProcessor*> pluginProcessor_{nullptr};
 
     // Lock-free SPSC ring buffer for retired preview items (audio thread -> message thread)
     std::array<PreviewItem*, kRetiredQueueCapacity> retiredPreviews_{};

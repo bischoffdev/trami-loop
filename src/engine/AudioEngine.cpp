@@ -7,6 +7,7 @@ AudioEngine::AudioEngine()
     : sampleRate_(44100.0)
     , sequencer_(std::make_unique<Sequencer>(exchange_, sampleRate_))
 {
+    sequencer_->setPluginProcessor(&pluginHost_);
 }
 
 AudioEngine::~AudioEngine()
@@ -14,6 +15,10 @@ AudioEngine::~AudioEngine()
     stopTimer();
     deviceManager_.removeAudioCallback(this);
     deviceManager_.closeAudioDevice();
+    if (sequencer_ != nullptr)
+        sequencer_->setPluginProcessor(nullptr);
+    pluginHost_.closeAllEditors();
+    pluginHost_.clearAllChains();
     sequencer_.reset();
 }
 
@@ -32,6 +37,8 @@ juce::String AudioEngine::start()
 
     sampleRate_ = device->getCurrentSampleRate();
     sequencer_ = std::make_unique<Sequencer>(exchange_, sampleRate_);
+    sequencer_->setPluginProcessor(&pluginHost_);
+    pluginHost_.prepareToPlay(sampleRate_, device->getCurrentBufferSizeSamples());
     deviceManager_.addAudioCallback(this);
     startTimerHz(10);
     return {};
@@ -47,6 +54,13 @@ int AudioEngine::inputLatencySamples() const noexcept
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
     jassert(sampleRate_ == 0.0 || juce::approximatelyEqual(device->getCurrentSampleRate(), sampleRate_));
+    if (device != nullptr)
+        pluginHost_.prepareToPlay(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples());
+}
+
+void AudioEngine::audioDeviceStopped()
+{
+    pluginHost_.releaseResources();
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs, float* const* outputs,

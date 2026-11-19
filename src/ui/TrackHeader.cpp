@@ -207,6 +207,7 @@ TrackHeaderList::TrackHeaderList(Song& song, PatternId patternId, MixChangedCall
 
 TrackHeaderList::~TrackHeaderList()
 {
+    stopTimer();
     for (auto& c : controls_)
     {
         if (c.volumeSlider != nullptr)
@@ -214,6 +215,43 @@ TrackHeaderList::~TrackHeaderList()
         if (c.panSlider != nullptr)
             c.panSlider->setLookAndFeel(nullptr);
     }
+}
+
+void TrackHeaderList::setTrackPeakProvider(TrackPeakProvider cb)
+{
+    trackPeakProvider_ = std::move(cb);
+    if (trackPeakProvider_)
+        startTimerHz(30);
+    else
+        stopTimer();
+}
+
+void TrackHeaderList::timerCallback()
+{
+    if (!trackPeakProvider_)
+        return;
+    const int n = static_cast<int>(controls_.size());
+    if (static_cast<int>(peakL_.size()) != n)
+    {
+        peakL_.assign(static_cast<std::size_t>(n), 0.0f);
+        peakR_.assign(static_cast<std::size_t>(n), 0.0f);
+    }
+    bool changed = false;
+    for (int t = 0; t < n; ++t)
+    {
+        auto [curL, curR] = trackPeakProvider_(t);
+        const float nextL = std::max(curL, peakL_[static_cast<std::size_t>(t)] * 0.80f);
+        const float nextR = std::max(curR, peakR_[static_cast<std::size_t>(t)] * 0.80f);
+        if (std::abs(nextL - peakL_[static_cast<std::size_t>(t)]) > 0.002f ||
+            std::abs(nextR - peakR_[static_cast<std::size_t>(t)]) > 0.002f)
+        {
+            peakL_[static_cast<std::size_t>(t)] = nextL < 0.001f ? 0.0f : nextL;
+            peakR_[static_cast<std::size_t>(t)] = nextR < 0.001f ? 0.0f : nextR;
+            changed = true;
+        }
+    }
+    if (changed)
+        repaint();
 }
 
 void TrackHeaderList::setPattern(PatternId patternId)
@@ -274,6 +312,16 @@ void TrackHeaderList::updateFromModel()
                 }
             };
             addAndMakeVisible(c.nameLabel.get());
+
+            c.fxButton = std::make_unique<juce::TextButton>("fx");
+            c.fxButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
+            c.fxButton->setColour(juce::TextButton::textColourOffId, Palette::textDim);
+            c.fxButton->setTooltip("Track " + juce::String(t + 1) + " VST3/AU FX Rack");
+            c.fxButton->onClick = [this, t]() {
+                if (onTrackFx_)
+                    onTrackFx_(t);
+            };
+            addAndMakeVisible(c.fxButton.get());
 
             c.propsButton = std::make_unique<juce::TextButton>("P");
             c.propsButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.10f));
@@ -489,6 +537,19 @@ void TrackHeaderList::updateFromModel()
             c.soloButton->setToggleState(track.solo, juce::dontSendNotification);
             c.armButton->setToggleState(track.armed, juce::dontSendNotification);
 
+            if (c.fxButton != nullptr)
+            {
+                const bool hasFx = !track.fxChain.empty();
+                c.fxButton->setColour(juce::TextButton::buttonColourId,
+                                      hasFx ? juce::Colour(0xff06b6d4).withAlpha(0.32f)
+                                            : Palette::surface.brighter(0.08f));
+                c.fxButton->setColour(juce::TextButton::textColourOffId,
+                                      hasFx ? juce::Colour(0xff22d3ee) : Palette::textDim);
+                c.fxButton->setTooltip("Track " + juce::String(t + 1) + " VST3/AU FX Rack (" +
+                                       juce::String(track.fxChain.size()) + " plugin" +
+                                       (track.fxChain.size() == 1 ? "" : "s") + ")");
+            }
+
             const SampleKind kind = song_.patternTrackKind(patternId_, t);
             if (kind == SampleKind::Loop)
             {
@@ -630,6 +691,42 @@ void TrackHeaderList::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff16161a));
         g.drawHorizontalLine(y + trackHeight_ - 1, 0.0f, static_cast<float>(getWidth()));
 
+        // Per-Track Live Stereo Peak Meter bar along the bottom of the track header
+        {
+            const float meterX = static_cast<float>(kStripWidth + 8);
+            const float meterW = std::max(24.0f, static_cast<float>(getWidth() - kStripWidth - 16));
+            const float meterY = static_cast<float>(y + trackHeight_ - 12);
+            const float chanH = 3.5f;
+            const float gapH = 1.5f;
+
+            // Dark recessed meter trough
+            g.setColour(juce::Colour(0xff111115));
+            g.fillRoundedRectangle(meterX, meterY - 1.0f, meterW, chanH * 2.0f + gapH + 2.0f, 2.0f);
+
+            const float lvL = (t < static_cast<int>(peakL_.size())) ? peakL_[static_cast<std::size_t>(t)] : 0.0f;
+            const float lvR = (t < static_cast<int>(peakR_.size())) ? peakR_[static_cast<std::size_t>(t)] : 0.0f;
+
+            auto drawChannelMeter = [&](float cy, float level) {
+                if (level <= 0.001f)
+                    return;
+                // Convert linear peak to perceptual dB scale (-48dB .. +3dB)
+                const float db = 20.0f * std::log10(std::max(1e-5f, level));
+                const float norm = std::clamp((db + 48.0f) / 51.0f, 0.0f, 1.0f);
+                const float fillW = meterW * norm;
+                if (fillW < 1.0f)
+                    return;
+
+                juce::ColourGradient grad(juce::Colour(0xff22c55e), meterX, cy,
+                                          juce::Colour(0xffef4444), meterX + meterW, cy, false);
+                grad.addColour(0.68, juce::Colour(0xff84cc16));
+                grad.addColour(0.84, juce::Colour(0xfff59e0b));
+                g.setGradientFill(grad);
+                g.fillRect(meterX + 1.0f, cy, std::max(1.0f, fillW - 2.0f), chanH);
+            };
+            drawChannelMeter(meterY, lvL);
+            drawChannelMeter(meterY + chanH + gapH, lvR);
+        }
+
         // Drag hover highlight
         if (dragHoverTrack_ == t)
         {
@@ -671,11 +768,13 @@ void TrackHeaderList::resized()
         const int y = PatternGrid::kRulerHeight + t * trackHeight_;
         auto& c = controls_[static_cast<std::size_t>(t)];
 
-        // Top row: Clean bold track name + Props + Type + Delete
+        // Top row: Clean bold track name + FX + Props + Type + Delete
         const int nameX = kStripWidth + 8;
-        const int rightBtnsW = 104;
+        const int rightBtnsW = 132;
         const int nameW = std::max(40, getWidth() - nameX - rightBtnsW);
         c.nameLabel->setBounds(nameX, y + 3, nameW, 20);
+        if (c.fxButton != nullptr)
+            c.fxButton->setBounds(getWidth() - 130, y + 3, 26, 19);
         if (c.propsButton != nullptr)
             c.propsButton->setBounds(getWidth() - 102, y + 3, 22, 19);
         if (c.typeButton != nullptr)
@@ -683,10 +782,10 @@ void TrackHeaderList::resized()
         if (c.deleteButton != nullptr)
             c.deleteButton->setBounds(getWidth() - 24, y + 3, 20, 19);
 
-        // Bottom row (GarageBand layout keeping existing M/S/Arm icons):
-        // [ M | S ]  ( • )   [=== Volume Pill ===]   Pan [==]
+        // Middle row: [ M | S ]  ( • )   [=== Volume Pill ===]   Pan [==]
+        // Leave bottom 14px free for the live stereo peak meter bar
         const int btnY = y + 26;
-        const int btnH = std::clamp(trackHeight_ - 30, 19, 23);
+        const int btnH = std::clamp(trackHeight_ - 44, 19, 22);
 
         c.muteButton->setBounds(kStripWidth + 8, btnY, 24, btnH);
         c.soloButton->setBounds(kStripWidth + 32, btnY, 24, btnH);
@@ -760,6 +859,7 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     {
         const TrackEnvelopeType visEnv = track.visibleEnvelope;
         juce::PopupMenu m;
+        m.addItem(21, "Track FX Chain (VST3 / AU)...");
         m.addItem(20, "Track Properties (Stretch / Key / Summary)...");
         m.addItem(1, "Rename Track...");
         m.addSeparator();
@@ -783,7 +883,11 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(
                             juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)),
                         [this, t](int result) {
-                            if (result == 20 && onTrackProperties_)
+                            if (result == 21 && onTrackFx_)
+                            {
+                                onTrackFx_(t);
+                            }
+                            else if (result == 20 && onTrackProperties_)
                             {
                                 onTrackProperties_(t);
                             }

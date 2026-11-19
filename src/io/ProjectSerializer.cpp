@@ -61,6 +61,46 @@ std::vector<EnvelopePoint> deserializeEnvelope(const juce::var& v)
     }
     return pts;
 }
+
+juce::Array<juce::var> serializeFxChain(const std::vector<PluginSlot>& chain)
+{
+    juce::Array<juce::var> arr;
+    for (const auto& s : chain)
+    {
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("name", juce::String(s.name));
+        obj->setProperty("format", juce::String(s.format));
+        obj->setProperty("fileOrIdentifier", juce::String(s.fileOrIdentifier));
+        obj->setProperty("identifierString", juce::String(s.identifierString));
+        if (s.bypassed)
+            obj->setProperty("bypassed", true);
+        if (!s.stateBase64.empty())
+            obj->setProperty("stateBase64", juce::String(s.stateBase64));
+        arr.add(obj.get());
+    }
+    return arr;
+}
+
+std::vector<PluginSlot> deserializeFxChain(const juce::var& v)
+{
+    std::vector<PluginSlot> chain;
+    if (const auto* arr = v.getArray())
+    {
+        for (const auto& item : *arr)
+        {
+            PluginSlot s;
+            s.name = item.getProperty("name", "").toString().toStdString();
+            s.format = item.getProperty("format", "").toString().toStdString();
+            s.fileOrIdentifier = item.getProperty("fileOrIdentifier", "").toString().toStdString();
+            s.identifierString = item.getProperty("identifierString", "").toString().toStdString();
+            s.bypassed = static_cast<bool>(item.getProperty("bypassed", false));
+            s.stateBase64 = item.getProperty("stateBase64", "").toString().toStdString();
+            if (!s.identifierString.empty() || !s.fileOrIdentifier.empty())
+                chain.push_back(std::move(s));
+        }
+    }
+    return chain;
+}
 } // namespace
 
 bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretchCache,
@@ -73,6 +113,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     root->setProperty("version", 2);
     root->setProperty("bpm", song.bpm());
     root->setProperty("swing", song.swing());
+    root->setProperty("groovePreset", static_cast<int>(song.groovePreset()));
+    root->setProperty("autoCrossfade", song.autoCrossfadeEnabled());
+    root->setProperty("envelopeLock", song.envelopeLockEnabled());
+    root->setProperty("rippleEdit", song.rippleEditEnabled());
     root->setProperty("masterVolume", song.masterVolume());
     if (song.projectRootNote() >= 0)
         root->setProperty("projectRootNote", song.projectRootNote());
@@ -177,6 +221,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                 trackObj->setProperty("panAutomation", serializeEnvelope(t.panAutomation));
             if (!t.fxAutomation.empty())
                 trackObj->setProperty("fxAutomation", serializeEnvelope(t.fxAutomation));
+            if (!t.fxChain.empty())
+                trackObj->setProperty("fxChain", serializeFxChain(t.fxChain));
 
             juce::Array<juce::var> clipList;
             for (const auto& c : t.clips)
@@ -203,12 +249,18 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                     clipObj->setProperty("volumeEnvelope", serializeEnvelope(c.volumeEnvelope));
                 if (!c.panEnvelope.empty())
                     clipObj->setProperty("panEnvelope", serializeEnvelope(c.panEnvelope));
+                if (!c.fxChain.empty())
+                    clipObj->setProperty("fxChain", serializeFxChain(c.fxChain));
                 clipList.add(clipObj.get());
             }
             trackObj->setProperty("clips", clipList);
             trackList.add(trackObj.get());
         }
         patObj->setProperty("tracks", trackList);
+        if (!p.masterVolumeAutomation.empty())
+            patObj->setProperty("masterVolumeAutomation", serializeEnvelope(p.masterVolumeAutomation));
+        if (!p.masterFxChain.empty())
+            patObj->setProperty("masterFxChain", serializeFxChain(p.masterFxChain));
         if (!p.markers.empty())
         {
             juce::Array<juce::var> markerList;
@@ -282,7 +334,19 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
 
     Song song;
     song.setBpm(json.getProperty("bpm", 120.0));
-    song.setSwing(json.getProperty("swing", 0.0));
+    if (json.hasProperty("groovePreset"))
+    {
+        const int gp = static_cast<int>(json.getProperty("groovePreset", 0));
+        if (gp >= 0 && gp < static_cast<int>(GroovePreset::Count))
+            song.setGroovePreset(static_cast<GroovePreset>(gp));
+    }
+    song.setSwing(json.getProperty("swing", song.swing()));
+    if (json.hasProperty("autoCrossfade"))
+        song.setAutoCrossfadeEnabled(static_cast<bool>(json.getProperty("autoCrossfade", true)));
+    if (json.hasProperty("envelopeLock"))
+        song.setEnvelopeLockEnabled(static_cast<bool>(json.getProperty("envelopeLock", true)));
+    if (json.hasProperty("rippleEdit"))
+        song.setRippleEditEnabled(static_cast<bool>(json.getProperty("rippleEdit", false)));
     song.setMasterVolume(static_cast<float>(json.getProperty("masterVolume", 1.0f)));
     if (json.hasProperty("projectRootNote"))
         song.setProjectRootNote(static_cast<int>(json.getProperty("projectRootNote", -1)));
@@ -406,6 +470,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                             trk.panAutomation = deserializeEnvelope(tVar["panAutomation"]);
                         if (tVar.hasProperty("fxAutomation"))
                             trk.fxAutomation = deserializeEnvelope(tVar["fxAutomation"]);
+                        if (tVar.hasProperty("fxChain"))
+                            trk.fxChain = deserializeFxChain(tVar["fxChain"]);
                     }
 
                     if (const auto* clipsVar = tVar["clips"].getArray())
@@ -436,12 +502,22 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                                         song.setClipVolumeEnvelope(newPatId, *placedClipId, deserializeEnvelope(cVar["volumeEnvelope"]));
                                     if (cVar.hasProperty("panEnvelope"))
                                         song.setClipPanEnvelope(newPatId, *placedClipId, deserializeEnvelope(cVar["panEnvelope"]));
+                                    if (cVar.hasProperty("fxChain"))
+                                        song.setClipFxChain(newPatId, *placedClipId, deserializeFxChain(cVar["fxChain"]));
                                 }
                             }
                         }
                     }
                     ++trackIdx;
                 }
+            }
+
+            if (Pattern* pat = song.findPattern(newPatId))
+            {
+                if (pVar.hasProperty("masterVolumeAutomation"))
+                    pat->masterVolumeAutomation = deserializeEnvelope(pVar["masterVolumeAutomation"]);
+                if (pVar.hasProperty("masterFxChain"))
+                    pat->masterFxChain = deserializeFxChain(pVar["masterFxChain"]);
             }
 
             if (const auto* markersVar = pVar["markers"].getArray())

@@ -505,148 +505,6 @@ private:
 };
 
 // ==============================================================================
-// MasterMeterSlider (Screenshot 2 recessed LED level meter + brushed-silver thumb)
-// ==============================================================================
-class TransportBar::MasterMeterSlider : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    MasterMeterSlider(Song& song, AudioEngine& engine)
-        : song_(song), engine_(engine)
-    {
-        setTooltip("Master Output Level & Volume (Drag slider thumb to adjust, double-click to reset to 100%)");
-        setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    }
-
-    void updateLevels(float peakL, float peakR, bool clipped)
-    {
-        peakL_ = std::max(peakL, peakL_ * 0.82f);
-        peakR_ = std::max(peakR, peakR_ * 0.82f);
-        clipped_ = clipped;
-        repaint();
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        const auto r = getLocalBounds().toFloat().reduced(0.5f, 3.0f);
-        const float radius = r.getHeight() * 0.5f;
-
-        // Recessed dark capsule slot
-        juce::ColourGradient slotGrad(juce::Colour(0xff0d0d10), r.getX(), r.getY(),
-                                      juce::Colour(0xff1b1b20), r.getX(), r.getBottom(), false);
-        g.setGradientFill(slotGrad);
-        g.fillRoundedRectangle(r, radius);
-
-        // Subtle inner shadow & bottom lip highlight
-        g.setColour(juce::Colour(0xff09090b));
-        g.drawRoundedRectangle(r, radius, 1.1f);
-        g.setColour(juce::Colours::white.withAlpha(0.10f));
-        g.drawHorizontalLine(juce::roundToInt(r.getBottom() + 0.5f), r.getX() + radius, r.getRight() - radius);
-
-        // Dual stereo LED dot rows (14 segments each, green -> amber -> glowing orange-red)
-        constexpr int kNumLeds = 14;
-        const float padX = 11.0f;
-        const float usableW = std::max(10.0f, r.getWidth() - padX * 2.0f);
-        const float stepX = usableW / static_cast<float>(kNumLeds - 1);
-        const float rowY[2] = {r.getCentreY() - 3.6f, r.getCentreY() + 3.6f};
-        const float levels[2] = {std::clamp(peakL_, 0.0f, 1.0f), std::clamp(peakR_, 0.0f, 1.0f)};
-
-        for (int ch = 0; ch < 2; ++ch)
-        {
-            for (int i = 0; i < kNumLeds; ++i)
-            {
-                const float frac = static_cast<float>(i + 1) / static_cast<float>(kNumLeds);
-                const float lx = r.getX() + padX + static_cast<float>(i) * stepX;
-                const float ly = rowY[ch];
-                const bool isPeakDot = (i == kNumLeds - 1);
-                const bool lit = (levels[ch] >= frac * 0.85f) || (isPeakDot && clipped_);
-
-                juce::Colour dotCol;
-                if (isPeakDot)
-                    dotCol = lit ? juce::Colour(0xffff5238) : juce::Colour(0xff52251d);
-                else if (i >= kNumLeds - 3)
-                    dotCol = lit ? juce::Colour(0xffff9f1c) : juce::Colour(0xff2c2c33);
-                else
-                    dotCol = lit ? juce::Colour(0xff34d399) : juce::Colour(0xff28282f);
-
-                const float dotR = isPeakDot ? 2.4f : 1.7f;
-                if (lit)
-                {
-                    g.setColour(dotCol.withAlpha(0.35f));
-                    g.fillEllipse(lx - dotR - 1.5f, ly - dotR - 1.5f, (dotR + 1.5f) * 2.0f, (dotR + 1.5f) * 2.0f);
-                }
-                g.setColour(dotCol);
-                g.fillEllipse(lx - dotR, ly - dotR, dotR * 2.0f, dotR * 2.0f);
-            }
-        }
-
-        // Brushed-silver circular volume thumb (matching Screenshot 2)
-        const float normVol = std::clamp(song_.masterVolume() / 1.5f, 0.0f, 1.0f);
-        const float thumbR = r.getHeight() * 0.46f;
-        const float minX = r.getX() + thumbR + 2.0f;
-        const float maxX = r.getRight() - thumbR - 2.0f;
-        const float tx = minX + normVol * (maxX - minX);
-        const float ty = r.getCentreY();
-
-        // Soft drop shadow
-        g.setColour(juce::Colours::black.withAlpha(0.55f));
-        g.fillEllipse(tx - thumbR, ty - thumbR + 1.2f, thumbR * 2.0f, thumbR * 2.0f);
-
-        // Brushed silver gradient
-        juce::ColourGradient thumbGrad(juce::Colour(0xffc6c6ce), tx - thumbR * 0.5f, ty - thumbR,
-                                       juce::Colour(0xff64646e), tx + thumbR * 0.5f, ty + thumbR, false);
-        thumbGrad.addColour(0.5, juce::Colour(0xff8e8e98));
-        g.setGradientFill(thumbGrad);
-        g.fillEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f);
-
-        // Subtle inner rim highlight & dark border
-        g.setColour(juce::Colours::white.withAlpha(0.38f));
-        g.drawEllipse(tx - thumbR + 1.0f, ty - thumbR + 1.0f, (thumbR - 1.0f) * 2.0f, (thumbR - 1.0f) * 2.0f, 0.8f);
-        g.setColour(juce::Colour(0xff141418));
-        g.drawEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f, 1.0f);
-    }
-
-    void mouseDown(const juce::MouseEvent& e) override
-    {
-        if (e.mods.isPopupMenu())
-            return;
-        updateVolumeFromX(e.position.x);
-    }
-
-    void mouseDrag(const juce::MouseEvent& e) override
-    {
-        updateVolumeFromX(e.position.x);
-    }
-
-    void mouseDoubleClick(const juce::MouseEvent&) override
-    {
-        song_.setMasterVolume(1.0f);
-        engine_.sequencer().setMasterVolume(1.0f);
-        engine_.sequencer().resetClipped();
-        repaint();
-    }
-
-private:
-    void updateVolumeFromX(float x)
-    {
-        const auto r = getLocalBounds().toFloat().reduced(0.5f, 3.0f);
-        const float thumbR = r.getHeight() * 0.46f;
-        const float minX = r.getX() + thumbR + 2.0f;
-        const float maxX = r.getRight() - thumbR - 2.0f;
-        const float norm = std::clamp((x - minX) / std::max(1.0f, maxX - minX), 0.0f, 1.0f);
-        const float vol = norm * 1.5f;
-        song_.setMasterVolume(vol);
-        engine_.sequencer().setMasterVolume(vol);
-        repaint();
-    }
-
-    Song& song_;
-    AudioEngine& engine_;
-    float peakL_ = 0.0f;
-    float peakR_ = 0.0f;
-    bool clipped_ = false;
-};
-
-// ==============================================================================
 // TransportBar Implementation
 // ==============================================================================
 TransportBar::TransportBar(Song& song, AudioEngine& engine,
@@ -793,8 +651,6 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
     };
 
     // Master Level & Volume Capsule (Screenshot 2)
-    masterMeterSlider_ = std::make_unique<MasterMeterSlider>(song_, engine_);
-    addAndMakeVisible(masterMeterSlider_.get());
 
     // Master Project Key selector
     keyCombo_.setTooltip("Master Project Key (automatic loop key conforming)");
@@ -849,12 +705,11 @@ void TransportBar::setLoopRange(int start, int end, bool isBars)
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
 {
-    constexpr int totalW = 1028;
+    constexpr int totalW = 882;
     const int startX = (getWidth() >= totalW + 24) ? std::max(12, (getWidth() - totalW) / 2) : 8;
     constexpr int barY = 7;
     constexpr int barH = 34;
-    const int meterX = startX + 218 + 10;
-    const int posBoxX = meterX + 136 + 10;
+    const int posBoxX = startX + 218 + 10;
     const int loopBoxX = posBoxX + 122 + 6;
     const auto loopBox = juce::Rectangle<int>(loopBoxX, barY, 104, barH);
 
@@ -948,7 +803,7 @@ void TransportBar::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.14f));
     g.drawHorizontalLine(1, 0.0f, static_cast<float>(getWidth()));
 
-    constexpr int totalW = 1028;
+    constexpr int totalW = 882;
     constexpr int barY = 7;
     constexpr int barH = 34;
 
@@ -980,11 +835,8 @@ void TransportBar::paint(juce::Graphics& g)
     const auto transBox = juce::Rectangle<int>(startX, barY, 218, barH);
     drawMetallicCapsule(transBox);
 
-    // 2. Recessed Master Level & Volume Capsule (drawn by masterMeterSlider_)
-    const int meterX = startX + 218 + 10;
-
-    // 3. Position Display LCD
-    const int posBoxX = meterX + 136 + 10;
+    // 2. Position Display LCD
+    const int posBoxX = startX + 218 + 10;
     const auto posBox = juce::Rectangle<int>(posBoxX, barY, 122, barH);
     drawRecessedLcd(posBox);
 
@@ -1062,7 +914,7 @@ void TransportBar::paint(juce::Graphics& g)
 
 void TransportBar::resized()
 {
-    constexpr int totalW = 1028;
+    constexpr int totalW = 882;
     constexpr int barY = 7;
     constexpr int barH = 34;
 
@@ -1095,13 +947,8 @@ void TransportBar::resized()
     countInButton_.setBounds(btnX, barY + 1, btnW, barH - 2);
     countInButton_.setBorderSides(false, false);
 
-    // Recessed Master Level & Volume Capsule (Screenshot 2)
-    const int meterX = startX + 218 + 10;
-    if (masterMeterSlider_ != nullptr)
-        masterMeterSlider_->setBounds(meterX, barY, 136, barH);
-
     // Position LCD label
-    const int posBoxX = meterX + 136 + 10;
+    const int posBoxX = startX + 218 + 10;
     positionLabel_.setBounds(posBoxX + 4, barY + 1, 114, barH - 2);
 
     // Loop box + Mode button
@@ -1142,12 +989,6 @@ void TransportBar::timerCallback()
 
     const auto recState = engine_.recorder().state();
     recordButton_.setToggleState(recState != RecordState::Idle, juce::dontSendNotification);
-
-    if (masterMeterSlider_ != nullptr)
-    {
-        const auto lvl = engine_.sequencer().outputLevels();
-        masterMeterSlider_->updateLevels(lvl.peakL, lvl.peakR, lvl.clipped);
-    }
 
     const std::int64_t pos = engine_.sequencer().position();
 

@@ -957,3 +957,169 @@ TEST_CASE("Converting a one-shot track to a loop track stretches and loops the a
     REQUIRE(snap->events[0].startSample == 0);
     REQUIRE(snap->events[1].startSample == 96000); // 32 steps * 3000 samples = 96000
 }
+
+TEST_CASE("Sequencer invokes external AudioPluginProcessor hooks, records per-track peaks, and applies Master Volume Automation")
+{
+    struct MockPluginProcessor : public AudioPluginProcessor
+    {
+        int clipCalls = 0;
+        int trackCalls = 0;
+        int masterCalls = 0;
+        void processClip(std::uint32_t, float* l, float* r, int n) noexcept override
+        {
+            ++clipCalls;
+            for (int i = 0; i < n; ++i)
+            {
+                l[i] *= 0.5f;
+                r[i] *= 0.5f;
+            }
+        }
+        void processTrack(int, float* l, float* r, int n) noexcept override
+        {
+            ++trackCalls;
+            for (int i = 0; i < n; ++i)
+            {
+                l[i] *= 0.5f;
+                r[i] *= 0.5f;
+            }
+        }
+        void processMaster(float* l, float* r, int n) noexcept override
+        {
+            ++masterCalls;
+            for (int i = 0; i < n; ++i)
+            {
+                l[i] *= 0.5f;
+                r[i] *= 0.5f;
+            }
+        }
+    };
+
+    Fixture f;
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(48000, 1.0f));
+    sustained->channels.push_back(std::vector<float>(48000, 0.8f));
+    f.bank[f.sample] = sustained;
+
+    auto cid = f.song.placeClip(f.pattern, 0, f.sample, 0.0, 16.0);
+    REQUIRE(cid.has_value());
+
+    // Attach a mock external plugin slot on the clip so hasClipFx is true
+    PluginSlot slot;
+    slot.name = "MockVST3";
+    slot.format = "VST3";
+    slot.identifierString = "mock-vst3-id";
+    f.song.setClipFxChain(f.pattern, *cid, {slot});
+
+    // Master volume automation at 0.5 gain across the bar
+    f.song.setMasterAutomation(f.pattern, {{0.0, 0.5f, EnvelopeCurve::Linear}, {32.0, 0.5f, EnvelopeCurve::Linear}});
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+    MockPluginProcessor proc;
+    seq.setPluginProcessor(&proc);
+    seq.requestPlaying(true);
+
+    std::vector<float> left(256, 0.0f), right(256, 0.0f);
+    seq.process(left.data(), right.data(), 256);
+
+    REQUIRE(proc.clipCalls > 0);
+    REQUIRE(proc.trackCalls > 0);
+    REQUIRE(proc.masterCalls > 0);
+
+    // Track 0 peak should be ~0.25 L (1.0 * 0.5 clip * 0.5 track) and ~0.20 R (0.8 * 0.5 * 0.5)
+    auto [pkL, pkR] = seq.trackPeakLevels(0);
+    REQUIRE(pkL == Catch::Approx(0.25f).margin(0.01f));
+    REQUIRE(pkR == Catch::Approx(0.20f).margin(0.01f));
+
+    // Final output after 0.5 master automation * 0.5 master plugin = 0.0625 L
+    REQUIRE(left[10] == Catch::Approx(0.0625f).margin(0.01f));
+}
+
+TEST_CASE("GroovePreset supports both 16th-note swing and 8th-note shuffle timing")
+{
+    // 16th-note swing shifts step 2 (odd 1/16th), leaves step 4 (1/8th) on-grid
+    const Timing swing16(120.0, 48000.0, groovePresetSwing(GroovePreset::Swing16_62),
+                         groovePresetIsEighthNote(GroovePreset::Swing16_62));
+    const Timing straight(120.0, 48000.0, 0.0, false);
+    REQUIRE(swing16.stepToSample(2) > straight.stepToSample(2));
+    REQUIRE(swing16.stepToSample(4) == straight.stepToSample(4));
+
+    // 8th-note shuffle shifts step 4 (odd 1/8th), leaves step 8 (quarter note) on-grid
+    const Timing shuffle8(120.0, 48000.0, groovePresetSwing(GroovePreset::Shuffle8_67),
+                          groovePresetIsEighthNote(GroovePreset::Shuffle8_67));
+    REQUIRE(shuffle8.stepToSample(4) > straight.stepToSample(4));
+    REQUIRE(shuffle8.stepToSample(8) == straight.stepToSample(8));
+}
+
+TEST_CASE("Auto-Crossfade toggle enables/disables overlap crossfades in SnapshotBuilder")
+{
+    Fixture f;
+    f.song.placeClip(f.pattern, 0, f.sample, 0.0, 12.0);
+    f.song.placeClip(f.pattern, 0, f.sample, 8.0, 12.0); // 4-step overlap [8..12]
+
+    f.song.setAutoCrossfadeEnabled(true);
+    auto snapOn = f.snapshot();
+    REQUIRE(snapOn->events.size() == 2);
+    REQUIRE(snapOn->events[0].fadeOutSamples > 0);
+    REQUIRE(snapOn->events[1].fadeInSamples > 0);
+
+    f.song.setAutoCrossfadeEnabled(false);
+    auto snapOff = f.snapshot();
+    REQUIRE(snapOff->events.size() == 2);
+    REQUIRE(snapOff->events[0].fadeOutSamples == 0);
+    REQUIRE(snapOff->events[1].fadeInSamples == 0);
+}
+
+TEST_CASE("Reversing or editing a clip mid-playback takes effect immediately on the next audio block")
+{
+    Fixture f;
+    // Create a linear ramp audio buffer: frame i has value (i / 10000.0f) so forward != reversed
+    constexpr int kFrames = 10000;
+    auto ramp = std::make_shared<AudioData>();
+    ramp->channels.resize(2);
+    ramp->channels[0].resize(kFrames);
+    ramp->channels[1].resize(kFrames);
+    for (int i = 0; i < kFrames; ++i)
+    {
+        const float v = static_cast<float>(i) / static_cast<float>(kFrames);
+        ramp->channels[0][static_cast<std::size_t>(i)] = v;
+        ramp->channels[1][static_cast<std::size_t>(i)] = v;
+    }
+    f.bank[f.sample] = ramp;
+
+    auto cid = f.song.placeClip(f.pattern, 0, f.sample, 0.0, 16.0);
+    REQUIRE(cid.has_value());
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+    seq.requestPlaying(true);
+
+    // 1. Play first 256 samples forward: values should be near 0.0 (ascending: 0 .. 0.0255)
+    std::vector<float> left(256, 0.0f), right(256, 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[10] == Catch::Approx(10.0f / kFrames).margin(1e-4f));
+    REQUIRE(left[200] > left[10]);
+
+    // 2. Reverse the clip while it is actively playing and publish updated snapshot
+    f.song.setClipReversed(f.pattern, *cid, true);
+    exchange.publish(f.snapshot());
+
+    // Next block (starting at sample 256) should IMMEDIATELY read from the reversed end (~0.974 descending)
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    REQUIRE(left[0] > 0.9f);
+    REQUIRE(left[200] < left[0]);
+
+    // 3. Edit clip gain to 0.5 mid-playback and publish updated snapshot
+    f.song.setClipEnvelope(f.pattern, *cid, 0.5f, 0.0f, 0.0f);
+    exchange.publish(f.snapshot());
+
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    seq.process(left.data(), right.data(), 256);
+    // At sample 512 reversed, raw value is (9999 - 512) / 10000 ~= 0.9487, times gain 0.5 ~= 0.4743
+    REQUIRE(left[0] == Catch::Approx(0.5f * (9999.0f - 512.0f) / kFrames).margin(0.01f));
+}

@@ -52,6 +52,7 @@ public:
     void tabLoopToMarkerSection(int direction) override;
     void clipReverseRequested(ClipId clipId) override;
     void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
+    void clipFxRequested(ClipId clipId) override;
     void clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones) override;
     void clipsTransposeSet(const std::vector<ClipId>& clipIds, int semitones) override;
     void clipDeleteRequested(ClipId clipId) override;
@@ -97,6 +98,9 @@ public:
     void autoAdjustPatternLength();
     void updateLengthSelector();
     void updateTrackHeaders();
+    void syncToolbarTogglesFromSong();
+    void openTrackFxDialog(int track);
+    void openMasterFxDialog();
     void republish();
     void publishSnapshotQuick(const std::vector<DragClipOverride>* overrides = nullptr);
     void repaintGrid();
@@ -167,6 +171,7 @@ private:
     class SyncViewport;
     class HeaderCorner;
     class PatternRuler;
+    class MasterBusLane;
     class ResizeSplitter;
     void timerCallback() override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
@@ -209,6 +214,13 @@ private:
     juce::TextButton joinButton_{"Join (J)"};
     juce::TextButton markerButton_{"+ Marker (M)"};
 
+    // Groove Pool Selector & Edit Mode Toggles
+    juce::Label grooveLabel_{"Groove:", "Groove:"};
+    juce::ComboBox grooveCombo_;
+    juce::TextButton autoCrossfadeToggle_{"X-Fade"};
+    juce::TextButton envLockToggle_{"Env Lock"};
+    juce::TextButton rippleEditToggle_{"Ripple"};
+
     double recordStartStep_ = 0.0;
     void setActiveTool(PatternGrid::EditTool tool);
 
@@ -225,6 +237,7 @@ private:
     std::unique_ptr<ResizeSplitter> browserSplitter_;
     std::unique_ptr<HeaderCorner> headerCorner_;
     std::unique_ptr<PatternRuler> ruler_;
+    std::unique_ptr<MasterBusLane> masterBusLane_;
     std::unique_ptr<TrackHeaderList> trackHeaders_;
     std::unique_ptr<juce::Viewport> trackHeadersViewport_;
     std::unique_ptr<PatternGrid> grid_;

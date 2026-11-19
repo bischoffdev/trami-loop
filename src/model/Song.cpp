@@ -37,6 +37,12 @@ void Song::setSwing(double swing) noexcept
     swing_ = std::clamp(swing, 0.0, 1.0);
 }
 
+void Song::setGroovePreset(GroovePreset preset) noexcept
+{
+    groovePreset_ = preset;
+    swing_ = groovePresetSwing(preset);
+}
+
 void Song::setMasterVolume(float volume) noexcept
 {
     masterVolume_ = std::clamp(volume, 0.0f, 2.0f);
@@ -599,6 +605,45 @@ bool Song::setTrackFxSend(PatternId patternId, int trackIndex, float fxSend)
         trackIndex >= static_cast<int>(pattern->tracks.size()))
         return false;
     pattern->tracks[static_cast<std::size_t>(trackIndex)].fxSend = std::clamp(fxSend, 0.0f, 1.0f);
+    return true;
+}
+
+bool Song::setMasterAutomation(PatternId patternId, std::vector<EnvelopePoint> points)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr)
+        return false;
+    const double maxSteps = static_cast<double>(pattern->lengthSteps());
+    sortAndClampEnvelope(points, 0.0, maxSteps, 0.0f, 2.0f);
+    pattern->masterVolumeAutomation = std::move(points);
+    return true;
+}
+
+bool Song::setClipFxChain(PatternId patternId, ClipId clipId, std::vector<PluginSlot> chain)
+{
+    Clip* clip = findClip(patternId, clipId);
+    if (clip == nullptr)
+        return false;
+    clip->fxChain = std::move(chain);
+    return true;
+}
+
+bool Song::setTrackFxChain(PatternId patternId, int trackIndex, std::vector<PluginSlot> chain)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern) ||
+        trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return false;
+    pattern->tracks[static_cast<std::size_t>(trackIndex)].fxChain = std::move(chain);
+    return true;
+}
+
+bool Song::setMasterFxChain(PatternId patternId, std::vector<PluginSlot> chain)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr)
+        return false;
+    pattern->masterFxChain = std::move(chain);
     return true;
 }
 
