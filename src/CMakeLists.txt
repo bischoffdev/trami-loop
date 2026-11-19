@@ -23,6 +23,14 @@ juce_add_gui_app(TramiLoop
     PRODUCT_NAME "trami-loop"
     COMPANY_NAME "trami"
     BUNDLE_ID    "dev.bischoff.trami-loop"
+    VERSION      "${PROJECT_VERSION}"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "trami-loop uses audio input to record tracks."
+    HARDENED_RUNTIME_ENABLED TRUE
+    HARDENED_RUNTIME_OPTIONS
+        "com.apple.security.cs.disable-library-validation"
+        "com.apple.security.cs.allow-unsigned-executable-memory"
+        "com.apple.security.device.audio-input"
 )
 
 target_sources(TramiLoop PRIVATE

@@ -31,7 +31,8 @@ public:
         const auto defaultPattern = song_.addPattern("Unnamed Song", 1);
         song_.setArrangerTrackPattern(0, defaultPattern);
 
-        mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_, song_, stretchCache_);
+        mainWindow_ = std::make_unique<MainWindow>(
+            getApplicationName() + " v" + getApplicationVersion(), *engine_, song_, stretchCache_);
     }
 
     void shutdown() override
