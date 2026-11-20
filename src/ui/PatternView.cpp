@@ -11,20 +11,288 @@
 namespace trami
 {
 
+class ZoomScrollBar final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit ZoomScrollBar(bool isHorizontal)
+        : isHorizontal_(isHorizontal)
+    {
+        setOpaque(true);
+        setTooltip(isHorizontal_
+                       ? "Drag bar to scroll horizontally | Drag left/right ends to zoom time | Double-click to reset zoom"
+                       : "Drag bar to scroll vertically | Drag top/bottom ends to zoom track height | Double-click to reset zoom");
+    }
+
+    void setRange(double startFrac, double visibleFrac)
+    {
+        const double clampedVis = std::clamp(visibleFrac, 0.02, 1.0);
+        const double clampedStart = std::clamp(startFrac, 0.0, std::max(0.0, 1.0 - clampedVis));
+        if (std::abs(clampedStart - startFrac_) > 1e-4 || std::abs(clampedVis - visibleFrac_) > 1e-4)
+        {
+            startFrac_ = clampedStart;
+            visibleFrac_ = clampedVis;
+            repaint();
+        }
+    }
+
+    std::function<void(double newStartFrac)> onScroll;
+    std::function<void(double newStartFrac, double newVisibleFrac)> onZoomRange;
+    std::function<void()> onResetZoom;
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        g.setColour(juce::Colour(0xff141418));
+        g.fillRect(b);
+
+        const auto thumb = thumbBounds();
+        const bool active = (dragMode_ != DragMode::None || hoverZone_ != DragMode::None);
+        g.setColour(active ? juce::Colour(0xff5a5a68) : juce::Colour(0xff42424d));
+        g.fillRoundedRectangle(thumb, 4.0f);
+        g.setColour(juce::Colours::white.withAlpha(active ? 0.22f : 0.10f));
+        g.drawRoundedRectangle(thumb, 4.0f, 1.0f);
+
+        // Draw crisp draggable zoom end-caps at both ends of the thumb
+        const bool startLit = (dragMode_ == DragMode::ResizeStart || hoverZone_ == DragMode::ResizeStart);
+        const bool endLit = (dragMode_ == DragMode::ResizeEnd || hoverZone_ == DragMode::ResizeEnd);
+
+        if (isHorizontal_)
+        {
+            const float cy = thumb.getCentreY();
+            const float xL = thumb.getX() + 4.5f;
+            const float xR = thumb.getRight() - 4.5f;
+            g.setColour(startLit ? Palette::accent : juce::Colours::white.withAlpha(0.55f));
+            g.drawVerticalLine(juce::roundToInt(xL), cy - 3.5f, cy + 3.5f);
+            g.drawVerticalLine(juce::roundToInt(xL + 2.5f), cy - 2.5f, cy + 2.5f);
+
+            g.setColour(endLit ? Palette::accent : juce::Colours::white.withAlpha(0.55f));
+            g.drawVerticalLine(juce::roundToInt(xR), cy - 3.5f, cy + 3.5f);
+            g.drawVerticalLine(juce::roundToInt(xR - 2.5f), cy - 2.5f, cy + 2.5f);
+        }
+        else
+        {
+            const float cx = thumb.getCentreX();
+            const float yT = thumb.getY() + 4.5f;
+            const float yB = thumb.getBottom() - 4.5f;
+            g.setColour(startLit ? Palette::accent : juce::Colours::white.withAlpha(0.55f));
+            g.drawHorizontalLine(juce::roundToInt(yT), cx - 3.5f, cx + 3.5f);
+            g.drawHorizontalLine(juce::roundToInt(yT + 2.5f), cx - 2.5f, cx + 2.5f);
+
+            g.setColour(endLit ? Palette::accent : juce::Colours::white.withAlpha(0.55f));
+            g.drawHorizontalLine(juce::roundToInt(yB), cx - 3.5f, cx + 3.5f);
+            g.drawHorizontalLine(juce::roundToInt(yB - 2.5f), cx - 2.5f, cx + 2.5f);
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const auto zone = hitTestZone(e.getPosition());
+        if (zone != hoverZone_)
+        {
+            hoverZone_ = zone;
+            repaint();
+        }
+        if (zone == DragMode::ResizeStart || zone == DragMode::ResizeEnd)
+            setMouseCursor(isHorizontal_ ? juce::MouseCursor::LeftRightResizeCursor
+                                         : juce::MouseCursor::UpDownResizeCursor);
+        else if (zone == DragMode::MoveThumb)
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        else
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        if (hoverZone_ != DragMode::None)
+        {
+            hoverZone_ = DragMode::None;
+            repaint();
+        }
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu())
+            return;
+        dragMode_ = hitTestZone(e.getPosition());
+        dragStartPx_ = isHorizontal_ ? e.x : e.y;
+        dragStartFrac_ = startFrac_;
+        dragStartVisFrac_ = visibleFrac_;
+
+        if (dragMode_ == DragMode::None)
+        {
+            // Clicked on track outside thumb: center thumb on click
+            const float len = static_cast<float>(std::max(1, isHorizontal_ ? getWidth() : getHeight()));
+            const double clickFrac = static_cast<double>(dragStartPx_) / static_cast<double>(len);
+            const double nextStart = std::clamp(clickFrac - visibleFrac_ * 0.5, 0.0, std::max(0.0, 1.0 - visibleFrac_));
+            if (onScroll)
+                onScroll(nextStart);
+            dragMode_ = DragMode::MoveThumb;
+            dragStartFrac_ = nextStart;
+        }
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragMode_ == DragMode::None)
+            return;
+        const float trackLen = static_cast<float>(std::max(1, isHorizontal_ ? getWidth() : getHeight()));
+        const int curPx = isHorizontal_ ? e.x : e.y;
+        const double deltaFrac = static_cast<double>(curPx - dragStartPx_) / static_cast<double>(trackLen);
+
+        if (dragMode_ == DragMode::MoveThumb)
+        {
+            const double nextStart = std::clamp(dragStartFrac_ + deltaFrac, 0.0, std::max(0.0, 1.0 - dragStartVisFrac_));
+            if (onScroll)
+                onScroll(nextStart);
+        }
+        else if (dragMode_ == DragMode::ResizeStart)
+        {
+            const double endFrac = dragStartFrac_ + dragStartVisFrac_;
+            const double newStart = std::clamp(dragStartFrac_ + deltaFrac, 0.0, std::max(0.0, endFrac - 0.02));
+            const double newVis = std::clamp(endFrac - newStart, 0.02, 1.0);
+            if (onZoomRange)
+                onZoomRange(newStart, newVis);
+        }
+        else if (dragMode_ == DragMode::ResizeEnd)
+        {
+            const double newEnd = std::clamp(dragStartFrac_ + dragStartVisFrac_ + deltaFrac,
+                                             std::min(1.0, dragStartFrac_ + 0.02), 1.0);
+            const double newVis = std::clamp(newEnd - dragStartFrac_, 0.02, 1.0);
+            if (onZoomRange)
+                onZoomRange(dragStartFrac_, newVis);
+        }
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragMode_ = DragMode::None;
+        repaint();
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onResetZoom)
+            onResetZoom();
+    }
+
+private:
+    enum class DragMode
+    {
+        None,
+        MoveThumb,
+        ResizeStart,
+        ResizeEnd
+    };
+
+    juce::Rectangle<float> thumbBounds() const
+    {
+        const float w = static_cast<float>(getWidth());
+        const float h = static_cast<float>(getHeight());
+        constexpr float minThumbLen = 28.0f;
+
+        if (isHorizontal_)
+        {
+            const float rawW = static_cast<float>(visibleFrac_) * w;
+            const float thumbW = std::clamp(rawW, std::min(minThumbLen, w), w);
+            const float maxStart = std::max(0.0f, w - thumbW);
+            const float x = (rawW >= minThumbLen)
+                                ? std::clamp(static_cast<float>(startFrac_) * w, 0.0f, maxStart)
+                                : ((visibleFrac_ < 0.999)
+                                       ? std::clamp(static_cast<float>(startFrac_ / std::max(1e-6, 1.0 - visibleFrac_)) * maxStart,
+                                                    0.0f, maxStart)
+                                       : 0.0f);
+            return {x + 1.0f, 2.0f, std::max(12.0f, thumbW - 2.0f), std::max(6.0f, h - 4.0f)};
+        }
+        else
+        {
+            const float rawH = static_cast<float>(visibleFrac_) * h;
+            const float thumbH = std::clamp(rawH, std::min(minThumbLen, h), h);
+            const float maxStart = std::max(0.0f, h - thumbH);
+            const float y = (rawH >= minThumbLen)
+                                ? std::clamp(static_cast<float>(startFrac_) * h, 0.0f, maxStart)
+                                : ((visibleFrac_ < 0.999)
+                                       ? std::clamp(static_cast<float>(startFrac_ / std::max(1e-6, 1.0 - visibleFrac_)) * maxStart,
+                                                    0.0f, maxStart)
+                                       : 0.0f);
+            return {2.0f, y + 1.0f, std::max(6.0f, w - 4.0f), std::max(12.0f, thumbH - 2.0f)};
+        }
+    }
+
+    DragMode hitTestZone(juce::Point<int> pt) const
+    {
+        const auto t = thumbBounds();
+        if (!t.expanded(2.0f).contains(pt.toFloat()))
+            return DragMode::None;
+
+        constexpr float handleSize = 10.0f;
+        if (isHorizontal_)
+        {
+            if (static_cast<float>(pt.x) <= t.getX() + handleSize)
+                return DragMode::ResizeStart;
+            if (static_cast<float>(pt.x) >= t.getRight() - handleSize)
+                return DragMode::ResizeEnd;
+            return DragMode::MoveThumb;
+        }
+        else
+        {
+            if (static_cast<float>(pt.y) <= t.getY() + handleSize)
+                return DragMode::ResizeStart;
+            if (static_cast<float>(pt.y) >= t.getBottom() - handleSize)
+                return DragMode::ResizeEnd;
+            return DragMode::MoveThumb;
+        }
+    }
+
+    bool isHorizontal_ = true;
+    double startFrac_ = 0.0;
+    double visibleFrac_ = 1.0;
+    DragMode hoverZone_ = DragMode::None;
+    DragMode dragMode_ = DragMode::None;
+    int dragStartPx_ = 0;
+    double dragStartFrac_ = 0.0;
+    double dragStartVisFrac_ = 1.0;
+};
+
 class PatternView::SyncViewport : public juce::Viewport
 {
   public:
     SyncViewport()
+        : hZoomBar_(true), vZoomBar_(false)
     {
         setScrollBarThickness(StudioOneZoomCorner::kThickness);
+        setScrollBarsShown(false, false, true, true); // wheel scroll active; custom zoom-edge scrollbars rendered below
+        addAndMakeVisible(hZoomBar_);
+        addAndMakeVisible(vZoomBar_);
         addAndMakeVisible(zoomCorner_);
     }
 
     StudioOneZoomCorner& zoomCorner() noexcept { return zoomCorner_; }
+    ZoomScrollBar& hZoomBar() noexcept { return hZoomBar_; }
+    ZoomScrollBar& vZoomBar() noexcept { return vZoomBar_; }
+
+    void syncZoomBars()
+    {
+        const auto* comp = getViewedComponent();
+        if (comp == nullptr)
+            return;
+        const int totalW = std::max(1, comp->getWidth());
+        const int totalH = std::max(1, comp->getHeight());
+        const int viewW = std::max(1, getViewWidth());
+        const int viewH = std::max(1, getViewHeight());
+
+        hZoomBar_.setRange(static_cast<double>(getViewPositionX()) / static_cast<double>(totalW),
+                           static_cast<double>(viewW) / static_cast<double>(totalW));
+        vZoomBar_.setRange(static_cast<double>(getViewPositionY()) / static_cast<double>(totalH),
+                           static_cast<double>(viewH) / static_cast<double>(totalH));
+    }
 
     std::function<void(const juce::Rectangle<int>&)> onAreaChanged;
     void visibleAreaChanged(const juce::Rectangle<int>& newVisibleArea) override
     {
+        syncZoomBars();
         if (onAreaChanged)
             onAreaChanged(newVisibleArea);
     }
@@ -39,20 +307,15 @@ class PatternView::SyncViewport : public juce::Viewport
         const int w = getWidth();
         const int h = getHeight();
 
-        auto& vBar = getVerticalScrollBar();
-        auto& hBar = getHorizontalScrollBar();
-
-        if (vBar.isVisible())
-            vBar.setBounds(vBar.getX(), PatternGrid::kRulerHeight, vBar.getWidth(),
-                           std::max(0, h - PatternGrid::kRulerHeight - totalSize));
-
-        if (hBar.isVisible())
-            hBar.setBounds(hBar.getX(), hBar.getY(), std::max(0, w - totalSize), hBar.getHeight());
-
+        vZoomBar_.setBounds(w - T, PatternGrid::kRulerHeight, T, std::max(0, h - PatternGrid::kRulerHeight - totalSize));
+        hZoomBar_.setBounds(0, h - T, std::max(0, w - totalSize), T);
         zoomCorner_.setBounds(w - totalSize, h - totalSize, totalSize, totalSize);
+        syncZoomBars();
     }
 
   private:
+    ZoomScrollBar hZoomBar_;
+    ZoomScrollBar vZoomBar_;
     StudioOneZoomCorner zoomCorner_;
 };
 
@@ -184,11 +447,28 @@ class PatternView::MasterBusLane : public juce::Component
   public:
     static constexpr int kHeight = 58;
 
+    class MasterFxButton : public juce::TextButton
+    {
+      public:
+        std::function<void()> onBypassToggle;
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if ((e.mods.isPopupMenu() || e.mods.isAltDown()) && onBypassToggle)
+            {
+                onBypassToggle();
+                return;
+            }
+            juce::TextButton::mouseDown(e);
+        }
+    };
+
     MasterBusLane(Song& song, AudioEngine& engine, PatternGrid& grid, std::function<PatternId()> getPatternId,
-                  std::function<void()> onMasterFx, std::function<void()> onAutomationChanged,
+                  std::function<void()> onMasterFx, std::function<void()> onMasterFxBypass,
+                  std::function<void()> onAutomationChanged,
                   std::function<void(bool)> onMuteAll, std::function<void(bool)> onSoloAll)
         : song_(song), engine_(engine), grid_(grid), getPatternId_(std::move(getPatternId)),
-          onMasterFx_(std::move(onMasterFx)), onAutomationChanged_(std::move(onAutomationChanged)),
+          onMasterFx_(std::move(onMasterFx)), onMasterFxBypass_(std::move(onMasterFxBypass)),
+          onAutomationChanged_(std::move(onAutomationChanged)),
           onMuteAll_(std::move(onMuteAll)), onSoloAll_(std::move(onSoloAll))
     {
         setOpaque(true);
@@ -210,11 +490,16 @@ class PatternView::MasterBusLane : public juce::Component
         addAndMakeVisible(soloAllButton_);
 
         fxButton_.setButtonText("fx");
-        fxButton_.setTooltip("Master Bus VST3/AU FX Rack");
+        fxButton_.setTooltip("Master Bus VST3/AU FX Rack (Right-click or Alt+click to bypass all)");
         fxButton_.onClick = [this]()
         {
             if (onMasterFx_)
                 onMasterFx_();
+        };
+        fxButton_.onBypassToggle = [this]()
+        {
+            if (onMasterFxBypass_)
+                onMasterFxBypass_();
         };
         addAndMakeVisible(fxButton_);
 
@@ -346,14 +631,29 @@ class PatternView::MasterBusLane : public juce::Component
     {
         const auto* pat = song_.findPattern(getPatternId_());
         const bool hasFx = (pat != nullptr && !pat->masterFxChain.empty());
+        const bool allBypassed = hasFx && std::all_of(pat->masterFxChain.begin(), pat->masterFxChain.end(),
+                                                      [](const PluginSlot& s) { return s.bypassed; });
         const bool hasEnv = (pat != nullptr && !pat->masterVolumeAutomation.empty());
 
-        fxButton_.setColour(juce::TextButton::buttonColourId,
-                            hasFx ? juce::Colour(0xff06b6d4).withAlpha(0.32f) : Palette::surface.brighter(0.08f));
-        fxButton_.setColour(juce::TextButton::textColourOffId, hasFx ? juce::Colour(0xff22d3ee) : Palette::textDim);
+        if (hasFx && !allBypassed)
+        {
+            fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff06b6d4).withAlpha(0.32f));
+            fxButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff22d3ee));
+        }
+        else if (allBypassed)
+        {
+            fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xffb45309).withAlpha(0.45f));
+            fxButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xfffbbf24));
+        }
+        else
+        {
+            fxButton_.setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
+            fxButton_.setColour(juce::TextButton::textColourOffId, Palette::textDim);
+        }
         fxButton_.setTooltip("Master Bus VST3/AU FX Rack (" +
                              juce::String(pat != nullptr ? pat->masterFxChain.size() : 0) + " plugin" +
-                             ((pat != nullptr && pat->masterFxChain.size() == 1) ? "" : "s") + ")");
+                             ((pat != nullptr && pat->masterFxChain.size() == 1) ? "" : "s") +
+                             (allBypassed ? ", BYPASSED" : "") + ") - Right-click or Alt+click to bypass all");
 
         envButton_.setToggleState(hasEnv, juce::dontSendNotification);
         envButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffca8a04).withAlpha(0.45f));
@@ -571,7 +871,7 @@ class PatternView::MasterBusLane : public juce::Component
         {
             g.setColour(juce::Colours::white.withAlpha(0.24f));
             g.setFont(Typography::regular(11.0f));
-            g.drawText("Master Volume Automation — Click to add automation point", laneX + 12, 0, laneW - 24, h,
+            g.drawText("Master Volume Automation - Click to add automation point", laneX + 12, 0, laneW - 24, h,
                        juce::Justification::centredLeft, true);
         }
 
@@ -748,13 +1048,14 @@ class PatternView::MasterBusLane : public juce::Component
     PatternGrid& grid_;
     std::function<PatternId()> getPatternId_;
     std::function<void()> onMasterFx_;
+    std::function<void()> onMasterFxBypass_;
     std::function<void()> onAutomationChanged_;
     std::function<void(bool)> onMuteAll_;
     std::function<void(bool)> onSoloAll_;
 
     DAWMuteButton muteAllButton_;
     DAWSoloButton soloAllButton_;
-    juce::TextButton fxButton_;
+    MasterFxButton fxButton_;
     juce::TextButton envButton_;
     juce::Slider volumeSlider_;
     juce::Label volLabel_;
@@ -1076,6 +1377,8 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         {
             if (onPushUndo_)
                 onPushUndo_();
+            if (grid_ != nullptr)
+                grid_->repaint();
         });
     trackHeaders_->setOnDuplicateTrack([this](int track) { duplicateTrack(track); });
     trackHeaders_->setOnDeleteTrack([this](int track) { deleteTrack(track); });
@@ -1095,6 +1398,15 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
                                                  });
         });
     trackHeaders_->setOnTrackFx([this](int track) { openTrackFxDialog(track); });
+    trackHeaders_->setOnTrackFxBypass([this](int track) { toggleTrackFxBypass(track); });
+    trackHeaders_->setOnTrackColorChanged(
+        [this]()
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+            if (grid_ != nullptr)
+                grid_->repaint();
+        });
     trackHeaders_->setTrackPeakProvider([this](int track) { return engine_.sequencer().trackPeakLevels(track); });
     trackHeaders_->setOnTrackSelected(
         [this](int track, SampleId sampleId)
@@ -1158,7 +1470,6 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
 
     gridViewport_ = std::make_unique<SyncViewport>();
     gridViewport_->setViewedComponent(grid_.get(), false);
-    gridViewport_->setScrollBarsShown(true, true);
     gridViewport_->onAreaChanged = [this](const juce::Rectangle<int>& area)
     {
         if (trackHeadersViewport_ != nullptr)
@@ -1168,6 +1479,59 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
         if (masterBusLane_ != nullptr)
             masterBusLane_->setScrollX(area.getX());
     };
+    gridViewport_->hZoomBar().onScroll = [this](double startFrac)
+    {
+        if (grid_ == nullptr || gridViewport_ == nullptr)
+            return;
+        const int targetX = juce::roundToInt(startFrac * static_cast<double>(grid_->getWidth()));
+        gridViewport_->setViewPosition(targetX, gridViewport_->getViewPositionY());
+    };
+    gridViewport_->hZoomBar().onZoomRange = [this](double newStartFrac, double newVisFrac)
+    {
+        if (grid_ == nullptr || gridViewport_ == nullptr)
+            return;
+        const auto* pat = song_.findPattern(currentPattern_);
+        const int totalSteps = std::max(1, pat != nullptr ? pat->lengthSteps() : kStepsPerBar);
+        const int viewW = std::max(40, gridViewport_->getViewWidth());
+        const double desiredTotalW = static_cast<double>(viewW) / std::clamp(newVisFrac, 0.02, 1.0);
+        const double desiredStepW = desiredTotalW / static_cast<double>(totalSteps);
+        const float targetZoomX = std::clamp(static_cast<float>(desiredStepW / static_cast<double>(PatternGrid::kDefaultStepWidth)),
+                                             StudioOneZoomCorner::kMinZoomX, StudioOneZoomCorner::kMaxZoomX);
+        const double anchorStep = newStartFrac * static_cast<double>(totalSteps);
+        applyZoomAtStep(targetZoomX, anchorStep, 0);
+        gridViewport_->syncZoomBars();
+    };
+    gridViewport_->hZoomBar().onResetZoom = [this]() { resetZoom(); };
+
+    gridViewport_->vZoomBar().onScroll = [this](double startFrac)
+    {
+        if (grid_ == nullptr || gridViewport_ == nullptr)
+            return;
+        const int targetY = juce::roundToInt(startFrac * static_cast<double>(grid_->getHeight()));
+        gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), targetY);
+    };
+    gridViewport_->vZoomBar().onZoomRange = [this](double newStartFrac, double newVisFrac)
+    {
+        if (grid_ == nullptr || gridViewport_ == nullptr)
+            return;
+        const auto* pat = song_.findPattern(currentPattern_);
+        const int numTracks = std::max(1, pat != nullptr ? static_cast<int>(pat->tracks.size()) : 1);
+        const int viewH = std::max(40, gridViewport_->getViewHeight());
+        const double desiredTotalH = static_cast<double>(viewH) / std::clamp(newVisFrac, 0.05, 1.0);
+        const double desiredTrackH = (desiredTotalH - PatternGrid::kRulerHeight) / static_cast<double>(numTracks + 1);
+        const float targetZoomY = std::clamp(static_cast<float>(desiredTrackH / static_cast<double>(PatternGrid::kDefaultTrackHeight)),
+                                             1.0f, 2.5f);
+        zoomY_ = targetZoomY;
+        song_.setPatternZoom(zoomX_, zoomY_);
+        gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
+        grid_->setZoom(zoomX_, zoomY_);
+        trackHeaders_->setTrackHeight(grid_->trackHeight());
+        resized();
+        const int targetY = juce::roundToInt(newStartFrac * static_cast<double>(grid_->getHeight()));
+        gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), std::max(0, targetY));
+        gridViewport_->syncZoomBars();
+    };
+    gridViewport_->vZoomBar().onResetZoom = [this]() { resetZoom(); };
     gridViewport_->zoomCorner().setZoomLevels(zoomX_, zoomY_);
     gridViewport_->zoomCorner().onZoomXChanged = [this](float newZoomX)
     {
@@ -1209,7 +1573,7 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
 
     masterBusLane_ = std::make_unique<MasterBusLane>(
         song_, engine_, *grid_, [this]() { return currentPattern_; }, [this]() { openMasterFxDialog(); },
-        [this]() { publishSnapshotQuick(); },
+        [this]() { toggleMasterFxBypass(); }, [this]() { publishSnapshotQuick(); },
         [this](bool muteAll)
         {
             if (auto* pat = song_.findPattern(currentPattern_))
@@ -1350,9 +1714,83 @@ void PatternView::clipFxRequested(ClipId clipId)
     if (clip == nullptr)
         return;
 
+    int trackIdx = -1;
+    if (const auto* pat = song_.findPattern(currentPattern_))
+    {
+        for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
+        {
+            for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
+            {
+                if (c.id == clipId)
+                {
+                    trackIdx = t;
+                    break;
+                }
+            }
+            if (trackIdx >= 0)
+                break;
+        }
+    }
+
+    static constexpr std::uint32_t kModernPalette[] = {
+        0xff63d988, 0xffb4a2f0, 0xff72c4fa, 0xfff2bf66, 0xfff294ab,
+        0xff6ad8cc, 0xff9d94f2, 0xffa2dc6d, 0xffefa274, 0xff85b8f8
+    };
+    constexpr std::size_t kPaletteCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
+
     const Sample* smp = song_.findSample(clip->sampleId);
-    const juce::String clipLabel = smp != nullptr ? juce::String(smp->name) : ("Clip #" + juce::String(clipId.value));
-    PluginRackDialog::showAsync("Clip FX Rack — " + clipLabel, engine_.pluginHost(), PluginHost::TargetKind::Clip,
+    juce::String clipName;
+    if (const auto* pat = song_.findPattern(currentPattern_); pat != nullptr && trackIdx >= 0 &&
+                                                             trackIdx < static_cast<int>(pat->tracks.size()) &&
+                                                             !pat->tracks[static_cast<std::size_t>(trackIdx)].name.empty())
+    {
+        clipName = juce::String::fromUTF8(pat->tracks[static_cast<std::size_t>(trackIdx)].name.c_str());
+    }
+    else if (smp != nullptr)
+    {
+        clipName = juce::String::fromUTF8(smp->name.c_str());
+    }
+    else
+    {
+        clipName = "Clip #" + juce::String(clipId.value);
+    }
+
+    const int bar = static_cast<int>(std::floor(clip->startStep / static_cast<double>(kStepsPerBar))) + 1;
+    const int beat = static_cast<int>(std::floor(std::fmod(std::max(0.0, clip->startStep),
+                                                           static_cast<double>(kStepsPerBar)) /
+                                                 static_cast<double>(kStepsPerBeat))) + 1;
+
+    juce::String location = "Bar " + juce::String(bar) + "." + juce::String(beat);
+    if (trackIdx >= 0)
+        location = "Track " + juce::String(trackIdx + 1) + ", " + location;
+
+    juce::Colour clipAccent = (clip->sampleId.isValid())
+                                  ? juce::Colour(kModernPalette[(clip->sampleId.value - 1) % kPaletteCount])
+                                  : Palette::accent;
+    if (const auto* pat = song_.findPattern(currentPattern_); pat != nullptr && trackIdx >= 0 &&
+                                                             trackIdx < static_cast<int>(pat->tracks.size()) &&
+                                                             pat->tracks[static_cast<std::size_t>(trackIdx)].colorArgb != 0)
+    {
+        clipAccent = juce::Colour(pat->tracks[static_cast<std::size_t>(trackIdx)].colorArgb);
+    }
+
+    PluginRackDialog::NavigationActions nav;
+    nav.primaryLabel = "Jump to Clip";
+    nav.onPrimary = [this, clipId]() { jumpToClip(clipId); };
+    nav.accentColour = clipAccent;
+    nav.targetBanner = clipName + " (" + location + ")";
+    if (trackIdx >= 0)
+    {
+        nav.secondaryLabel = "Track " + juce::String(trackIdx + 1) + " FX";
+        nav.onSecondary = [this, trackIdx]()
+        {
+            jumpToTrack(trackIdx);
+            openTrackFxDialog(trackIdx);
+        };
+    }
+
+    const juce::String title = "Clip FX: " + clipName + " (" + location + ")";
+    PluginRackDialog::showAsync(title, engine_.pluginHost(), PluginHost::TargetKind::Clip,
                                 clipId.value, clip->fxChain,
                                 [this, clipId](std::vector<PluginSlot> newChain)
                                 {
@@ -1364,7 +1802,131 @@ void PatternView::clipFxRequested(ClipId clipId)
                                     publishSnapshotQuick();
                                     if (grid_ != nullptr)
                                         grid_->repaint();
-                                });
+                                },
+                                std::move(nav));
+}
+
+void PatternView::jumpToClip(ClipId clipId)
+{
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat == nullptr || grid_ == nullptr || gridViewport_ == nullptr)
+        return;
+
+    for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
+    {
+        for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
+        {
+            if (c.id == clipId)
+            {
+                grid_->setSelectedClip(clipId);
+                const int clipX = grid_->stepToX(c.startStep);
+                const int clipY = PatternGrid::kRulerHeight + t * grid_->trackHeight();
+                const int viewW = std::max(1, gridViewport_->getViewWidth());
+                const int viewH = std::max(1, gridViewport_->getViewHeight());
+                const int targetX = std::max(0, clipX - viewW / 4);
+                const int targetY = std::max(0, clipY - viewH / 3);
+                gridViewport_->setViewPosition(targetX, targetY);
+                if (auto* topWin = getTopLevelComponent())
+                    topWin->toFront(true);
+                grid_->repaint();
+                return;
+            }
+        }
+    }
+}
+
+void PatternView::jumpToTrack(int track)
+{
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat == nullptr || grid_ == nullptr || gridViewport_ == nullptr)
+        return;
+    if (track < 0 || track >= static_cast<int>(pat->tracks.size()))
+        return;
+
+    const int trackY = PatternGrid::kRulerHeight + track * grid_->trackHeight();
+    const int viewH = std::max(1, gridViewport_->getViewHeight());
+    const int targetY = std::max(0, trackY - viewH / 3);
+    gridViewport_->setViewPosition(gridViewport_->getViewPositionX(), targetY);
+    if (auto* topWin = getTopLevelComponent())
+        topWin->toFront(true);
+    grid_->repaint();
+}
+
+void PatternView::clipFxBypassRequested(ClipId clipId)
+{
+    const Clip* clip = song_.findClip(currentPattern_, clipId);
+    if (clip == nullptr || clip->fxChain.empty())
+        return;
+
+    const bool allBypassed = std::all_of(clip->fxChain.begin(), clip->fxChain.end(),
+                                         [](const PluginSlot& s) { return s.bypassed; });
+    auto nextChain = clip->fxChain;
+    for (auto& s : nextChain)
+        s.bypassed = !allBypassed;
+
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.setClipFxChain(currentPattern_, clipId, std::move(nextChain));
+    if (const auto* pat = song_.findPattern(currentPattern_))
+        engine_.pluginHost().syncFromPattern(*pat);
+    publishSnapshotQuick();
+    if (grid_ != nullptr)
+        grid_->repaint();
+    if (onShowToast_)
+        onShowToast_(allBypassed ? "Clip FX Enabled" : "Clip FX Bypassed");
+}
+
+void PatternView::toggleTrackFxBypass(int track)
+{
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat == nullptr || track < 0 || track >= static_cast<int>(pat->tracks.size()))
+        return;
+
+    const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
+    if (trk.fxChain.empty())
+        return;
+
+    const bool allBypassed = std::all_of(trk.fxChain.begin(), trk.fxChain.end(),
+                                         [](const PluginSlot& s) { return s.bypassed; });
+    auto nextChain = trk.fxChain;
+    for (auto& s : nextChain)
+        s.bypassed = !allBypassed;
+
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.setTrackFxChain(currentPattern_, track, std::move(nextChain));
+    if (const auto* p = song_.findPattern(currentPattern_))
+        engine_.pluginHost().syncFromPattern(*p);
+    if (trackHeaders_ != nullptr)
+        trackHeaders_->updateFromModel();
+    publishSnapshotQuick();
+    if (onShowToast_)
+        onShowToast_(allBypassed ? ("Track " + juce::String(track + 1) + " FX Enabled")
+                                 : ("Track " + juce::String(track + 1) + " FX Bypassed"));
+}
+
+void PatternView::toggleMasterFxBypass()
+{
+    const auto* pat = song_.findPattern(currentPattern_);
+    if (pat == nullptr || pat->masterFxChain.empty())
+        return;
+
+    const bool allBypassed = std::all_of(pat->masterFxChain.begin(), pat->masterFxChain.end(),
+                                         [](const PluginSlot& s) { return s.bypassed; });
+    auto nextChain = pat->masterFxChain;
+    for (auto& s : nextChain)
+        s.bypassed = !allBypassed;
+
+    if (onPushUndo_)
+        onPushUndo_();
+    song_.setMasterFxChain(currentPattern_, std::move(nextChain));
+    if (const auto* p = song_.findPattern(currentPattern_))
+        engine_.pluginHost().syncFromPattern(*p);
+    if (masterBusLane_ != nullptr)
+        masterBusLane_->updateButtonStates();
+    publishSnapshotQuick();
+    if (onShowToast_)
+        onShowToast_(allBypassed ? "Master FX Enabled" : "Master FX Bypassed");
 }
 
 void PatternView::openTrackFxDialog(int track)
@@ -1374,8 +1936,41 @@ void PatternView::openTrackFxDialog(int track)
         return;
 
     const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
-    const juce::String trkLabel = trk.name.empty() ? ("Track " + juce::String(track + 1)) : juce::String(trk.name);
-    PluginRackDialog::showAsync("Track FX Rack — " + trkLabel, engine_.pluginHost(), PluginHost::TargetKind::Track,
+    juce::String trkName = trk.name.empty() ? juce::String() : juce::String::fromUTF8(trk.name.c_str());
+    if (trkName.isEmpty())
+    {
+        SampleId sid = trk.sampleId;
+        if (!sid.isValid() && !trk.clips.empty())
+            sid = trk.clips.front().sampleId;
+        if (const Sample* s = song_.findSample(sid))
+            trkName = juce::String::fromUTF8(s->name.c_str());
+    }
+    static constexpr std::uint32_t kModernPalette[] = {
+        0xff63d988, 0xffb4a2f0, 0xff72c4fa, 0xfff2bf66, 0xfff294ab,
+        0xff6ad8cc, 0xff9d94f2, 0xffa2dc6d, 0xffefa274, 0xff85b8f8
+    };
+    constexpr std::size_t kPaletteCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
+
+    SampleId colorSid = trk.sampleId;
+    if (!colorSid.isValid() && !trk.clips.empty())
+        colorSid = trk.clips.front().sampleId;
+
+    PluginRackDialog::NavigationActions nav;
+    nav.primaryLabel = "Jump to Track";
+    nav.onPrimary = [this, track]() { jumpToTrack(track); };
+    nav.accentColour = (trk.colorArgb != 0)
+                           ? juce::Colour(trk.colorArgb)
+                           : (colorSid.isValid()
+                                  ? juce::Colour(kModernPalette[(colorSid.value - 1) % kPaletteCount])
+                                  : Palette::accent);
+    nav.targetBanner = trkName.isNotEmpty()
+                           ? ("Track " + juce::String(track + 1) + " - " + trkName)
+                           : ("Track " + juce::String(track + 1));
+
+    const juce::String title = trkName.isNotEmpty()
+                                   ? ("Track " + juce::String(track + 1) + " FX: " + trkName)
+                                   : ("Track " + juce::String(track + 1) + " FX");
+    PluginRackDialog::showAsync(title, engine_.pluginHost(), PluginHost::TargetKind::Track,
                                 static_cast<std::uint32_t>(track), trk.fxChain,
                                 [this, track](std::vector<PluginSlot> newChain)
                                 {
@@ -1387,7 +1982,8 @@ void PatternView::openTrackFxDialog(int track)
                                     if (trackHeaders_ != nullptr)
                                         trackHeaders_->updateFromModel();
                                     publishSnapshotQuick();
-                                });
+                                },
+                                std::move(nav));
 }
 
 void PatternView::openMasterFxDialog()
@@ -1395,6 +1991,10 @@ void PatternView::openMasterFxDialog()
     const auto* pat = song_.findPattern(currentPattern_);
     if (pat == nullptr)
         return;
+
+    PluginRackDialog::NavigationActions nav;
+    nav.accentColour = juce::Colour(0xffef4444);
+    nav.targetBanner = "Master Bus";
 
     PluginRackDialog::showAsync("Master Bus FX Rack", engine_.pluginHost(), PluginHost::TargetKind::Master, 0,
                                 pat->masterFxChain,
@@ -1408,7 +2008,8 @@ void PatternView::openMasterFxDialog()
                                     if (masterBusLane_ != nullptr)
                                         masterBusLane_->updateButtonStates();
                                     publishSnapshotQuick();
-                                });
+                                },
+                                std::move(nav));
 }
 
 void PatternView::loopRegionChanged(int startStep, int endStep)
@@ -3412,9 +4013,9 @@ void PatternView::applyZoomAtStep(float targetZoomX, double anchorStep, int anch
 
     if (gridViewport_ != nullptr && grid_ != nullptr)
     {
-        const int newStepW = grid_->stepWidth();
+        const double newStepW = grid_->stepWidthDouble();
         const int newVpX =
-            juce::roundToInt(anchorStep * static_cast<double>(newStepW) - static_cast<double>(anchorViewportX));
+            juce::roundToInt(anchorStep * newStepW - static_cast<double>(anchorViewportX));
         gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
     }
 }
@@ -3912,6 +4513,8 @@ void PatternView::resized()
                 const int finalGridH = std::max(timelineH, neededGridHeight);
                 trackHeaders_->setTrackHeight(grid_->trackHeight());
                 grid_->setSize(std::max(gridW, neededGridWidth), finalGridH);
+    gridViewport_->syncZoomBars();
+                gridViewport_->syncZoomBars();
                 trackHeaders_->setSize(headerW, finalGridH + StudioOneZoomCorner::kThickness);
                 gridViewport_->setViewPosition(std::max(0, juce::roundToInt(static_cast<float>(prevVpX) * scale)),
                                                gridViewport_->getViewPositionY());
@@ -3935,6 +4538,7 @@ void PatternView::resized()
 
     trackHeaders_->setTrackHeight(grid_->trackHeight());
     grid_->setSize(std::max(gridW, neededGridWidth), finalGridH);
+    gridViewport_->syncZoomBars();
     trackHeaders_->setSize(headerW, finalGridH + StudioOneZoomCorner::kThickness);
     trackHeadersViewport_->setViewPosition(0, gridViewport_->getViewPositionY());
 }

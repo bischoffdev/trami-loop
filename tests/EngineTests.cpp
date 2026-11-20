@@ -576,8 +576,9 @@ TEST_CASE("Sound clip longer than loop region stops at end of loop without overl
     REQUIRE(snap->loopStartSample == 0);
     REQUIRE(snap->loopEndSample == 96000);
     REQUIRE(snap->events.size() == 1);
-    // maxFrames must be capped to 96000 so the clip stops at the end of the loop!
-    REQUIRE(snap->events[0].maxFrames == 96000);
+    // maxFrames preserves full clip length so Loop OFF plays the whole clip,
+    // while Sequencer stops the voice cleanly at loopEnd when Loop ON!
+    REQUIRE(snap->events[0].maxFrames == 384000);
 
     SnapshotExchange exchange;
     exchange.publish(std::move(snap));
@@ -1122,4 +1123,35 @@ TEST_CASE("Reversing or editing a clip mid-playback takes effect immediately on 
     seq.process(left.data(), right.data(), 256);
     // At sample 512 reversed, raw value is (9999 - 512) / 10000 ~= 0.9487, times gain 0.5 ~= 0.4743
     REQUIRE(left[0] == Catch::Approx(0.5f * (9999.0f - 512.0f) / kFrames).margin(0.01f));
+}
+
+TEST_CASE("Clip plays past loop region end when loop playback is disabled")
+{
+    Fixture f;
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(48000, 0.75f));
+    sustained->channels.push_back(std::vector<float>(48000, 0.75f));
+    f.bank[f.sample] = sustained;
+
+    // 16-step clip starting at step 0, with a tiny 2-step loop region [0..2]
+    f.song.placeClip(f.pattern, 0, f.sample, 0.0, 16.0);
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate, 0, 2);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.setLoopingEnabled(false); // Loop playback is OFF!
+    seq.requestPlaying(true);
+
+    // At 120 BPM, 48 kHz: 1 step = 3000 samples, so loop region [0..2] ends at sample 6000.
+    // Advance past sample 6000 (e.g., 8000 samples) and verify the clip is STILL audible!
+    std::vector<float> left(1000, 0.0f), right(1000, 0.0f);
+    for (int b = 0; b < 8; ++b)
+    {
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        seq.process(left.data(), right.data(), 1000);
+    }
+    // Block 7 covers samples 7000..7999 (past the 2-step blue loop marker) -> must still be 0.75!
+    REQUIRE(left[500] == Catch::Approx(0.75f).margin(0.01f));
 }

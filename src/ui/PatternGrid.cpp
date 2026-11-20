@@ -526,8 +526,8 @@ void PatternGrid::mouseMove(const juce::MouseEvent& e)
         const int mx = e.getPosition().x;
         const int my = e.getPosition().y;
 
-        // Top 15px of ruler: Paint loop region (or fine-tune start/end handles)
-        if (my <= 15)
+        // Top 11px of ruler (the blue loop bar): Paint loop region (or fine-tune start/end handles)
+        if (my <= 11)
         {
             if (std::abs(mx - startX) <= 8 || std::abs(mx - endX) <= 8)
             {
@@ -540,12 +540,11 @@ void PatternGrid::mouseMove(const juce::MouseEvent& e)
                 setMouseCursor(juce::MouseCursor::CrosshairCursor);
             }
         }
-        else if (my > 15)
-            setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
-        else if (isNearPlayhead)
-            setMouseCursor(juce::MouseCursor::PointingHandCursor);
         else
-            setMouseCursor(juce::MouseCursor::NormalCursor);
+        {
+            currentTooltip_ = "Click to seek playhead | Drag Up/Down to Zoom Horizontally";
+            setMouseCursor(isNearPlayhead ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::UpDownResizeCursor);
+        }
         return;
     }
 
@@ -976,7 +975,7 @@ void PatternGrid::paint(juce::Graphics& g)
                 auto bounds = (rawBounds.getWidth() > 6) ? rawBounds.reduced(2, 3) : rawBounds.reduced(0, 3);
                 const auto fBounds = bounds.toFloat();
                 const float clipRadius = std::min(7.5f, std::min(fBounds.getWidth(), fBounds.getHeight()) * 0.25f);
-                const juce::Colour col = sampleColour(clip.sampleId);
+                const juce::Colour col = (track.colorArgb != 0) ? juce::Colour(track.colorArgb) : sampleColour(clip.sampleId);
                 const bool isOverlapping = overlappingClipIds.contains(clip.id.value);
 
                 // Stacked card tab if overlapping
@@ -1196,13 +1195,23 @@ void PatternGrid::paint(juce::Graphics& g)
                     {
                         const auto fb = fxBox.toFloat();
                         const bool hasFx = !clip.fxChain.empty();
-                        if (hasFx)
+                        const bool allBypassed = hasFx && std::all_of(clip.fxChain.begin(), clip.fxChain.end(),
+                                                                      [](const PluginSlot& s) { return s.bypassed; });
+                        if (hasFx && !allBypassed)
                         {
                             g.setColour(juce::Colour(0xff0891b2));
                             g.fillRoundedRectangle(fb, 2.0f);
                             g.setColour(juce::Colour(0xff67e8f9));
                             g.drawRoundedRectangle(fb, 2.0f, 1.0f);
                             g.setColour(juce::Colours::white);
+                        }
+                        else if (allBypassed)
+                        {
+                            g.setColour(juce::Colour(0xffb45309).withAlpha(0.75f));
+                            g.fillRoundedRectangle(fb, 2.0f);
+                            g.setColour(juce::Colour(0xfffbbf24));
+                            g.drawRoundedRectangle(fb, 2.0f, 1.0f);
+                            g.setColour(juce::Colours::white.withAlpha(0.75f));
                         }
                         else
                         {
@@ -1212,22 +1221,32 @@ void PatternGrid::paint(juce::Graphics& g)
                         }
                         g.setFont(Typography::bold(9.5f));
                         g.drawText("fx", fxBox, juce::Justification::centred, false);
+                        if (allBypassed)
+                        {
+                            g.setColour(juce::Colour(0xfffef08a));
+                            g.drawLine(fb.getX() + 2.0f, fb.getCentreY(), fb.getRight() - 2.0f, fb.getCentreY(), 1.2f);
+                        }
                     }
 
-                    // Clip / Sample Name on the left of the bottom bar
-                    if (sample != nullptr)
+                    // Clip / Track Name on the left of the bottom bar (custom track name overrides sample name)
                     {
-                        const int textLeft = bounds.getX() + (bounds.getWidth() >= 36 ? 12 : 4);
-                        const int rightBound = !fxBox.isEmpty()
-                                                   ? (fxBox.getX() - 4)
-                                                   : (!pitchBox.isEmpty() ? (pitchBox.getX() - 4) : (bounds.getRight() - 4));
-                        if (rightBound - textLeft >= 12)
+                        const juce::String displayName = !track.name.empty()
+                                                             ? juce::String::fromUTF8(track.name.c_str())
+                                                             : (sample != nullptr ? juce::String::fromUTF8(sample->name.c_str()) : juce::String());
+                        if (displayName.isNotEmpty())
                         {
-                            g.setColour(inkCol);
-                            g.setFont(Typography::regular(11.0f));
-                            g.drawText(juce::String(sample->name),
-                                       textLeft, footerY, rightBound - textLeft, kClipFooterH,
-                                       juce::Justification::centredLeft, true);
+                            const int textLeft = bounds.getX() + (bounds.getWidth() >= 36 ? 12 : 4);
+                            const int rightBound = !fxBox.isEmpty()
+                                                       ? (fxBox.getX() - 4)
+                                                       : (!pitchBox.isEmpty() ? (pitchBox.getX() - 4) : (bounds.getRight() - 4));
+                            if (rightBound - textLeft >= 12)
+                            {
+                                g.setColour(inkCol);
+                                g.setFont(Typography::regular(11.0f));
+                                g.drawText(displayName,
+                                           textLeft, footerY, rightBound - textLeft, kClipFooterH,
+                                           juce::Justification::centredLeft, true);
+                            }
                         }
                     }
 
@@ -1652,7 +1671,10 @@ void PatternGrid::paint(juce::Graphics& g)
     {
         const auto pBounds = clipBounds(paintTrack_, paintCurrentStart_, paintCurrentLen_).reduced(2, 3);
         const SampleId paintSid = song_.patternTrackSample(patternId_, paintTrack_);
-        const juce::Colour pCol = paintSid.isValid() ? sampleColour(paintSid) : Palette::accent;
+        const auto& paintTrk = pat->tracks[static_cast<std::size_t>(paintTrack_)];
+        const juce::Colour pCol = (paintTrk.colorArgb != 0)
+                                      ? juce::Colour(paintTrk.colorArgb)
+                                      : (paintSid.isValid() ? sampleColour(paintSid) : Palette::accent);
         g.setColour(pCol.withAlpha(0.42f));
         g.fillRoundedRectangle(pBounds.toFloat(), 7.5f);
         g.setColour(juce::Colours::white.withAlpha(0.85f));
@@ -1924,8 +1946,12 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             envPresetMenu.addItem(507, "Clear Multi-Point Envelopes", !clip->volumeEnvelope.empty() || !clip->panEnvelope.empty());
             m.addSubMenu("Multi-Point Envelopes", envPresetMenu);
 
+            const bool hasClipFx = !clip->fxChain.empty();
+            const bool allClipFxBypassed = hasClipFx && std::all_of(clip->fxChain.begin(), clip->fxChain.end(),
+                                                                    [](const PluginSlot& s) { return s.bypassed; });
             m.addSeparator();
             m.addItem(610, "Clip FX Chain (VST3 / AU)...");
+            m.addItem(611, "Bypass All Clip FX", hasClipFx, allClipFxBypassed);
             m.addItem(601, "Split Clip Here / At Playhead (S)");
             m.addItem(602, "Join Selected Clips (J)", multi);
             m.addItem(5, "Reverse (R)", true, clip->reversed);
@@ -1953,6 +1979,11 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                 if (res == 610)
                                 {
                                     listener_.clipFxRequested(cid);
+                                    return;
+                                }
+                                if (res == 611)
+                                {
+                                    listener_.clipFxBypassRequested(cid);
                                     return;
                                 }
                                 if (res == 601)
@@ -2287,8 +2318,8 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             }
         }
 
-        // Top 15px of ruler: Paint loop region directly (or drag start/end edge handles)
-        if (my <= 15)
+        // Top 11px of ruler (blue loop bar): Paint loop region directly (or drag start/end edge handles)
+        if (my <= 11)
         {
             if (std::abs(mx - startX) <= 8)
             {
@@ -2619,7 +2650,10 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                         setSelectedClip(cid);
                         listener_.clipClicked(cid);
                     }
-                    listener_.clipFxRequested(cid);
+                    if (e.mods.isAltDown())
+                        listener_.clipFxBypassRequested(cid);
+                    else
+                        listener_.clipFxRequested(cid);
                     return;
                 }
                 const auto pBox = clipPitchBoxBounds(cBounds);

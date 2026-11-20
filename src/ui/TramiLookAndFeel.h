@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
+#include <cstdint>
 
 namespace trami
 {
@@ -8,6 +10,17 @@ namespace trami
 /// Central colour palette. All UI colours come from here.
 namespace Palette
 {
+/// 32 curated DAW track/clip colors (4 rows x 8 columns)
+inline constexpr std::array<std::uint32_t, 32> kTrackColors = {
+    // Row 1: Warm Reds / Oranges / Yellows
+    0xffef4444, 0xfff87171, 0xfff97316, 0xfffb923c, 0xfff59e0b, 0xfffbbf24, 0xffeab308, 0xfffde047,
+    // Row 2: Greens / Teals
+    0xff84cc16, 0xffa3e635, 0xff22c55e, 0xff4ade80, 0xff10b981, 0xff34d399, 0xff14b8a6, 0xff2dd4bf,
+    // Row 3: Cyans / Blues / Indigos
+    0xff06b6d4, 0xff22d3ee, 0xff0ea5e9, 0xff38bdf8, 0xff3b82f6, 0xff60a5fa, 0xff6366f1, 0xff818cf8,
+    // Row 4: Purples / Pinks / Neutrals
+    0xff8b5cf6, 0xffa78bfa, 0xffa855f7, 0xffd946ef, 0xffec4899, 0xfff472b6, 0xff94a3b8, 0xffcbd5e1
+};
 inline const juce::Colour background{0xff1c1c1f};
 inline const juce::Colour surface{0xff2a2a2f};
 inline const juce::Colour panelBackground{0xff222226};

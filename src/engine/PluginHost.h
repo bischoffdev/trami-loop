@@ -40,6 +40,12 @@ public:
     /// Scans system VST3 / AU directories for audio effect plugins and caches the list.
     int scanDefaultPluginPaths(std::function<void(const juce::String&)> onStatus = nullptr);
 
+    /// Incremental, non-blocking scan API (safe to pump from a UI timer on the message thread).
+    void beginDefaultPluginScan();
+    bool scanNextPlugin(juce::String& outStatus, int& outSkippedCount);
+    int finishPluginScan();
+    bool isScanning() const noexcept { return scanActive_; }
+
     /// Synchronizes live plugin instances with the Song's current Pattern model.
     void syncFromPattern(const Pattern& pattern);
 
@@ -75,7 +81,13 @@ private:
     juce::File pluginCacheFile() const;
 
     std::unique_ptr<juce::AudioPluginInstance> instantiateSlot(const PluginSlot& slot);
-    void syncChain(std::vector<HostedSlot>& liveChain, const std::vector<PluginSlot>& modelChain);
+    void closeEditorsForChain(const std::vector<HostedSlot>& retiredChain);
+    std::vector<HostedSlot> buildNextChain(const std::vector<HostedSlot>& currentChain,
+                                           const std::vector<PluginSlot>& modelChain,
+                                           std::vector<std::unique_ptr<juce::AudioPluginInstance>>& newlyCreated);
+    void syncMasterChain(const std::vector<PluginSlot>& modelChain);
+    void syncTrackChain(int trackIndex, const std::vector<PluginSlot>& modelChain);
+    void syncClipChain(std::uint32_t clipId, const std::vector<PluginSlot>& modelChain);
     void captureChainStates(const std::vector<HostedSlot>& liveChain, std::vector<PluginSlot>& modelChain);
     void processChain(std::vector<HostedSlot>& chain, float* left, float* right, int numSamples) noexcept;
 
@@ -95,6 +107,13 @@ private:
     juce::MidiBuffer emptyMidi_;
 
     std::vector<std::unique_ptr<EditorWindow>> openEditors_;
+
+    // Incremental scan state
+    bool scanActive_ = false;
+    int scanFormatIndex_ = 0;
+    int scanSkippedCount_ = 0;
+    int scanScannedCount_ = 0;
+    std::unique_ptr<juce::PluginDirectoryScanner> activeScanner_;
 };
 
 } // namespace trami

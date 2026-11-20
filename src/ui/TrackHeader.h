@@ -8,6 +8,8 @@
 
 #include <array>
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace trami
 {
@@ -29,6 +31,8 @@ public:
     using TrackRenamedCallback = std::function<void(int track, const std::string& name)>;
     using TrackPropertiesCallback = std::function<void(int track)>;
     using TrackFxCallback = std::function<void(int track)>;
+    using TrackFxBypassCallback = std::function<void(int track)>;
+    using TrackColorChangedCallback = std::function<void()>;
     using TrackPeakProvider = std::function<std::pair<float, float>(int track)>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
@@ -49,6 +53,8 @@ public:
     void setOnTrackRenamed(TrackRenamedCallback cb) { onTrackRenamed_ = std::move(cb); }
     void setOnTrackProperties(TrackPropertiesCallback cb) { onTrackProperties_ = std::move(cb); }
     void setOnTrackFx(TrackFxCallback cb) { onTrackFx_ = std::move(cb); }
+    void setOnTrackFxBypass(TrackFxBypassCallback cb) { onTrackFxBypass_ = std::move(cb); }
+    void setOnTrackColorChanged(TrackColorChangedCallback cb) { onTrackColorChanged_ = std::move(cb); }
     void setTrackPeakProvider(TrackPeakProvider cb);
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
@@ -59,6 +65,7 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    void mouseMove(const juce::MouseEvent& e) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
@@ -103,6 +110,8 @@ private:
 
     void timerCallback() override;
     int pointToTrack(juce::Point<int> pt) const;
+    std::vector<int> targetTracksFor(int primaryTrack) const;
+    void showColorPickerForTrack(int track, juce::Rectangle<int> anchorRect);
 
     Song& song_;
     PatternId patternId_;
@@ -117,9 +126,17 @@ private:
     TrackRenamedCallback onTrackRenamed_;
     TrackPropertiesCallback onTrackProperties_;
     TrackFxCallback onTrackFx_;
+    TrackFxBypassCallback onTrackFxBypass_;
+    TrackColorChangedCallback onTrackColorChanged_;
     TrackPeakProvider trackPeakProvider_;
     std::vector<float> peakL_;
     std::vector<float> peakR_;
+    std::unordered_set<int> selectedTracks_;
+    int lastClickedTrack_ = -1;
+    std::unordered_map<int, float> dragStartVols_;
+    float dragAnchorVol_ = 1.0f;
+    std::unordered_map<int, float> dragStartPans_;
+    float dragAnchorPan_ = 0.0f;
     int trackHeight_ = kMinTrackHeight;
     int dragHoverTrack_ = -1;
     bool isReorderDrag_ = false;
