@@ -638,6 +638,16 @@ bool Song::setTrackFxChain(PatternId patternId, int trackIndex, std::vector<Plug
     return true;
 }
 
+bool Song::setPatternTrackColor(PatternId patternId, int trackIndex, std::uint32_t colorArgb)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern) ||
+        trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return false;
+    pattern->tracks[static_cast<std::size_t>(trackIndex)].colorArgb = colorArgb;
+    return true;
+}
+
 bool Song::setMasterFxChain(PatternId patternId, std::vector<PluginSlot> chain)
 {
     Pattern* pattern = findPattern(patternId);

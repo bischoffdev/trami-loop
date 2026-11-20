@@ -83,6 +83,7 @@ public:
     bool setMasterAutomation(PatternId pattern, std::vector<EnvelopePoint> points);
     bool setClipFxChain(PatternId pattern, ClipId clip, std::vector<PluginSlot> chain);
     bool setTrackFxChain(PatternId pattern, int trackIndex, std::vector<PluginSlot> chain);
+    bool setPatternTrackColor(PatternId pattern, int trackIndex, std::uint32_t colorArgb);
     bool setMasterFxChain(PatternId pattern, std::vector<PluginSlot> chain);
     int addMarker(PatternId pattern, double step, std::string name);
     bool moveMarker(PatternId pattern, int markerId, double newStep);

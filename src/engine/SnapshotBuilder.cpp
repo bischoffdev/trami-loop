@@ -364,15 +364,6 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                     const std::int64_t cycleFrames = static_cast<std::int64_t>(std::round(thisCycleSteps * stepDurationSamples));
                     std::int64_t maxFrames = std::min(patternEndSample - cycleEventStart, cycleFrames);
 
-                    if (snapshot->looping && snapshot->loopEndSample > snapshot->loopStartSample)
-                    {
-                        if (cycleEventStart >= snapshot->loopStartSample && cycleEventStart < snapshot->loopEndSample)
-                        {
-                            const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, snapshot->loopEndSample - cycleEventStart);
-                            maxFrames = std::min(maxFrames, framesUntilLoop);
-                        }
-                    }
-
                     const std::int64_t curAudioOffset = firstCycle
                         ? static_cast<std::int64_t>(std::round(initialPhaseSteps * stepDurationSamples))
                         : 0;
@@ -416,15 +407,6 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                     ? static_cast<std::int64_t>(std::round(clip.lengthSteps * stepDurationSamples))
                     : framesUntilPatternEnd;
                 maxFrames = std::min(maxFrames, framesUntilPatternEnd);
-
-                if (snapshot->looping && snapshot->loopEndSample > snapshot->loopStartSample)
-                {
-                    if (eventStartSample >= snapshot->loopStartSample && eventStartSample < snapshot->loopEndSample)
-                    {
-                        const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, snapshot->loopEndSample - eventStartSample);
-                        maxFrames = std::min(maxFrames, framesUntilLoop);
-                    }
-                }
 
                 const std::int64_t fadeInSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeIn * stepDurationSamples)));
                 const std::int64_t fadeOutSamples = std::min(maxFrames, static_cast<std::int64_t>(std::round(effectiveFadeOut * stepDurationSamples)));
@@ -638,15 +620,6 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 
                             const std::int64_t cycleFrames = static_cast<std::int64_t>(std::round(thisCycleSteps * stepDurationSamples));
                             std::int64_t maxFrames = std::min(blockEndSample - cycleEventStart, cycleFrames);
-
-                            if (snapshot->looping && snapshot->loopEndSample > snapshot->loopStartSample)
-                            {
-                                if (cycleEventStart >= snapshot->loopStartSample && cycleEventStart < snapshot->loopEndSample)
-                                {
-                                    const std::int64_t framesUntilLoop = std::max<std::int64_t>(0, snapshot->loopEndSample - cycleEventStart);
-                                    maxFrames = std::min(maxFrames, framesUntilLoop);
-                                }
-                            }
 
                             const std::int64_t curAudioOffset = firstCycle
                                 ? static_cast<std::int64_t>(std::round(initialPhaseSteps * stepDurationSamples))

@@ -142,6 +142,7 @@ struct PatternTrack
     std::vector<EnvelopePoint> fxAutomation;     ///< Position in steps.
     SampleId sampleId;
     std::optional<SampleKind> kindOverride;
+    std::uint32_t colorArgb = 0;     ///< 0 = automatic color from sample; otherwise 0xFFRRGGBB custom track color.
     std::vector<PluginSlot> fxChain; ///< Track-level VST3/AU plugin chain.
     std::vector<Clip> clips;
 };

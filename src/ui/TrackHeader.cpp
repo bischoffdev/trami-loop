@@ -8,6 +8,132 @@
 namespace trami
 {
 
+class TrackColorPicker : public juce::Component
+{
+public:
+    TrackColorPicker(std::uint32_t currentColor, std::function<void(std::uint32_t)> onPick)
+        : currentColor_(currentColor), onPick_(std::move(onPick))
+    {
+        addAndMakeVisible(autoBtn_);
+        autoBtn_.setButtonText("Reset to Auto Color");
+        autoBtn_.onClick = [this]()
+        {
+            if (onPick_)
+                onPick_(0);
+            if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+                box->dismiss();
+        };
+        setSize(kCols * (kSwatch + kGap) + kPad * 2 - kGap,
+                kRows * (kSwatch + kGap) + kPad * 2 + 28);
+    }
+
+    void resized() override
+    {
+        autoBtn_.setBounds(kPad, getHeight() - kPad - 22, getWidth() - kPad * 2, 22);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(Palette::surface);
+        for (int i = 0; i < 32; ++i)
+        {
+            const auto r = swatchRect(i).toFloat();
+            const std::uint32_t col = Palette::kTrackColors[static_cast<std::size_t>(i)];
+            g.setColour(juce::Colour(col));
+            g.fillRoundedRectangle(r, 4.0f);
+
+            if (col == currentColor_)
+            {
+                g.setColour(juce::Colours::white);
+                g.drawRoundedRectangle(r.expanded(1.0f), 4.5f, 2.0f);
+            }
+            else if (i == hovered_)
+            {
+                g.setColour(juce::Colours::white.withAlpha(0.75f));
+                g.drawRoundedRectangle(r, 4.0f, 1.5f);
+            }
+            else
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.35f));
+                g.drawRoundedRectangle(r, 4.0f, 1.0f);
+            }
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const int idx = hitSwatch(e.getPosition());
+        if (idx != hovered_)
+        {
+            hovered_ = idx;
+            setMouseCursor(idx >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+            repaint();
+        }
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        hovered_ = -1;
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int idx = hitSwatch(e.getPosition());
+        if (idx >= 0 && idx < 32)
+        {
+            if (onPick_)
+                onPick_(Palette::kTrackColors[static_cast<std::size_t>(idx)]);
+            if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+                box->dismiss();
+        }
+    }
+
+private:
+    static constexpr int kCols = 8;
+    static constexpr int kRows = 4;
+    static constexpr int kSwatch = 22;
+    static constexpr int kGap = 5;
+    static constexpr int kPad = 8;
+
+    juce::Rectangle<int> swatchRect(int index) const
+    {
+        const int col = index % kCols;
+        const int row = index / kCols;
+        return {kPad + col * (kSwatch + kGap), kPad + row * (kSwatch + kGap), kSwatch, kSwatch};
+    }
+
+    int hitSwatch(juce::Point<int> pt) const
+    {
+        for (int i = 0; i < 32; ++i)
+            if (swatchRect(i).contains(pt))
+                return i;
+        return -1;
+    }
+
+    std::uint32_t currentColor_ = 0;
+    std::function<void(std::uint32_t)> onPick_;
+    juce::TextButton autoBtn_;
+    int hovered_ = -1;
+};
+
+class TrackFxButton : public juce::TextButton
+{
+public:
+    explicit TrackFxButton(const juce::String& text) : juce::TextButton(text) {}
+    std::function<void()> onBypassToggle;
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if ((e.mods.isPopupMenu() || e.mods.isAltDown()) && onBypassToggle)
+        {
+            onBypassToggle();
+            return;
+        }
+        juce::TextButton::mouseDown(e);
+    }
+};
+
 class TrackNameLabel : public juce::Label
 {
 public:
@@ -273,6 +399,45 @@ int TrackHeaderList::pointToTrack(juce::Point<int> pt) const
     return t;
 }
 
+std::vector<int> TrackHeaderList::targetTracksFor(int primaryTrack) const
+{
+    const auto* pat = song_.findPattern(patternId_);
+    const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
+    if (selectedTracks_.size() > 1 && selectedTracks_.count(primaryTrack) > 0)
+    {
+        std::vector<int> result;
+        result.reserve(selectedTracks_.size());
+        for (int idx : selectedTracks_)
+            if (idx >= 0 && idx < numTracks)
+                result.push_back(idx);
+        if (!result.empty())
+            return result;
+    }
+    if (primaryTrack >= 0 && primaryTrack < numTracks)
+        return {primaryTrack};
+    return {};
+}
+
+void TrackHeaderList::showColorPickerForTrack(int track, juce::Rectangle<int> anchorRect)
+{
+    const auto* pat = song_.findPattern(patternId_);
+    if (pat == nullptr || track < 0 || track >= static_cast<int>(pat->tracks.size()))
+        return;
+
+    const std::uint32_t curColor = pat->tracks[static_cast<std::size_t>(track)].colorArgb;
+    auto picker = std::make_unique<TrackColorPicker>(
+        curColor,
+        [this, track](std::uint32_t chosenArgb)
+        {
+            for (int target : targetTracksFor(track))
+                song_.setPatternTrackColor(patternId_, target, chosenArgb);
+            if (onTrackColorChanged_)
+                onTrackColorChanged_();
+            repaint();
+        });
+    juce::CallOutBox::launchAsynchronously(std::move(picker), localAreaToGlobal(anchorRect), nullptr);
+}
+
 void TrackHeaderList::updateFromModel()
 {
     const auto* pat = song_.findPattern(patternId_);
@@ -313,14 +478,19 @@ void TrackHeaderList::updateFromModel()
             };
             addAndMakeVisible(c.nameLabel.get());
 
-            c.fxButton = std::make_unique<juce::TextButton>("fx");
-            c.fxButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
-            c.fxButton->setColour(juce::TextButton::textColourOffId, Palette::textDim);
-            c.fxButton->setTooltip("Track " + juce::String(t + 1) + " VST3/AU FX Rack");
-            c.fxButton->onClick = [this, t]() {
+            auto fxBtn = std::make_unique<TrackFxButton>("fx");
+            fxBtn->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
+            fxBtn->setColour(juce::TextButton::textColourOffId, Palette::textDim);
+            fxBtn->setTooltip("Track " + juce::String(t + 1) + " VST3/AU FX Rack (Right-click or Alt+click to bypass all FX)");
+            fxBtn->onClick = [this, t]() {
                 if (onTrackFx_)
                     onTrackFx_(t);
             };
+            fxBtn->onBypassToggle = [this, t]() {
+                if (onTrackFxBypass_)
+                    onTrackFxBypass_(t);
+            };
+            c.fxButton = std::move(fxBtn);
             addAndMakeVisible(c.fxButton.get());
 
             c.propsButton = std::make_unique<juce::TextButton>("P");
@@ -348,48 +518,63 @@ void TrackHeaderList::updateFromModel()
             addAndMakeVisible(c.deleteButton.get());
 
             c.muteButton = std::make_unique<DAWMuteButton>();
-            c.muteButton->setTooltip("Mute Track " + juce::String(t + 1));
+            c.muteButton->setTooltip("Mute Track " + juce::String(t + 1) + " (applies to all selected tracks)");
             c.muteButton->onClick = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
-                    if (t < static_cast<int>(p->tracks.size()))
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
-                        p->tracks[static_cast<std::size_t>(t)].muted =
-                            controls_[static_cast<std::size_t>(t)].muteButton->getToggleState();
-                        if (onMixChanged_)
-                            onMixChanged_(t);
+                        const bool muted = controls_[static_cast<std::size_t>(t)].muteButton->getToggleState();
+                        for (int idx : targetTracksFor(t))
+                        {
+                            p->tracks[static_cast<std::size_t>(idx)].muted = muted;
+                            if (idx < static_cast<int>(controls_.size()))
+                                controls_[static_cast<std::size_t>(idx)].muteButton->setToggleState(muted, juce::dontSendNotification);
+                            if (onMixChanged_)
+                                onMixChanged_(idx);
+                        }
                     }
                 }
             };
             addAndMakeVisible(c.muteButton.get());
 
             c.soloButton = std::make_unique<DAWSoloButton>();
-            c.soloButton->setTooltip("Solo Track " + juce::String(t + 1));
+            c.soloButton->setTooltip("Solo Track " + juce::String(t + 1) + " (applies to all selected tracks)");
             c.soloButton->onClick = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
-                    if (t < static_cast<int>(p->tracks.size()))
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
-                        p->tracks[static_cast<std::size_t>(t)].solo =
-                            controls_[static_cast<std::size_t>(t)].soloButton->getToggleState();
-                        if (onMixChanged_)
-                            onMixChanged_(t);
+                        const bool solo = controls_[static_cast<std::size_t>(t)].soloButton->getToggleState();
+                        for (int idx : targetTracksFor(t))
+                        {
+                            p->tracks[static_cast<std::size_t>(idx)].solo = solo;
+                            if (idx < static_cast<int>(controls_.size()))
+                                controls_[static_cast<std::size_t>(idx)].soloButton->setToggleState(solo, juce::dontSendNotification);
+                            if (onMixChanged_)
+                                onMixChanged_(idx);
+                        }
                     }
                 }
             };
             addAndMakeVisible(c.soloButton.get());
 
             c.armButton = std::make_unique<DAWArmButton>();
-            c.armButton->setTooltip("Arm Track " + juce::String(t + 1) + " for Recording");
+            c.armButton->setTooltip("Arm Track " + juce::String(t + 1) + " for Recording (applies to all selected tracks)");
             c.armButton->onClick = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
-                    if (t < static_cast<int>(p->tracks.size()))
+                    if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
-                        p->tracks[static_cast<std::size_t>(t)].armed =
-                            controls_[static_cast<std::size_t>(t)].armButton->getToggleState();
-                        if (onMixChanged_)
-                            onMixChanged_(t);
+                        const bool armed = controls_[static_cast<std::size_t>(t)].armButton->getToggleState();
+                        for (int idx : targetTracksFor(t))
+                        {
+                            p->tracks[static_cast<std::size_t>(idx)].armed = armed;
+                            if (idx < static_cast<int>(controls_.size()))
+                                controls_[static_cast<std::size_t>(idx)].armButton->setToggleState(armed, juce::dontSendNotification);
+                            if (onMixChanged_)
+                                onMixChanged_(idx);
+                        }
                     }
                 }
             };
@@ -441,17 +626,61 @@ void TrackHeaderList::updateFromModel()
             c.volumeSlider->setRange(0.0, 2.0, 0.01);
             c.volumeSlider->setDoubleClickReturnValue(true, 1.0);
             c.volumeSlider->setValue(1.0, juce::dontSendNotification);
-            c.volumeSlider->setTooltip("Track " + juce::String(t + 1) + " Volume (Double-click to reset to 0.0 dB)");
+            c.volumeSlider->setTooltip("Track " + juce::String(t + 1) + " Volume (Double-click to reset; adjusts selected tracks relatively)");
+            c.volumeSlider->onDragStart = [this, t]() {
+                dragStartVols_.clear();
+                if (const auto* p = song_.findPattern(patternId_))
+                {
+                    if (t < static_cast<int>(p->tracks.size()))
+                    {
+                        dragAnchorVol_ = p->tracks[static_cast<std::size_t>(t)].mix.volume;
+                        for (int idx : targetTracksFor(t))
+                            dragStartVols_[idx] = p->tracks[static_cast<std::size_t>(idx)].mix.volume;
+                    }
+                }
+            };
+            c.volumeSlider->onDragEnd = [this]() { dragStartVols_.clear(); };
             c.volumeSlider->onValueChange = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
                     if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
                         const float vol = static_cast<float>(controls_[static_cast<std::size_t>(t)].volumeSlider->getValue());
-                        p->tracks[static_cast<std::size_t>(t)].mix.volume = vol;
-                        controls_[static_cast<std::size_t>(t)].volLabel->setText(formatVolumeDb(vol), juce::dontSendNotification);
-                        if (onMixChanged_)
-                            onMixChanged_(t);
+                        const auto targets = targetTracksFor(t);
+                        if (targets.size() > 1 && !dragStartVols_.empty())
+                        {
+                            const float delta = vol - dragAnchorVol_;
+                            for (int idx : targets)
+                            {
+                                const float base = dragStartVols_.count(idx) ? dragStartVols_[idx]
+                                                                             : p->tracks[static_cast<std::size_t>(idx)].mix.volume;
+                                const float nextV = std::clamp(base + delta, 0.0f, 2.0f);
+                                p->tracks[static_cast<std::size_t>(idx)].mix.volume = nextV;
+                                if (idx < static_cast<int>(controls_.size()))
+                                {
+                                    if (idx != t)
+                                        controls_[static_cast<std::size_t>(idx)].volumeSlider->setValue(nextV, juce::dontSendNotification);
+                                    controls_[static_cast<std::size_t>(idx)].volLabel->setText(formatVolumeDb(nextV), juce::dontSendNotification);
+                                }
+                                if (onMixChanged_)
+                                    onMixChanged_(idx);
+                            }
+                        }
+                        else
+                        {
+                            for (int idx : targets)
+                            {
+                                p->tracks[static_cast<std::size_t>(idx)].mix.volume = vol;
+                                if (idx < static_cast<int>(controls_.size()))
+                                {
+                                    if (idx != t)
+                                        controls_[static_cast<std::size_t>(idx)].volumeSlider->setValue(vol, juce::dontSendNotification);
+                                    controls_[static_cast<std::size_t>(idx)].volLabel->setText(formatVolumeDb(vol), juce::dontSendNotification);
+                                }
+                                if (onMixChanged_)
+                                    onMixChanged_(idx);
+                            }
+                        }
                     }
                 }
             };
@@ -503,17 +732,61 @@ void TrackHeaderList::updateFromModel()
             c.panSlider->setRange(-1.0, 1.0, 0.01);
             c.panSlider->setDoubleClickReturnValue(true, 0.0);
             c.panSlider->setValue(0.0, juce::dontSendNotification);
-            c.panSlider->setTooltip("Track " + juce::String(t + 1) + " Pan (Double-click to center)");
+            c.panSlider->setTooltip("Track " + juce::String(t + 1) + " Pan (Double-click to center; adjusts selected tracks relatively)");
+            c.panSlider->onDragStart = [this, t]() {
+                dragStartPans_.clear();
+                if (const auto* p = song_.findPattern(patternId_))
+                {
+                    if (t < static_cast<int>(p->tracks.size()))
+                    {
+                        dragAnchorPan_ = p->tracks[static_cast<std::size_t>(t)].mix.pan;
+                        for (int idx : targetTracksFor(t))
+                            dragStartPans_[idx] = p->tracks[static_cast<std::size_t>(idx)].mix.pan;
+                    }
+                }
+            };
+            c.panSlider->onDragEnd = [this]() { dragStartPans_.clear(); };
             c.panSlider->onValueChange = [this, t]() {
                 if (auto* p = song_.findPattern(patternId_))
                 {
                     if (t < static_cast<int>(p->tracks.size()) && t < static_cast<int>(controls_.size()))
                     {
                         const float pan = static_cast<float>(controls_[static_cast<std::size_t>(t)].panSlider->getValue());
-                        p->tracks[static_cast<std::size_t>(t)].mix.pan = pan;
-                        controls_[static_cast<std::size_t>(t)].panLabel->setText(formatPanText(pan), juce::dontSendNotification);
-                        if (onMixChanged_)
-                            onMixChanged_(t);
+                        const auto targets = targetTracksFor(t);
+                        if (targets.size() > 1 && !dragStartPans_.empty())
+                        {
+                            const float delta = pan - dragAnchorPan_;
+                            for (int idx : targets)
+                            {
+                                const float base = dragStartPans_.count(idx) ? dragStartPans_[idx]
+                                                                             : p->tracks[static_cast<std::size_t>(idx)].mix.pan;
+                                const float nextP = std::clamp(base + delta, -1.0f, 1.0f);
+                                p->tracks[static_cast<std::size_t>(idx)].mix.pan = nextP;
+                                if (idx < static_cast<int>(controls_.size()))
+                                {
+                                    if (idx != t)
+                                        controls_[static_cast<std::size_t>(idx)].panSlider->setValue(nextP, juce::dontSendNotification);
+                                    controls_[static_cast<std::size_t>(idx)].panLabel->setText(formatPanText(nextP), juce::dontSendNotification);
+                                }
+                                if (onMixChanged_)
+                                    onMixChanged_(idx);
+                            }
+                        }
+                        else
+                        {
+                            for (int idx : targets)
+                            {
+                                p->tracks[static_cast<std::size_t>(idx)].mix.pan = pan;
+                                if (idx < static_cast<int>(controls_.size()))
+                                {
+                                    if (idx != t)
+                                        controls_[static_cast<std::size_t>(idx)].panSlider->setValue(pan, juce::dontSendNotification);
+                                    controls_[static_cast<std::size_t>(idx)].panLabel->setText(formatPanText(pan), juce::dontSendNotification);
+                                }
+                                if (onMixChanged_)
+                                    onMixChanged_(idx);
+                            }
+                        }
                     }
                 }
             };
@@ -540,14 +813,31 @@ void TrackHeaderList::updateFromModel()
             if (c.fxButton != nullptr)
             {
                 const bool hasFx = !track.fxChain.empty();
-                c.fxButton->setColour(juce::TextButton::buttonColourId,
-                                      hasFx ? juce::Colour(0xff06b6d4).withAlpha(0.32f)
-                                            : Palette::surface.brighter(0.08f));
-                c.fxButton->setColour(juce::TextButton::textColourOffId,
-                                      hasFx ? juce::Colour(0xff22d3ee) : Palette::textDim);
+                const bool allBypassed = hasFx && std::all_of(track.fxChain.begin(), track.fxChain.end(),
+                                                              [](const PluginSlot& s) { return s.bypassed; });
+                if (hasFx && !allBypassed)
+                {
+                    c.fxButton->setButtonText("fx");
+                    c.fxButton->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff06b6d4).withAlpha(0.32f));
+                    c.fxButton->setColour(juce::TextButton::textColourOffId, juce::Colour(0xff22d3ee));
+                }
+                else if (allBypassed)
+                {
+                    c.fxButton->setButtonText("fx");
+                    c.fxButton->setColour(juce::TextButton::buttonColourId, juce::Colour(0xffb45309).withAlpha(0.45f));
+                    c.fxButton->setColour(juce::TextButton::textColourOffId, juce::Colour(0xfffbbf24));
+                }
+                else
+                {
+                    c.fxButton->setButtonText("fx");
+                    c.fxButton->setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
+                    c.fxButton->setColour(juce::TextButton::textColourOffId, Palette::textDim);
+                }
                 c.fxButton->setTooltip("Track " + juce::String(t + 1) + " VST3/AU FX Rack (" +
                                        juce::String(track.fxChain.size()) + " plugin" +
-                                       (track.fxChain.size() == 1 ? "" : "s") + ")");
+                                       (track.fxChain.size() == 1 ? "" : "s") +
+                                       (allBypassed ? ", BYPASSED" : "") +
+                                       ") - Right-click or Alt+click to bypass all");
             }
 
             const SampleKind kind = song_.patternTrackKind(patternId_, t);
@@ -661,31 +951,45 @@ void TrackHeaderList::paint(juce::Graphics& g)
     {
         const int y = PatternGrid::kRulerHeight + t * trackHeight_;
 
-        // Sleek brushed dark-charcoal track row gradient (matching GarageBand track header reference)
-        const juce::Colour topRow = (t % 2 == 0) ? juce::Colour(0xff36363c) : juce::Colour(0xff323238);
-        const juce::Colour botRow = (t % 2 == 0) ? juce::Colour(0xff2b2b30) : juce::Colour(0xff27272c);
+        const bool isSelected = (selectedTracks_.count(t) > 0);
+        // Sleek brushed dark-charcoal track row gradient (brighter when selected)
+        const juce::Colour topRow = isSelected
+                                        ? juce::Colour(0xff3e4652)
+                                        : ((t % 2 == 0) ? juce::Colour(0xff36363c) : juce::Colour(0xff323238));
+        const juce::Colour botRow = isSelected
+                                        ? juce::Colour(0xff2f3640)
+                                        : ((t % 2 == 0) ? juce::Colour(0xff2b2b30) : juce::Colour(0xff27272c));
         juce::ColourGradient rowGrad(topRow, 0.0f, static_cast<float>(y),
                                      botRow, 0.0f, static_cast<float>(y + trackHeight_), false);
         g.setGradientFill(rowGrad);
         g.fillRect(0, y, getWidth(), trackHeight_);
 
         // Subtle top inner highlight
-        g.setColour(juce::Colours::white.withAlpha(0.06f));
+        g.setColour(isSelected ? Palette::accent.withAlpha(0.55f) : juce::Colours::white.withAlpha(0.06f));
         g.drawHorizontalLine(y, 0.0f, static_cast<float>(getWidth()));
 
-        // Sleek left color indicator bar
+        // Clickable left color indicator bar (8px wide; custom track color overrides auto color)
         juce::Colour badgeCol = Palette::accent.withAlpha(0.75f);
         const auto& track = pat->tracks[static_cast<std::size_t>(t)];
         SampleId sid = track.sampleId;
         if (!sid.isValid() && !track.clips.empty())
             sid = track.clips.front().sampleId;
 
-        if (const Sample* s = song_.findSample(sid))
+        if (track.colorArgb != 0)
+            badgeCol = juce::Colour(track.colorArgb);
+        else if (const Sample* s = song_.findSample(sid))
             badgeCol = s->missing ? Palette::danger.withAlpha(0.85f)
                                   : juce::Colour(kModernPalette[(sid.value - 1) % kPaletteCount]);
 
         g.setColour(badgeCol);
-        g.fillRect(0, y, kStripWidth, trackHeight_ - 1);
+        g.fillRect(0, y, kStripWidth + 2, trackHeight_ - 1);
+
+        if (isSelected)
+        {
+            g.setColour(Palette::accent.withAlpha(0.75f));
+            g.drawRect(static_cast<float>(kStripWidth + 2), static_cast<float>(y),
+                       static_cast<float>(getWidth() - kStripWidth - 3), static_cast<float>(trackHeight_ - 1), 1.2f);
+        }
 
         // Horizontal separator between tracks
         g.setColour(juce::Colour(0xff16161a));
@@ -837,6 +1141,15 @@ void TrackHeaderList::resized()
     }
 }
 
+void TrackHeaderList::mouseMove(const juce::MouseEvent& e)
+{
+    const int t = pointToTrack(e.getPosition());
+    if (t >= 0 && e.x <= 10)
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    else
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
 void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
 {
     const int t = pointToTrack(e.getPosition());
@@ -858,8 +1171,12 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
     {
         const TrackEnvelopeType visEnv = track.visibleEnvelope;
+        const bool hasTrackFx = !track.fxChain.empty();
+        const bool allTrackFxBypassed = hasTrackFx && std::all_of(track.fxChain.begin(), track.fxChain.end(),
+                                                                  [](const PluginSlot& s) { return s.bypassed; });
         juce::PopupMenu m;
         m.addItem(21, "Track FX Chain (VST3 / AU)...");
+        m.addItem(22, "Bypass All Track FX", hasTrackFx, allTrackFxBypassed);
         m.addItem(20, "Track Properties (Stretch / Key / Summary)...");
         m.addItem(1, "Rename Track...");
         m.addSeparator();
@@ -886,6 +1203,10 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                             if (result == 21 && onTrackFx_)
                             {
                                 onTrackFx_(t);
+                            }
+                            else if (result == 22 && onTrackFxBypass_)
+                            {
+                                onTrackFxBypass_(t);
                             }
                             else if (result == 20 && onTrackProperties_)
                             {
@@ -949,13 +1270,45 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     }
 
     const int y = PatternGrid::kRulerHeight + t * trackHeight_;
-    const auto badgeRect = juce::Rectangle<int>(0, y, 36, trackHeight_);
-    if (badgeRect.contains(e.getPosition()))
+    // Clicking the left track color bar (x <= 10) opens the 32-color picker
+    if (e.x <= 10)
     {
-        const SampleKind newKind = (kind == SampleKind::Loop) ? SampleKind::OneShot : SampleKind::Loop;
-        if (onTrackTypeChanged_)
-            onTrackTypeChanged_(t, newKind);
+        if (selectedTracks_.count(t) == 0)
+        {
+            selectedTracks_.clear();
+            selectedTracks_.insert(t);
+            lastClickedTrack_ = t;
+            repaint();
+        }
+        showColorPickerForTrack(t, juce::Rectangle<int>(0, y, 10, trackHeight_));
         return;
+    }
+
+    // Multi-track selection: Cmd/Ctrl toggles, Shift selects range, plain click selects single
+    if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+    {
+        if (selectedTracks_.count(t) > 0)
+            selectedTracks_.erase(t);
+        else
+            selectedTracks_.insert(t);
+        lastClickedTrack_ = t;
+        repaint();
+    }
+    else if (e.mods.isShiftDown() && lastClickedTrack_ >= 0)
+    {
+        const int lo = std::min(lastClickedTrack_, t);
+        const int hi = std::max(lastClickedTrack_, t);
+        selectedTracks_.clear();
+        for (int i = lo; i <= hi; ++i)
+            selectedTracks_.insert(i);
+        repaint();
+    }
+    else
+    {
+        selectedTracks_.clear();
+        selectedTracks_.insert(t);
+        lastClickedTrack_ = t;
+        repaint();
     }
 
     if (onTrackSelected_)

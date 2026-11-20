@@ -3,8 +3,34 @@
 #include <algorithm>
 #include <cstring>
 
+#if JUCE_WINDOWS
+#include <windows.h>
+#endif
+
 namespace trami
 {
+
+namespace
+{
+#if JUCE_WINDOWS
+// Plain function with no C++ objects requiring stack unwinding so MSVC allows __try/__except (no C2712).
+bool scanNextFileProtectedSEH(juce::PluginDirectoryScanner* scanner, juce::String* outName, bool* outHasMore)
+{
+    const UINT prevMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    bool ok = true;
+    __try
+    {
+        *outHasMore = scanner->scanNextFile(true, *outName);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = false;
+    }
+    SetErrorMode(prevMode);
+    return ok;
+}
+#endif
+} // namespace
 
 class PluginHost::EditorWindow final : public juce::DocumentWindow
 {
@@ -41,7 +67,7 @@ private:
 PluginHost::PluginHost()
 {
     formatManager_.addDefaultFormats();
-    scratchBuffer_.setSize(2, 4096, false, true, false);
+    scratchBuffer_.setSize(16, 4096, false, true, false);
     loadPluginCache();
 }
 
@@ -56,15 +82,15 @@ void PluginHost::prepareToPlay(double sampleRate, int maxBlockSize)
     const juce::SpinLock::ScopedLockType lock(audioLock_);
     sampleRate_ = std::max(8000.0, sampleRate);
     maxBlockSize_ = std::clamp(maxBlockSize, 64, 4096);
-    if (scratchBuffer_.getNumSamples() < maxBlockSize_)
-        scratchBuffer_.setSize(2, maxBlockSize_, false, true, false);
+    if (scratchBuffer_.getNumChannels() < 16 || scratchBuffer_.getNumSamples() < maxBlockSize_)
+        scratchBuffer_.setSize(std::max(16, scratchBuffer_.getNumChannels()), std::max(4096, maxBlockSize_), false, true, false);
 
     auto prepChain = [&](std::vector<HostedSlot>& chain) {
         for (auto& s : chain)
         {
             if (s.instance != nullptr)
             {
-                s.instance->setPlayConfigDetails(2, 2, sampleRate_, maxBlockSize_);
+                s.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
                 s.instance->prepareToPlay(sampleRate_, maxBlockSize_);
             }
         }
@@ -128,30 +154,134 @@ void PluginHost::savePluginCache() const
         xml->writeTo(f);
 }
 
-int PluginHost::scanDefaultPluginPaths(std::function<void(const juce::String&)> onStatus)
+void PluginHost::beginDefaultPluginScan()
 {
-    int foundCount = 0;
+    activeScanner_.reset();
+    scanFormatIndex_ = 0;
+    scanSkippedCount_ = 0;
+    scanScannedCount_ = 0;
+    scanActive_ = true;
+
+    const auto cacheDir = pluginCacheFile().getParentDirectory();
+    cacheDir.createDirectory();
+
+    // If a previous scan hard-crashed on a rogue plugin, blacklist it from the dead-man's-pedal file
+    const auto deadMansPedal = cacheDir.getChildFile("plugin_scan_crash.txt");
+    if (deadMansPedal.existsAsFile())
+    {
+        juce::StringArray crashedFiles;
+        deadMansPedal.readLines(crashedFiles);
+        for (const auto& line : crashedFiles)
+        {
+            const auto trimmed = line.trim();
+            if (trimmed.isNotEmpty())
+                knownPlugins_.addToBlacklist(trimmed);
+        }
+        deadMansPedal.deleteFile();
+        savePluginCache();
+    }
+}
+
+bool PluginHost::scanNextPlugin(juce::String& outStatus, int& outSkippedCount)
+{
+    if (!scanActive_)
+        return false;
+
     const auto deadMansPedal = pluginCacheFile().getParentDirectory().getChildFile("plugin_scan_crash.txt");
 
-    for (int i = 0; i < formatManager_.getNumFormats(); ++i)
+    // Advance to next format scanner if needed
+    while (activeScanner_ == nullptr)
     {
-        auto* format = formatManager_.getFormat(i);
+        if (scanFormatIndex_ >= formatManager_.getNumFormats())
+        {
+            outSkippedCount = scanSkippedCount_;
+            return false;
+        }
+
+        auto* format = formatManager_.getFormat(scanFormatIndex_++);
         if (format == nullptr)
             continue;
 
         const auto paths = format->getDefaultLocationsToSearch();
-        juce::PluginDirectoryScanner scanner(knownPlugins_, *format, paths, true, deadMansPedal, false);
-        juce::String pluginBeingScanned;
-        while (scanner.scanNextFile(true, pluginBeingScanned))
-        {
-            if (onStatus && pluginBeingScanned.isNotEmpty())
-                onStatus(format->getName() + ": " + pluginBeingScanned);
-        }
+        activeScanner_ = std::make_unique<juce::PluginDirectoryScanner>(
+            knownPlugins_, *format, paths, true, deadMansPedal, false);
     }
 
-    foundCount = availableEffectPlugins().size();
+    const juce::String nextFile = activeScanner_->getNextPluginFileThatWillBeScanned();
+    if (nextFile.isEmpty())
+    {
+        activeScanner_.reset();
+        outSkippedCount = scanSkippedCount_;
+        return scanFormatIndex_ < formatManager_.getNumFormats();
+    }
+
+    juce::String pluginBeingScanned;
+    bool hasMore = false;
+    bool ok = true;
+
+#if JUCE_WINDOWS
+    ok = scanNextFileProtectedSEH(activeScanner_.get(), &pluginBeingScanned, &hasMore);
+#else
+    try
+    {
+        hasMore = activeScanner_->scanNextFile(true, pluginBeingScanned);
+    }
+    catch (...)
+    {
+        ok = false;
+    }
+#endif
+
+    if (!ok)
+    {
+        ++scanSkippedCount_;
+        if (nextFile.isNotEmpty())
+            knownPlugins_.addToBlacklist(nextFile);
+        activeScanner_->skipNextFile();
+        outStatus = "Skipped crashing plugin: " + juce::File(nextFile).getFileName();
+        savePluginCache();
+        outSkippedCount = scanSkippedCount_;
+        return true;
+    }
+
+    ++scanScannedCount_;
+    if (pluginBeingScanned.isNotEmpty())
+        outStatus = "Scanning: " + pluginBeingScanned;
+    else
+        outStatus = "Scanning: " + juce::File(nextFile).getFileName();
+
+    if ((scanScannedCount_ % 5) == 0)
+        savePluginCache();
+
+    if (!hasMore)
+        activeScanner_.reset();
+
+    outSkippedCount = scanSkippedCount_;
+    return (activeScanner_ != nullptr) || (scanFormatIndex_ < formatManager_.getNumFormats());
+}
+
+int PluginHost::finishPluginScan()
+{
+    activeScanner_.reset();
+    scanActive_ = false;
+    const auto deadMansPedal = pluginCacheFile().getParentDirectory().getChildFile("plugin_scan_crash.txt");
+    if (deadMansPedal.existsAsFile())
+        deadMansPedal.deleteFile();
     savePluginCache();
-    return foundCount;
+    return availableEffectPlugins().size();
+}
+
+int PluginHost::scanDefaultPluginPaths(std::function<void(const juce::String&)> onStatus)
+{
+    beginDefaultPluginScan();
+    juce::String status;
+    int skipped = 0;
+    while (scanNextPlugin(status, skipped))
+    {
+        if (onStatus && status.isNotEmpty())
+            onStatus(status);
+    }
+    return finishPluginScan();
 }
 
 std::unique_ptr<juce::AudioPluginInstance> PluginHost::instantiateSlot(const PluginSlot& slot)
@@ -184,54 +314,66 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::instantiateSlot(const Plu
     }
 
     juce::String errorMessage;
-    auto instance = formatManager_.createPluginInstance(desc, sampleRate_, maxBlockSize_, errorMessage);
+    std::unique_ptr<juce::AudioPluginInstance> instance;
+    try
+    {
+        instance = formatManager_.createPluginInstance(desc, sampleRate_, maxBlockSize_, errorMessage);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+
     if (instance != nullptr)
     {
-        instance->setPlayConfigDetails(2, 2, sampleRate_, maxBlockSize_);
-        instance->prepareToPlay(sampleRate_, maxBlockSize_);
-        if (!slot.stateBase64.empty())
+        try
         {
-            juce::MemoryBlock stateBlock;
-            if (stateBlock.fromBase64Encoding(juce::String::fromUTF8(slot.stateBase64.c_str())))
-                instance->setStateInformation(stateBlock.getData(), static_cast<int>(stateBlock.getSize()));
+            // Configure stereo main input/output layout and disable unused aux/sidechain buses if supported
+            auto layout = instance->getBusesLayout();
+            if (!layout.inputBuses.isEmpty())
+            {
+                layout.inputBuses.getReference(0) = juce::AudioChannelSet::stereo();
+                for (int b = 1; b < layout.inputBuses.size(); ++b)
+                    layout.inputBuses.getReference(b) = juce::AudioChannelSet::disabled();
+            }
+            if (!layout.outputBuses.isEmpty())
+            {
+                layout.outputBuses.getReference(0) = juce::AudioChannelSet::stereo();
+                for (int b = 1; b < layout.outputBuses.size(); ++b)
+                    layout.outputBuses.getReference(b) = juce::AudioChannelSet::disabled();
+            }
+            if (instance->checkBusesLayoutSupported(layout))
+                instance->setBusesLayout(layout);
+
+            instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
+            instance->prepareToPlay(sampleRate_, maxBlockSize_);
+
+            const int reqCh = std::max({2, instance->getTotalNumInputChannels(), instance->getTotalNumOutputChannels()});
+            if (reqCh > scratchBuffer_.getNumChannels())
+            {
+                const juce::SpinLock::ScopedLockType lock(audioLock_);
+                if (reqCh > scratchBuffer_.getNumChannels())
+                    scratchBuffer_.setSize(reqCh, std::max(4096, maxBlockSize_), false, true, false);
+            }
+
+            if (!slot.stateBase64.empty())
+            {
+                juce::MemoryBlock stateBlock;
+                if (stateBlock.fromBase64Encoding(juce::String::fromUTF8(slot.stateBase64.c_str())))
+                    instance->setStateInformation(stateBlock.getData(), static_cast<int>(stateBlock.getSize()));
+            }
+        }
+        catch (...)
+        {
+            return nullptr;
         }
     }
     return instance;
 }
 
-void PluginHost::syncChain(std::vector<HostedSlot>& liveChain, const std::vector<PluginSlot>& modelChain)
+void PluginHost::closeEditorsForChain(const std::vector<HostedSlot>& retiredChain)
 {
-    std::vector<HostedSlot> nextChain;
-    nextChain.reserve(modelChain.size());
-
-    // Reuse existing live instances where identifier matches so plugin state & open UI windows stay intact
-    for (const auto& mSlot : modelChain)
-    {
-        const std::string key = !mSlot.identifierString.empty()
-                                    ? mSlot.identifierString
-                                    : (mSlot.format + ":" + mSlot.fileOrIdentifier + ":" + mSlot.name);
-
-        HostedSlot hosted;
-        hosted.identifierString = key;
-        hosted.bypassed = mSlot.bypassed;
-
-        for (auto& existing : liveChain)
-        {
-            if (existing.instance != nullptr && existing.identifierString == key)
-            {
-                hosted.instance = std::move(existing.instance);
-                break;
-            }
-        }
-
-        if (hosted.instance == nullptr)
-            hosted.instance = instantiateSlot(mSlot);
-
-        nextChain.push_back(std::move(hosted));
-    }
-
-    // Close any open editor windows whose plugin instance is being retired
-    for (const auto& oldSlot : liveChain)
+    for (const auto& oldSlot : retiredChain)
     {
         if (oldSlot.instance != nullptr)
         {
@@ -243,36 +385,183 @@ void PluginHost::syncChain(std::vector<HostedSlot>& liveChain, const std::vector
                 openEditors_.end());
         }
     }
+}
 
-    const juce::SpinLock::ScopedLockType lock(audioLock_);
-    liveChain = std::move(nextChain);
+std::vector<PluginHost::HostedSlot> PluginHost::buildNextChain(
+    const std::vector<HostedSlot>& currentChain, const std::vector<PluginSlot>& modelChain,
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>>& newlyCreated)
+{
+    // Count which keys already exist in currentChain so we only instantiate brand-new slots outside audioLock_
+    std::vector<std::string> availableKeys;
+    availableKeys.reserve(currentChain.size());
+    for (const auto& s : currentChain)
+        if (s.instance != nullptr)
+            availableKeys.push_back(s.identifierString);
+
+    std::vector<HostedSlot> nextChain;
+    nextChain.reserve(modelChain.size());
+    newlyCreated.clear();
+
+    for (const auto& mSlot : modelChain)
+    {
+        const std::string key = !mSlot.identifierString.empty()
+                                    ? mSlot.identifierString
+                                    : (mSlot.format + ":" + mSlot.fileOrIdentifier + ":" + mSlot.name);
+
+        HostedSlot hosted;
+        hosted.identifierString = key;
+        hosted.bypassed = mSlot.bypassed;
+
+        auto it = std::find(availableKeys.begin(), availableKeys.end(), key);
+        if (it != availableKeys.end())
+        {
+            availableKeys.erase(it);
+            // Leave hosted.instance nullptr as a marker to steal the matching live instance under audioLock_
+        }
+        else
+        {
+            hosted.instance = instantiateSlot(mSlot);
+        }
+
+        nextChain.push_back(std::move(hosted));
+    }
+    return nextChain;
+}
+
+void PluginHost::syncMasterChain(const std::vector<PluginSlot>& modelChain)
+{
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> dummy;
+    auto nextChain = buildNextChain(masterChain_, modelChain, dummy);
+    std::vector<HostedSlot> retired;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(audioLock_);
+        for (auto& slot : nextChain)
+        {
+            if (slot.instance == nullptr)
+            {
+                for (auto& existing : masterChain_)
+                {
+                    if (existing.instance != nullptr && existing.identifierString == slot.identifierString)
+                    {
+                        slot.instance = std::move(existing.instance);
+                        break;
+                    }
+                }
+            }
+        }
+        retired = std::move(masterChain_);
+        masterChain_ = std::move(nextChain);
+    }
+
+    // Close editors & destroy retired instances completely outside audioLock_
+    closeEditorsForChain(retired);
+}
+
+void PluginHost::syncTrackChain(int trackIndex, const std::vector<PluginSlot>& modelChain)
+{
+    std::vector<HostedSlot> emptyChain;
+    const auto existingIt = trackChains_.find(trackIndex);
+    const auto& currentRef = (existingIt != trackChains_.end()) ? existingIt->second : emptyChain;
+
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> dummy;
+    auto nextChain = buildNextChain(currentRef, modelChain, dummy);
+    std::vector<HostedSlot> retired;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(audioLock_);
+        auto it = trackChains_.find(trackIndex);
+        if (it != trackChains_.end())
+        {
+            for (auto& slot : nextChain)
+            {
+                if (slot.instance == nullptr)
+                {
+                    for (auto& existing : it->second)
+                    {
+                        if (existing.instance != nullptr && existing.identifierString == slot.identifierString)
+                        {
+                            slot.instance = std::move(existing.instance);
+                            break;
+                        }
+                    }
+                }
+            }
+            retired = std::move(it->second);
+            if (nextChain.empty())
+                trackChains_.erase(it);
+            else
+                it->second = std::move(nextChain);
+        }
+        else if (!nextChain.empty())
+        {
+            trackChains_.emplace(trackIndex, std::move(nextChain));
+        }
+    }
+
+    closeEditorsForChain(retired);
+}
+
+void PluginHost::syncClipChain(std::uint32_t clipId, const std::vector<PluginSlot>& modelChain)
+{
+    std::vector<HostedSlot> emptyChain;
+    const auto existingIt = clipChains_.find(clipId);
+    const auto& currentRef = (existingIt != clipChains_.end()) ? existingIt->second : emptyChain;
+
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> dummy;
+    auto nextChain = buildNextChain(currentRef, modelChain, dummy);
+    std::vector<HostedSlot> retired;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(audioLock_);
+        auto it = clipChains_.find(clipId);
+        if (it != clipChains_.end())
+        {
+            for (auto& slot : nextChain)
+            {
+                if (slot.instance == nullptr)
+                {
+                    for (auto& existing : it->second)
+                    {
+                        if (existing.instance != nullptr && existing.identifierString == slot.identifierString)
+                        {
+                            slot.instance = std::move(existing.instance);
+                            break;
+                        }
+                    }
+                }
+            }
+            retired = std::move(it->second);
+            if (nextChain.empty())
+                clipChains_.erase(it);
+            else
+                it->second = std::move(nextChain);
+        }
+        else if (!nextChain.empty())
+        {
+            clipChains_.emplace(clipId, std::move(nextChain));
+        }
+    }
+
+    closeEditorsForChain(retired);
 }
 
 void PluginHost::syncFromPattern(const Pattern& pattern)
 {
     // 1. Master chain
-    syncChain(masterChain_, pattern.masterFxChain);
+    syncMasterChain(pattern.masterFxChain);
 
-    // 2. Track chains
+    // 2. Track chains (sync active tracks + prune any removed higher-index tracks)
     const int numTracks = static_cast<int>(pattern.tracks.size());
+    std::vector<int> staleTracks;
+    for (const auto& [t, ch] : trackChains_)
+        if (t < 0 || t >= numTracks)
+            staleTracks.push_back(t);
+    for (int t : staleTracks)
+        syncTrackChain(t, {});
+
     for (int t = 0; t < numTracks; ++t)
-    {
-        const auto& trkChain = pattern.tracks[static_cast<std::size_t>(t)].fxChain;
-        if (trkChain.empty())
-        {
-            auto it = trackChains_.find(t);
-            if (it != trackChains_.end())
-            {
-                syncChain(it->second, {});
-                const juce::SpinLock::ScopedLockType lock(audioLock_);
-                trackChains_.erase(it);
-            }
-        }
-        else
-        {
-            syncChain(trackChains_[t], trkChain);
-        }
-    }
+        syncTrackChain(t, pattern.tracks[static_cast<std::size_t>(t)].fxChain);
 
     // 3. Clip chains
     std::unordered_map<std::uint32_t, const std::vector<PluginSlot>*> activeClips;
@@ -285,7 +574,6 @@ void PluginHost::syncFromPattern(const Pattern& pattern)
         }
     }
 
-    // Remove chains for deleted/cleared clips
     std::vector<std::uint32_t> staleClipIds;
     for (const auto& [cid, ch] : clipChains_)
     {
@@ -293,14 +581,10 @@ void PluginHost::syncFromPattern(const Pattern& pattern)
             staleClipIds.push_back(cid);
     }
     for (auto cid : staleClipIds)
-    {
-        syncChain(clipChains_[cid], {});
-        const juce::SpinLock::ScopedLockType lock(audioLock_);
-        clipChains_.erase(cid);
-    }
+        syncClipChain(cid, {});
 
     for (const auto& [cid, mChain] : activeClips)
-        syncChain(clipChains_[cid], *mChain);
+        syncClipChain(cid, *mChain);
 }
 
 void PluginHost::captureChainStates(const std::vector<HostedSlot>& liveChain, std::vector<PluginSlot>& modelChain)
@@ -405,10 +689,12 @@ void PluginHost::processChain(std::vector<HostedSlot>& chain, float* left, float
         return;
 
     const int n = std::min(numSamples, scratchBuffer_.getNumSamples());
+    if (n <= 0 || scratchBuffer_.getNumChannels() < 2)
+        return;
+
     std::memcpy(scratchBuffer_.getWritePointer(0), left, static_cast<std::size_t>(n) * sizeof(float));
     std::memcpy(scratchBuffer_.getWritePointer(1), right, static_cast<std::size_t>(n) * sizeof(float));
 
-    juce::AudioBuffer<float> view(scratchBuffer_.getArrayOfWritePointers(), 2, n);
     emptyMidi_.clear();
 
     bool anyProcessed = false;
@@ -416,7 +702,23 @@ void PluginHost::processChain(std::vector<HostedSlot>& chain, float* left, float
     {
         if (!slot.bypassed && slot.instance != nullptr)
         {
+            const int inCh = slot.instance->getTotalNumInputChannels();
+            const int outCh = slot.instance->getTotalNumOutputChannels();
+            const int reqCh = std::max({2, inCh, outCh});
+            if (reqCh > scratchBuffer_.getNumChannels())
+                continue;
+
+            // Zero any auxiliary/sidechain channels above stereo
+            for (int ch = 2; ch < reqCh; ++ch)
+                std::memset(scratchBuffer_.getWritePointer(ch), 0, static_cast<std::size_t>(n) * sizeof(float));
+
+            juce::AudioBuffer<float> view(scratchBuffer_.getArrayOfWritePointers(), reqCh, n);
             slot.instance->processBlock(view, emptyMidi_);
+
+            if (outCh == 1)
+                std::memcpy(scratchBuffer_.getWritePointer(1), scratchBuffer_.getReadPointer(0),
+                            static_cast<std::size_t>(n) * sizeof(float));
+
             anyProcessed = true;
         }
     }

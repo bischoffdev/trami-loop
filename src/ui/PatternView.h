@@ -53,6 +53,7 @@ public:
     void clipReverseRequested(ClipId clipId) override;
     void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
     void clipFxRequested(ClipId clipId) override;
+    void clipFxBypassRequested(ClipId clipId) override;
     void clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones) override;
     void clipsTransposeSet(const std::vector<ClipId>& clipIds, int semitones) override;
     void clipDeleteRequested(ClipId clipId) override;
@@ -100,7 +101,11 @@ public:
     void updateTrackHeaders();
     void syncToolbarTogglesFromSong();
     void openTrackFxDialog(int track);
+    void toggleTrackFxBypass(int track);
+    void jumpToClip(ClipId clipId);
+    void jumpToTrack(int track);
     void openMasterFxDialog();
+    void toggleMasterFxBypass();
     void republish();
     void publishSnapshotQuick(const std::vector<DragClipOverride>* overrides = nullptr);
     void repaintGrid();

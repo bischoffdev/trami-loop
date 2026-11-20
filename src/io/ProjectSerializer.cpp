@@ -215,6 +215,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                 trackObj->setProperty("sampleId", static_cast<juce::int64>(t.sampleId.value));
             if (t.kindOverride.has_value())
                 trackObj->setProperty("kindOverride", kindToString(*t.kindOverride));
+            if (t.colorArgb != 0)
+                trackObj->setProperty("colorArgb", static_cast<juce::int64>(t.colorArgb));
             if (!t.volumeAutomation.empty())
                 trackObj->setProperty("volumeAutomation", serializeEnvelope(t.volumeAutomation));
             if (!t.panAutomation.empty())
@@ -464,6 +466,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                         }
                         if (tVar.hasProperty("kindOverride"))
                             trk.kindOverride = kindFromString(tVar["kindOverride"].toString());
+                        if (tVar.hasProperty("colorArgb"))
+                            trk.colorArgb = static_cast<std::uint32_t>(static_cast<juce::int64>(tVar["colorArgb"]));
                         if (tVar.hasProperty("volumeAutomation"))
                             trk.volumeAutomation = deserializeEnvelope(tVar["volumeAutomation"]);
                         if (tVar.hasProperty("panAutomation"))

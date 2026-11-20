@@ -5,6 +5,28 @@ All notable changes to `trami-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-20
+
+### Added
+- **32-Color Track Picker**: Click any track's left color bar to choose from 32 curated colors (or reset to Auto); colors apply to the track header, all clips on that track, paint previews, and the FX Rack, and persist in `.trami` projects.
+- **Multi-Track Selection & Linked Controls**: Select multiple tracks (`Cmd/Ctrl+click` to toggle, `Shift+click` for range) to Mute, Solo, Record-Arm, change track color, and adjust Volume or Pan **relatively** across all selected tracks.
+- **Zoomable Scrollbars**: Custom horizontal and vertical scrollbars with draggable left/right and top/bottom end-caps for 1:1 smooth zooming.
+- **FX Rack Workflow Improvements**:
+  - Single modeless floating FX Rack window (updates in place when switching between Clip, Track, and Master FX) with matching color coding and target banner.
+  - **`Bypass All`** button inside the FX Rack plus quick right-click / `Alt+click` bypass on Track, Clip, and Master `fx` badges and context menus.
+  - **`Jump to Clip`**, **`Jump to Track`**, and **`Track N FX`** navigation buttons in the FX Rack header.
+  - Clear Clip/Track identification (`Clip FX: <name> (Track N, Bar X.Y)`).
+- **Track Rename Propagation**: Renaming a track immediately updates clip names across that track.
+
+### Fixed
+- **Windows Stack Overflow**: Moved `Sequencer` audio-thread scratch buffers to flat heap-allocated vectors (`sizeof(ScratchBuffers)` ~96 bytes) so Windows' 1 MB default stack no longer overflows.
+- **Windows & macOS VST3/AU Stability**:
+  - Added Windows SEH crash protection (`__try`/`__except`), OS error dialog suppression, dead-man's-pedal blacklisting, and non-blocking incremental plugin scanning.
+  - Fixed audio-thread `PluginHost` map/chain data race during `syncFromPattern` and added 16-channel stereo/sidechain-safe `processBlock` bus handling.
+- **Loop-Off Playback**: Clips starting inside a blue loop region now play their full length when loop playback is turned off.
+- **Ruler Horizontal Zoom**: Restored vertical drag below the blue loop bar in the timeline ruler to zoom horizontally.
+- **UI Encoding**: Replaced raw UTF-8 em-dash literals that caused mojibake (`â`) in window titles and tooltips.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
