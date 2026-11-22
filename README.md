@@ -141,7 +141,7 @@ The codebase is organized into clean, modular layers:
 
 Free code signing on Windows is provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
 
-- **Committers & Reviewers**: [Benjamin Bischoff](https://github.com/benjaminbischoff)
+- **Committers & Reviewers**: [Benjamin Bischoff](https://github.com/bischoffdev)
 - **Privacy Policy**: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ---
