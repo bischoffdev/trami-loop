@@ -194,14 +194,15 @@ void drawAudioWaveformIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juc
 namespace DAWLoopRuler
 {
 
-void drawStudioOneLoopIndicator(juce::Graphics& g, int loopStartX, int loopEndX, int rulerHeight)
+void drawStudioOneLoopIndicator(juce::Graphics& g, int loopStartX, int loopEndX, int rulerHeight, bool active)
 {
     juce::ignoreUnused(rulerHeight);
     const float sx = static_cast<float>(loopStartX);
     const float ex = static_cast<float>(loopEndX);
     const float w = std::max(8.0f, ex - sx);
 
-    const juce::Colour loopCyan(0xff42b4e6);
+    const juce::Colour fillCol = active ? juce::Colour(0xff42b4e6) : juce::Colour(0xff5a5a66);
+    const juce::Colour strokeCol = active ? fillCol.brighter(0.2f) : juce::Colour(0xff727280);
     constexpr float topH = 6.0f;
     constexpr float flagH = 15.0f;
     constexpr float flagW = 3.5f;
@@ -218,10 +219,10 @@ void drawStudioOneLoopIndicator(juce::Graphics& g, int loopStartX, int loopEndX,
     p.lineTo(sx, flagH);
     p.closeSubPath();
 
-    g.setColour(loopCyan);
+    g.setColour(fillCol);
     g.fillPath(p);
 
-    g.setColour(loopCyan.brighter(0.2f));
+    g.setColour(strokeCol);
     g.strokePath(p, juce::PathStrokeType(0.75f));
 }
 

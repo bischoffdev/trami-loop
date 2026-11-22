@@ -120,6 +120,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     root->setProperty("masterVolume", song.masterVolume());
     if (song.projectRootNote() >= 0)
         root->setProperty("projectRootNote", song.projectRootNote());
+    root->setProperty("timeSigNumerator", song.timeSigNumerator());
+    root->setProperty("timeSigDenominator", song.timeSigDenominator());
     root->setProperty("patternZoomX", song.patternZoomX());
     root->setProperty("patternZoomY", song.patternZoomY());
     root->setProperty("arrangerZoomX", song.arrangerZoomX());
@@ -352,6 +354,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
     song.setMasterVolume(static_cast<float>(json.getProperty("masterVolume", 1.0f)));
     if (json.hasProperty("projectRootNote"))
         song.setProjectRootNote(static_cast<int>(json.getProperty("projectRootNote", -1)));
+    song.setTimeSignature(static_cast<int>(json.getProperty("timeSigNumerator", 4)),
+                          static_cast<int>(json.getProperty("timeSigDenominator", 4)));
     stretchCache.clear();
 
     const float pzx = static_cast<float>(json.getProperty("patternZoomX", 1.0));

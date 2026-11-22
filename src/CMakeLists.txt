@@ -50,6 +50,9 @@ target_sources(TramiLoop PRIVATE
     ui/TrackPropertiesDialog.cpp
     ui/PluginRackDialog.cpp
     ui/SampleBrowserPanel.cpp
+    ui/MixerPanel.cpp
+    ui/FxRackPanel.cpp
+    ui/BottomDockPanel.cpp
     ui/PatternView.cpp
     ui/ArrangerGrid.cpp
     ui/ArrangerTrackHeader.cpp

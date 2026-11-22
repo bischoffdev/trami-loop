@@ -114,7 +114,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
     const Timing timing(song.bpm(), sampleRate, song.swing(), groovePresetIsEighthNote(song.groovePreset()));
-    snapshot->samplesPerBeat = timing.samplesPerStep() * kStepsPerBeat;
+    snapshot->samplesPerBeat = timing.samplesPerStep() * song.stepsPerBeat();
+    snapshot->beatsPerBar = song.timeSigNumerator();
 
     if (song.patterns().empty())
         return snapshot;
@@ -451,7 +452,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
 {
     auto snapshot = std::make_unique<PlaybackSnapshot>();
     const Timing timing(song.bpm(), sampleRate, song.swing());
-    snapshot->samplesPerBeat = timing.samplesPerStep() * kStepsPerBeat;
+    snapshot->samplesPerBeat = timing.samplesPerStep() * song.stepsPerBeat();
+    snapshot->beatsPerBar = song.timeSigNumerator();
 
     const int songBars = song.lengthBars();
     if (songBars == 0)

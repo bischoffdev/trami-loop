@@ -124,6 +124,15 @@ class PatternGrid : public juce::Component,
     int loopStartStep() const noexcept { return loopStartStep_; }
     int loopEndStep() const noexcept { return loopEndStep_; }
     void setLoopRegion(int startStep, int endStep);
+    void setLoopEnabled(bool enabled)
+    {
+        if (loopEnabled_ != enabled)
+        {
+            loopEnabled_ = enabled;
+            repaint();
+        }
+    }
+    bool isLoopEnabled() const noexcept { return loopEnabled_; }
     void paintRuler(juce::Graphics& g, int renderWidth);
 
     void setZoom(float zoomX, float zoomY);
@@ -291,6 +300,7 @@ class PatternGrid : public juce::Component,
 
     int loopStartStep_ = 0;
     int loopEndStep_ = 16;
+    bool loopEnabled_ = false;
     RulerDragMode rulerDragMode_ = RulerDragMode::None;
     int draggingMarkerId_ = -1;
     double draggingMarkerStep_ = 0.0;

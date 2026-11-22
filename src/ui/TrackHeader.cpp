@@ -911,6 +911,21 @@ void TrackHeaderList::updateFromModel()
     repaint();
 }
 
+void TrackHeaderList::setSelectedTrack(int track)
+{
+    selectedTracks_.clear();
+    if (track >= 0)
+    {
+        selectedTracks_.insert(track);
+        lastClickedTrack_ = track;
+    }
+    else
+    {
+        lastClickedTrack_ = -1;
+    }
+    repaint();
+}
+
 void TrackHeaderList::setTrackHeight(int height)
 {
     const int clamped = std::max(kMinTrackHeight, height);
@@ -1229,6 +1244,8 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                                 {
                                     if (t < static_cast<int>(p->tracks.size()))
                                     {
+                                        if (onPushUndo_)
+                                            onPushUndo_();
                                         auto& trk = p->tracks[static_cast<std::size_t>(t)];
                                         if (result == 30) trk.visibleEnvelope = TrackEnvelopeType::None;
                                         else if (result == 31)

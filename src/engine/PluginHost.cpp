@@ -46,6 +46,7 @@ public:
         setUsingNativeTitleBar(true);
         setContentOwned(editor, true);
         setResizable(editor->isResizable(), false);
+        setAlwaysOnTop(true);
         centreWithSize(getWidth(), getHeight());
         setVisible(true);
         toFront(true);

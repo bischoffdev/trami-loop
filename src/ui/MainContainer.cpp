@@ -50,7 +50,10 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
         song_, engine_,
         [this]() {
             if (patternView_ != nullptr)
+            {
                 patternView_->republish();
+                patternView_->repaintGrid();
+            }
         },
         [this]() {
             if (patternView_ != nullptr)
@@ -76,6 +79,11 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
             patternView_->publishSnapshotQuick();
             patternView_->repaintGrid();
         }
+    });
+
+    transportBar_->setOnTimeSignatureChanged([this]() {
+        if (patternView_ != nullptr)
+            patternView_->onTimeSignatureChanged();
     });
 
     engine_.sequencer().setMasterVolume(song_.masterVolume());

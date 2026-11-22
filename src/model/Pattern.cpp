@@ -40,7 +40,7 @@ float evaluateEnvelope(const std::vector<EnvelopePoint>& points, double pos, flo
 
 int Pattern::lengthSteps() const noexcept
 {
-    return lengthBars * kStepsPerBar;
+    return lengthBars * stepsPerBar;
 }
 
 std::unordered_map<std::uint32_t, ClipCrossfade> computeTrackCrossfades(std::vector<TrackClipSpan> clips)

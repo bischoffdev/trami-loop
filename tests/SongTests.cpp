@@ -561,3 +561,75 @@ TEST_CASE("SongHistory tracks clip transposition across undo and redo")
     REQUIRE(history.redo(song));
     REQUIRE(song.clipTranspose(patId, clipId) == 5);
 }
+
+TEST_CASE("Song time signature supports custom meters and computes steps per bar/beat")
+{
+    Song song;
+    REQUIRE(song.timeSigNumerator() == 4);
+    REQUIRE(song.timeSigDenominator() == 4);
+    REQUIRE(song.stepsPerBeat() == 8);
+    REQUIRE(song.stepsPerBar() == 32);
+
+    song.setTimeSignature(3, 4);
+    REQUIRE(song.timeSigNumerator() == 3);
+    REQUIRE(song.timeSigDenominator() == 4);
+    REQUIRE(song.stepsPerBeat() == 8);
+    REQUIRE(song.stepsPerBar() == 24);
+
+    const auto patId = song.addPattern("Empty", 1);
+    REQUIRE(song.findPattern(patId)->lengthSteps() == 24);
+
+    song.setTimeSignature(6, 8);
+    REQUIRE(song.timeSigNumerator() == 6);
+    REQUIRE(song.timeSigDenominator() == 8);
+    REQUIRE(song.stepsPerBeat() == 4);
+    REQUIRE(song.stepsPerBar() == 24);
+    REQUIRE(song.findPattern(patId)->lengthSteps() == 24);
+
+    song.setTimeSignature(5, 4);
+    REQUIRE(song.stepsPerBar() == 40);
+    REQUIRE(song.findPattern(patId)->lengthSteps() == 40);
+
+    // Clamping & invalid denominator fallback
+    song.setTimeSignature(99, 3);
+    REQUIRE(song.timeSigNumerator() == 16);
+    REQUIRE(song.timeSigDenominator() == 4);
+}
+
+TEST_CASE("SongHistory undoes and redoes multi-point automation curves point by point")
+{
+    Song song;
+    SongHistory history;
+    const auto patId = song.addPattern("P", 2);
+
+    // Step 1: Enable master curve with 2 endpoints
+    history.pushState(song);
+    song.setMasterAutomation(patId, {{0.0, 1.0f, EnvelopeCurve::Linear}, {64.0, 1.0f, EnvelopeCurve::Linear}});
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 2);
+
+    // Step 2: Add point A
+    history.pushState(song);
+    song.setMasterAutomation(patId, {{0.0, 1.0f, EnvelopeCurve::Linear}, {16.0, 0.5f, EnvelopeCurve::Linear}, {64.0, 1.0f, EnvelopeCurve::Linear}});
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 3);
+
+    // Step 3: Add point B
+    history.pushState(song);
+    song.setMasterAutomation(patId, {{0.0, 1.0f, EnvelopeCurve::Linear}, {16.0, 0.5f, EnvelopeCurve::Linear}, {32.0, 1.5f, EnvelopeCurve::Linear}, {64.0, 1.0f, EnvelopeCurve::Linear}});
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 4);
+
+    // Undo point by point
+    REQUIRE(history.undo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 3);
+    REQUIRE(history.undo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 2);
+    REQUIRE(history.undo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.empty());
+
+    // Redo point by point
+    REQUIRE(history.redo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 2);
+    REQUIRE(history.redo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 3);
+    REQUIRE(history.redo(song));
+    REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 4);
+}
