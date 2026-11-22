@@ -42,34 +42,46 @@ jobs:
       - name: Resolve Version
         id: ver
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
-            RAW_VER="${{ github.event.release.tag_name }}"
-          elif [ -n "${{ inputs.version }}" ]; then
-            RAW_VER="${{ inputs.version }}"
+          if [ "$EVENT_NAME" = "release" ] && [ -n "$RELEASE_TAG" ]; then
+            RAW_VER="$RELEASE_TAG"
+          elif [ -n "$INPUT_VERSION" ]; then
+            RAW_VER="$INPUT_VERSION"
           else
             RAW_VER=$(tr -d '[:space:]' < VERSION)
           fi
           CLEAN_VER="${RAW_VER#v}"
+          if ! [[ "$CLEAN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "Error: Invalid version string '$CLEAN_VER'"
+            exit 1
+          fi
           echo "version=$CLEAN_VER" >> "$GITHUB_OUTPUT"
           echo "Resolved version: v$CLEAN_VER"
 
       - name: Configure CMake (macOS)
         if: runner.os == 'macOS'
+        env:
+          TRAMI_VER: ${{ steps.ver.outputs.version }}
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DTRAMI_VERSION="${{ steps.ver.outputs.version }}" \
+            -DTRAMI_VERSION="$TRAMI_VER" \
             -DTRAMI_BUILD_TESTS=ON
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         shell: bash
+        env:
+          TRAMI_VER: ${{ steps.ver.outputs.version }}
         run: |
           cmake -B build -A x64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DTRAMI_VERSION="${{ steps.ver.outputs.version }}" \
+            -DTRAMI_VERSION="$TRAMI_VER" \
             -DTRAMI_BUILD_TESTS=ON
 
       - name: Build Application (Release)
@@ -150,12 +162,14 @@ jobs:
       # Package artifacts for release / download
       - name: Stage Artifacts (macOS)
         if: runner.os == 'macOS'
+        env:
+          TRAMI_VER: ${{ steps.ver.outputs.version }}
         run: |
           mkdir -p artifacts
           APP_PATH=$(find build -name "trami-loop.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
-            echo "Packaging $APP_PATH (v${{ steps.ver.outputs.version }})..."
-            ditto -c -k --keepParent "$APP_PATH" "artifacts/trami-loop-v${{ steps.ver.outputs.version }}-macOS.zip"
+            echo "Packaging $APP_PATH (v$TRAMI_VER)..."
+            ditto -c -k --keepParent "$APP_PATH" "artifacts/trami-loop-v${TRAMI_VER}-macOS.zip"
           else
             echo "Error: trami-loop.app not found"
             exit 1
@@ -164,13 +178,15 @@ jobs:
       - name: Stage Artifacts (Windows)
         if: runner.os == 'Windows'
         shell: bash
+        env:
+          TRAMI_VER: ${{ steps.ver.outputs.version }}
         run: |
           mkdir -p artifacts
           EXE_PATH=$(find build -name "trami-loop.exe" -type f | head -n 1)
           if [ -n "$EXE_PATH" ]; then
-            echo "Packaging $EXE_PATH (v${{ steps.ver.outputs.version }})..."
+            echo "Packaging $EXE_PATH (v$TRAMI_VER)..."
             cp "$EXE_PATH" artifacts/
-            cd artifacts && 7z a "trami-loop-v${{ steps.ver.outputs.version }}-Windows.zip" trami-loop.exe && rm trami-loop.exe && cd ..
+            cd artifacts && 7z a "trami-loop-v${TRAMI_VER}-Windows.zip" trami-loop.exe && rm trami-loop.exe && cd ..
           else
             echo "Error: trami-loop.exe not found"
             exit 1

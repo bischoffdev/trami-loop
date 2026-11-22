@@ -5,3 +5,14 @@ cmake-build-*/
 .idea/
 .DS_Store
 *.user
+test_output.txt
+
+# Secrets & code-signing credentials
+.env
+.env.*
+*.p12
+*.pfx
+*.cer
+*.crt
+*.key
+*.pem
