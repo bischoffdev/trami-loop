@@ -1,9 +1,24 @@
 # Changelog
 
-All notable changes to `trami-loop` will be documented in this file.
+All notable changes to **TramiLoop** (`trami-loop`) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.4.0] - 2026-11-22
+
+### Added
+- **macOS `.dmg` & Windows Inno Setup Installers**: Added automated GitHub Release installer packaging (`TramiLoop-v<version>-macOS.dmg` with `/Applications` drag-and-drop symlink and `TramiLoop-v<version>-Windows-Setup.exe` per-user installer with Start Menu shortcut and `.trami` file association) alongside portable `.zip` archives.
+- **Custom Application Icon**: Added custom tilted neon loop application icon across macOS `.icns`, Windows `.ico`, runtime window/dock icon, and top-left toolbar badge.
+- **Code Signing Support**: Added optional macOS Developer ID + Apple Notarization and Windows Authenticode / SignPath Foundation code signing support in CI.
+- **README Screenshot & Installation Guide**: Added a 2x Retina workspace screenshot (`assets/screenshot.png`) and first-launch Gatekeeper/SmartScreen instructions to `README.md`.
+
+### Changed
+- **TramiLoop Branding**: Renamed the application display name, bundle (`TramiLoop.app` / `TramiLoop.exe`), window title, toolbar label, and installer packages to **TramiLoop** (while keeping the GitHub repository URL as `trami-loop`).
+
+### Fixed
+- **Master Volume Envelope Zoom Scaling**: Synced `MasterBusLane::stepPx_` with `PatternGrid::getStepWidth()` on initial construction and every zoom change so the Master volume automation curve scales in lockstep with timeline zoom.
+- **Viewport Stability on Undo/Redo**: Replaced `scrollToKeepPlayheadVisible()` during Undo/Redo when playback is stopped with direct horizontal and vertical scroll offset preservation so undoing/redoing envelope points never shifts the track view.
 
 ## [0.3.0] - 2026-11-22
 
