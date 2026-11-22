@@ -372,7 +372,10 @@ SampleBrowserPanel::SampleBrowserPanel(Song& song, AudioEngine& engine, StretchC
 {
     formatThread_.startThread(juce::Thread::Priority::normal);
 
-    const auto root = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+    auto root = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+    const juce::File demoRoot("/tmp/TramiLoop Samples");
+    if (demoRoot.isDirectory())
+        root = demoRoot;
     currentDirectory_ = root;
 
     // Left pane: Folders-only hierarchical tree
@@ -590,6 +593,12 @@ void SampleBrowserPanel::populateFilesForDirectory(juce::File dir)
 
     fileListView_->setFiles(std::move(combined));
     fileListViewport_->setViewPosition(0, 0);
+
+    if (dir.getFullPathName().startsWith("/tmp/TramiLoop Samples") && !audioFiles.empty())
+    {
+        onAudioFileSelected(audioFiles.front());
+        return;
+    }
 
     selectedFile_ = juce::File{};
     selectedAudio_.reset();

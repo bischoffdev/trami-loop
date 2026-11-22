@@ -830,12 +830,17 @@ class PatternView::MasterBusLane : public juce::Component
 
             const float startX = static_cast<float>(laneX);
             const float endX = static_cast<float>(laneX + laneW);
+            const float firstPx = static_cast<float>(laneX + grid_.stepToX(pts.front().position) - scrollX_);
+            const float lastPx = static_cast<float>(laneX + grid_.stepToX(pts.back().position) - scrollX_);
             const float firstValY = valueToY(pts.front().value);
             const float lastValY = valueToY(pts.back().value);
 
-            curvePath.startNewSubPath(startX, firstValY);
-            fillPath.startNewSubPath(startX, static_cast<float>(h - 1));
-            fillPath.lineTo(startX, firstValY);
+            const float pathStartX = std::min(startX, firstPx);
+            const float pathEndX = std::max(endX, lastPx);
+
+            curvePath.startNewSubPath(pathStartX, firstValY);
+            fillPath.startNewSubPath(pathStartX, static_cast<float>(h - 1));
+            fillPath.lineTo(pathStartX, firstValY);
 
             for (const auto& pt : pts)
             {
@@ -845,9 +850,12 @@ class PatternView::MasterBusLane : public juce::Component
                 fillPath.lineTo(px, py);
             }
 
-            curvePath.lineTo(endX, lastValY);
-            fillPath.lineTo(endX, lastValY);
-            fillPath.lineTo(endX, static_cast<float>(h - 1));
+            if (pathEndX > lastPx)
+            {
+                curvePath.lineTo(pathEndX, lastValY);
+                fillPath.lineTo(pathEndX, lastValY);
+            }
+            fillPath.lineTo(pathEndX, static_cast<float>(h - 1));
             fillPath.closeSubPath();
 
             g.setColour(juce::Colour(0xfffacc15).withAlpha(0.14f));
@@ -1781,14 +1789,27 @@ PatternView::~PatternView()
 
 void PatternView::setPattern(PatternId patternId)
 {
+    const bool isSamePattern = (currentPattern_ == patternId);
+    const auto savedViewPos =
+        (gridViewport_ != nullptr) ? gridViewport_->getViewPosition() : juce::Point<int>{0, 0};
+
     currentPattern_ = patternId;
     activeBank_.clear();
     ++republishGeneration_;
     pasteTargetTrack_ = -1;
     pasteTargetStep_ = -1;
     const auto* pat = song_.findPattern(patternId);
-    loopStartStep_ = 0;
-    loopEndStep_ = pat != nullptr ? pat->lengthSteps() : 32;
+    const int patSteps = pat != nullptr ? pat->lengthSteps() : song_.stepsPerBar();
+    if (!isSamePattern || loopEndStep_ <= loopStartStep_)
+    {
+        loopStartStep_ = 0;
+        loopEndStep_ = patSteps;
+    }
+    else
+    {
+        loopStartStep_ = std::clamp(loopStartStep_, 0, std::max(0, patSteps - 1));
+        loopEndStep_ = std::clamp(loopEndStep_, loopStartStep_ + 1, patSteps);
+    }
     if (grid_ != nullptr)
         grid_->setLoopRegion(loopStartStep_, loopEndStep_);
     if (onLoopRegionChanged_)
@@ -1797,7 +1818,8 @@ void PatternView::setPattern(PatternId patternId)
     grid_->setPattern(patternId);
     if (ruler_ != nullptr)
         ruler_->repaint();
-    resetPlayhead();
+    if (!isSamePattern)
+        resetPlayhead();
     updateLengthSelector();
     syncToolbarTogglesFromSong();
     trackHeaders_->updateFromModel();
@@ -1809,11 +1831,27 @@ void PatternView::setPattern(PatternId patternId)
         masterBusLane_->repaint();
     }
     if (dockPanel_ != nullptr)
-        dockPanel_->setPattern(patternId);
+    {
+        if (isSamePattern)
+            dockPanel_->refreshFromModel();
+        else
+            dockPanel_->setPattern(patternId);
+    }
     syncAllTrackMixes();
     publishSnapshotQuick();
     republish();
     resized();
+    if (isSamePattern && gridViewport_ != nullptr)
+    {
+        gridViewport_->setViewPosition(savedViewPos);
+        if (ruler_ != nullptr)
+            ruler_->setScrollX(gridViewport_->getViewPositionX());
+        if (masterBusLane_ != nullptr)
+        {
+            masterBusLane_->setScrollX(gridViewport_->getViewPositionX());
+            masterBusLane_->repaint();
+        }
+    }
 }
 
 void PatternView::ensureDockVisible()
@@ -4082,6 +4120,16 @@ void PatternView::applyZoomAtStep(float targetZoomX, double anchorStep, int anch
         const int newVpX =
             juce::roundToInt(anchorStep * newStepW - static_cast<double>(anchorViewportX));
         gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
+        if (ruler_ != nullptr)
+        {
+            ruler_->setScrollX(gridViewport_->getViewPositionX());
+            ruler_->repaint();
+        }
+        if (masterBusLane_ != nullptr)
+        {
+            masterBusLane_->setScrollX(gridViewport_->getViewPositionX());
+            masterBusLane_->repaint();
+        }
     }
 }
 
@@ -4116,7 +4164,19 @@ void PatternView::applyZoom(float targetZoomX, float targetZoomY, juce::Point<in
     resized();
 
     if (gridViewport_ != nullptr)
+    {
         gridViewport_->setViewPosition(std::max(0, newVpX), gridViewport_->getViewPositionY());
+        if (ruler_ != nullptr)
+        {
+            ruler_->setScrollX(gridViewport_->getViewPositionX());
+            ruler_->repaint();
+        }
+        if (masterBusLane_ != nullptr)
+        {
+            masterBusLane_->setScrollX(gridViewport_->getViewPositionX());
+            masterBusLane_->repaint();
+        }
+    }
 }
 
 void PatternView::zoomIn()
@@ -4194,6 +4254,16 @@ void PatternView::fitZoomToProject(int minBarsVisible, int maxBarsVisible)
 
     if (gridViewport_ != nullptr)
         gridViewport_->setViewPosition(0, 0);
+    if (ruler_ != nullptr)
+    {
+        ruler_->setScrollX(0);
+        ruler_->repaint();
+    }
+    if (masterBusLane_ != nullptr)
+    {
+        masterBusLane_->setScrollX(0);
+        masterBusLane_->repaint();
+    }
 }
 
 void PatternView::resetPlayhead()
@@ -4528,6 +4598,7 @@ void PatternView::resized()
         masterBusLane_->setLayoutMetrics(headerW, kHeaderSplitterW);
         masterBusLane_->setBounds(0, contentY + tracksTimelineH, getWidth(), masterLaneH);
         masterBusLane_->setScrollX(gridViewport_->getViewPositionX());
+        masterBusLane_->repaint();
     }
 
     if (headerCorner_ != nullptr)

@@ -37,10 +37,10 @@ echo.
 echo ========================================================
 echo  trami-loop: Starte Anwendung
 echo ========================================================
-if exist "build\src\TramiLoop_artefacts\Release\trami-loop.exe" (
-    start "" "build\src\TramiLoop_artefacts\Release\trami-loop.exe"
-) else if exist "build\src\Release\trami-loop.exe" (
-    start "" "build\src\Release\trami-loop.exe"
+if exist "build\src\TramiLoop_artefacts\Release\TramiLoop.exe" (
+    start "" "build\src\TramiLoop_artefacts\Release\TramiLoop.exe"
+) else if exist "build\src\Release\TramiLoop.exe" (
+    start "" "build\src\Release\TramiLoop.exe"
 ) else (
     echo Anwendung wurde kompiliert, aber Pfad zur .exe konnte nicht automatisch gefunden werden.
     pause

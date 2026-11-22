@@ -18,14 +18,22 @@ target_compile_options(trami_core PRIVATE
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
+# Embedded binary assets (app icon for runtime window/dock & toolbar badge).
+juce_add_binary_data(TramiAssets
+    SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon-128.png"
+)
+
 # Desktop application.
 juce_add_gui_app(TramiLoop
-    PRODUCT_NAME "trami-loop"
+    PRODUCT_NAME "TramiLoop"
     COMPANY_NAME "trami"
     BUNDLE_ID    "dev.bischoff.trami-loop"
     VERSION      "${PROJECT_VERSION}"
+    ICON_BIG     "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon-512.png"
+    ICON_SMALL   "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon-128.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT "trami-loop uses audio input to record tracks."
+    MICROPHONE_PERMISSION_TEXT "TramiLoop uses audio input to record tracks."
     HARDENED_RUNTIME_ENABLED TRUE
     HARDENED_RUNTIME_OPTIONS
         "com.apple.security.cs.disable-library-validation"
@@ -77,6 +85,7 @@ target_compile_definitions(TramiLoop PRIVATE
 target_link_libraries(TramiLoop
     PRIVATE
         trami_core
+        TramiAssets
         rubberband
         juce::juce_audio_utils
         juce::juce_audio_formats

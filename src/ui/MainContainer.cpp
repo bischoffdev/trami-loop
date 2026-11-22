@@ -1,4 +1,5 @@
 #include "ui/MainContainer.h"
+#include "BinaryData.h"
 #include "io/AcidProjectReader.h"
 #include "ui/TramiLookAndFeel.h"
 
@@ -263,7 +264,7 @@ void MainContainer::saveProjectDialog(bool promptForNewLocation)
     }
 
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        "Save trami-loop project", initialLoc, "*.trami", true);
+        "Save TramiLoop project", initialLoc, "*.trami", true);
 
     fileChooser_->launchAsync(
         juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -587,12 +588,17 @@ void MainContainer::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff141417));
     g.drawHorizontalLine(kTopBarHeight - 1, 0.0f, static_cast<float>(mainW));
 
-    // Clean modern metallic title
+    // App icon badge + clean modern metallic title
+    const auto appIcon = juce::ImageCache::getFromMemory(BinaryData::icon128_png, BinaryData::icon128_pngSize);
+    if (appIcon.isValid())
+    {
+        g.drawImageWithin(appIcon, 10, 8, 28, 28, juce::RectanglePlacement::centred);
+    }
     g.setColour(juce::Colours::black.withAlpha(0.45f));
-    g.setFont(Typography::bold(16.5f));
-    g.drawText("trami-loop", 14, 1, 110, kTopBarHeight, juce::Justification::centredLeft);
+    g.setFont(Typography::bold(15.5f));
+    g.drawText("TramiLoop", 43, 1, 90, kTopBarHeight, juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xfff0f0f6));
-    g.drawText("trami-loop", 14, 0, 110, kTopBarHeight, juce::Justification::centredLeft);
+    g.drawText("TramiLoop", 43, 0, 90, kTopBarHeight, juce::Justification::centredLeft);
 
     // Subtle version badge on the right of the top bar
     g.setColour(Palette::textDim.withAlpha(0.75f));
@@ -608,7 +614,7 @@ void MainContainer::resized()
     const int mainW = getWidth();
 
     auto topArea = juce::Rectangle<int>(0, 0, mainW, kTopBarHeight).reduced(10, 8);
-    topArea.removeFromLeft(114);
+    topArea.removeFromLeft(130);
 
     undoButton_.setBounds(topArea.removeFromLeft(66));
     topArea.removeFromLeft(4);
