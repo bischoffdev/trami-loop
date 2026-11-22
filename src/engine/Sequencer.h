@@ -172,7 +172,7 @@ private:
     void adoptPendingSnapshot() noexcept;
     void handleTransportRequests() noexcept;
     void handlePreviewRequests() noexcept;
-    void chaseActiveEvents(std::int64_t pos) noexcept;
+    void chaseActiveEvents(std::int64_t pos, int blockOffset = 0) noexcept;
     void scheduleRange(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void scheduleMetronome(std::int64_t from, std::int64_t to, int blockOffset) noexcept;
     void startMetronomeVoice(const AudioData* audio, int delay, float gainL, float gainR) noexcept;

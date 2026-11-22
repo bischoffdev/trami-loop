@@ -24,6 +24,10 @@ public:
     GroovePreset groovePreset() const noexcept { return groovePreset_; }
     float masterVolume() const noexcept { return masterVolume_; }
     int projectRootNote() const noexcept { return projectRootNote_; }
+    int timeSigNumerator() const noexcept { return timeSigNumerator_; }
+    int timeSigDenominator() const noexcept { return timeSigDenominator_; }
+    int stepsPerBeat() const noexcept { return std::max(1, 32 / timeSigDenominator_); }
+    int stepsPerBar() const noexcept { return timeSigNumerator_ * stepsPerBeat(); }
     bool autoCrossfadeEnabled() const noexcept { return autoCrossfadeEnabled_; }
     bool envelopeLockEnabled() const noexcept { return envelopeLockEnabled_; }
     bool rippleEditEnabled() const noexcept { return rippleEditEnabled_; }
@@ -33,6 +37,7 @@ public:
     void setGroovePreset(GroovePreset preset) noexcept;
     void setMasterVolume(float volume) noexcept;
     void setProjectRootNote(int rootNote) noexcept;
+    void setTimeSignature(int numerator, int denominator) noexcept;
     void setAutoCrossfadeEnabled(bool enabled) noexcept { autoCrossfadeEnabled_ = enabled; }
     void setEnvelopeLockEnabled(bool enabled) noexcept { envelopeLockEnabled_ = enabled; }
     void setRippleEditEnabled(bool enabled) noexcept { rippleEditEnabled_ = enabled; }
@@ -140,6 +145,8 @@ private:
     GroovePreset groovePreset_ = GroovePreset::Straight;
     float masterVolume_ = 1.0f;
     int projectRootNote_ = -1; ///< -1 = None / No master key, 0..127 = MIDI note / pitch class.
+    int timeSigNumerator_ = 4;
+    int timeSigDenominator_ = 4;
     bool autoCrossfadeEnabled_ = true;
     bool envelopeLockEnabled_ = true;
     bool rippleEditEnabled_ = false;

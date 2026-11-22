@@ -40,6 +40,7 @@ public:
 
     void setPattern(PatternId patternId);
     void updateFromModel();
+    void setSelectedTrack(int track);
     void setTrackHeight(int height);
     int trackHeight() const noexcept { return trackHeight_; }
 
@@ -55,6 +56,7 @@ public:
     void setOnTrackFx(TrackFxCallback cb) { onTrackFx_ = std::move(cb); }
     void setOnTrackFxBypass(TrackFxBypassCallback cb) { onTrackFxBypass_ = std::move(cb); }
     void setOnTrackColorChanged(TrackColorChangedCallback cb) { onTrackColorChanged_ = std::move(cb); }
+    void setOnPushUndo(std::function<void()> cb) { onPushUndo_ = std::move(cb); }
     void setTrackPeakProvider(TrackPeakProvider cb);
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
@@ -128,6 +130,7 @@ private:
     TrackFxCallback onTrackFx_;
     TrackFxBypassCallback onTrackFxBypass_;
     TrackColorChangedCallback onTrackColorChanged_;
+    std::function<void()> onPushUndo_;
     TrackPeakProvider trackPeakProvider_;
     std::vector<float> peakL_;
     std::vector<float> peakR_;

@@ -350,6 +350,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
+                    chaseActiveEvents(loopStart, offset);
                 }
                 else
                 {
@@ -367,6 +368,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
+                    chaseActiveEvents(loopStart, offset);
                     continue;
                 }
                 else
@@ -389,6 +391,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
+                    chaseActiveEvents(loopStart, offset);
                 }
                 else
                 {
@@ -455,7 +458,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
     outRmsL_.store(std::sqrt(sumSqL / denom), std::memory_order_relaxed);
     outRmsR_.store(std::sqrt(sumSqR / denom), std::memory_order_relaxed);
 
-    if (peakL >= 1.0f || peakR >= 1.0f)
+    if (peakL > 1.0001f || peakR > 1.0001f)
         clipOccurred_.store(true, std::memory_order_relaxed);
 
     renderMetronome(left, right, numSamples);
@@ -681,7 +684,7 @@ void Sequencer::handleTransportRequests() noexcept
     }
 }
 
-void Sequencer::chaseActiveEvents(std::int64_t pos) noexcept
+void Sequencer::chaseActiveEvents(std::int64_t pos, int blockOffset) noexcept
 {
     if (current_ == nullptr || current_->events.empty())
         return;
@@ -701,7 +704,7 @@ void Sequencer::chaseActiveEvents(std::int64_t pos) noexcept
             const std::int64_t remainingFrames = evEnd - pos;
             if (offsetInClip < totalFrames && remainingFrames > 0)
             {
-                startVoice(ev.audio, current_, 0, ev.gainLeft, ev.gainRight,
+                startVoice(ev.audio, current_, blockOffset, ev.gainLeft, ev.gainRight,
                            offsetInClip, remainingFrames, ev.track,
                            ev.fadeInSamples, ev.fadeOutSamples, ev.clipId, ev.reversed, &ev);
             }
@@ -735,7 +738,8 @@ void Sequencer::scheduleMetronome(std::int64_t from, std::int64_t to, int blockO
             continue;
         if (at >= to)
             break;
-        const AudioData* sound = (beat % kBeatsPerBar == 0) ? &accentClick_ : &click_;
+        const int beatsPerBar = std::max(1, current_->beatsPerBar);
+        const AudioData* sound = (beat % beatsPerBar == 0) ? &accentClick_ : &click_;
         startMetronomeVoice(sound, blockOffset + static_cast<int>(at - from), 0.5f, 0.5f);
     }
 }

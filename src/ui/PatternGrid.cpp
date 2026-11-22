@@ -662,7 +662,9 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
     }
     g.setFont(Typography::bold(11.0f));
 
-    const double barWidthPx = stepWidth_ * static_cast<double>(kStepsPerBar);
+    const int spb = song_.stepsPerBar();
+    const int spBeat = song_.stepsPerBeat();
+    const double barWidthPx = stepWidth_ * static_cast<double>(spb);
     const int barInterval = (barWidthPx < 12.0)
                                 ? 16
                                 : ((barWidthPx < 25.0) ? 8 : ((barWidthPx < 45.0) ? 4 : ((barWidthPx < 70.0) ? 2 : 1)));
@@ -670,13 +672,13 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
     for (int step = 0; step < totalSteps; ++step)
     {
         const int x = stepToX(step);
-        const bool isBar = (step % kStepsPerBar == 0);
-        const bool isBeat = (step % kStepsPerBeat == 0);
+        const bool isBar = (step % spb == 0);
+        const bool isBeat = (step % spBeat == 0);
         const bool isRaster = (step % rasterSteps_ == 0);
 
         if (isBar)
         {
-            const int barNum = step / kStepsPerBar + 1;
+            const int barNum = step / spb + 1;
             if ((barNum - 1) % barInterval == 0)
             {
                 g.setColour(juce::Colour(0xffd2d2dc));
@@ -696,7 +698,7 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
             g.setColour(juce::Colour(0xff52525c));
             g.drawVerticalLine(x, 10.0f, static_cast<float>(kRulerHeight - 1));
         }
-        else if (isBeat && rasterSteps_ <= kStepsPerBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 4.0))
+        else if (isBeat && rasterSteps_ <= spBeat && (stepWidth_ * static_cast<double>(spBeat) >= 4.0))
         {
             g.setColour(juce::Colour(0xff42424a));
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight - 7), static_cast<float>(kRulerHeight - 1));
@@ -712,7 +714,7 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
     // Studio One cycle indicator at the top of the ruler (y = 0..14)
     const int loopStartX = stepToX(loopStartStep_);
     const int loopEndX = stepToX(loopEndStep_);
-    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, 24);
+    DAWLoopRuler::drawStudioOneLoopIndicator(g, loopStartX, loopEndX, 24, loopEnabled_);
 
     // Timeline Markers along the lower band of the ruler (y = 16..34, non-overlapping with Loop bar)
     if (pat != nullptr && !pat->markers.empty())
@@ -789,10 +791,11 @@ void PatternGrid::paint(juce::Graphics& g)
     const int loopEndX = stepToX(loopEndStep_);
     const int loopW = std::max(4, loopEndX - loopStartX);
 
-    // Shaded loop region down the tracks
-    g.setColour(Palette::loopRegion.withAlpha(0.045f));
+    // Shaded loop region down the tracks (greyed out when loop playback is off)
+    const juce::Colour regionCol = loopEnabled_ ? Palette::loopRegion : juce::Colour(0xff71717a);
+    g.setColour(regionCol.withAlpha(loopEnabled_ ? 0.045f : 0.025f));
     g.fillRect(loopStartX, kRulerHeight, loopW, totalHeight - kRulerHeight);
-    g.setColour(Palette::loopRegion.withAlpha(0.35f));
+    g.setColour(regionCol.withAlpha(loopEnabled_ ? 0.35f : 0.18f));
     g.drawVerticalLine(loopStartX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     g.drawVerticalLine(loopEndX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
 
@@ -804,11 +807,13 @@ void PatternGrid::paint(juce::Graphics& g)
         g.fillRect(0, y, renderWidth, trackHeight_);
     }
 
+    const int spb = song_.stepsPerBar();
+    const int spBeat = song_.stepsPerBeat();
     for (int step = 0; step <= totalSteps; ++step)
     {
         const int x = stepToX(step);
-        const bool isBar = (step % kStepsPerBar == 0);
-        const bool isBeat = (step % kStepsPerBeat == 0);
+        const bool isBar = (step % spb == 0);
+        const bool isBeat = (step % spBeat == 0);
         const bool isRaster = (step % rasterSteps_ == 0);
 
         if (!isRaster && !isBeat && !isBar)
@@ -819,7 +824,7 @@ void PatternGrid::paint(juce::Graphics& g)
             g.setColour(Palette::gridBarLine);
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         }
-        else if (isBeat && rasterSteps_ <= kStepsPerBeat && (stepWidth_ * static_cast<double>(kStepsPerBeat) >= 4.0))
+        else if (isBeat && rasterSteps_ <= spBeat && (stepWidth_ * static_cast<double>(spBeat) >= 4.0))
         {
             g.setColour(Palette::gridBeatLine);
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
@@ -2503,7 +2508,6 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                     drag_.active = true;
                     drag_.mode = DragMode::TrackAutoNode;
                     drag_.startMousePos = e.getPosition();
-                    listener_.trackAutomationChanged(track, trkObj.visibleEnvelope, newPts);
                     repaint();
                     return;
                 }
@@ -2590,7 +2594,6 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                     drag_.active = true;
                     drag_.mode = DragMode::EnvelopeNode;
                     drag_.startMousePos = e.getPosition();
-                    listener_.clipVolumeEnvelopeChanged(clipForEnv->id, newPts);
                     repaint();
                     return;
                 }
@@ -2624,7 +2627,6 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                     drag_.active = true;
                     drag_.mode = DragMode::EnvelopeNode;
                     drag_.startMousePos = e.getPosition();
-                    listener_.clipPanEnvelopeChanged(clipForEnv->id, newPts);
                     repaint();
                     return;
                 }
@@ -3421,14 +3423,35 @@ void PatternGrid::mouseUp(const juce::MouseEvent& e)
         return;
     }
 
+    auto envelopesEqual = [](const std::vector<EnvelopePoint>& a, const std::vector<EnvelopePoint>& b)
+    {
+        if (a.size() != b.size())
+            return false;
+        for (std::size_t i = 0; i < a.size(); ++i)
+        {
+            if (std::abs(a[i].position - b[i].position) > 1e-6 ||
+                std::abs(a[i].value - b[i].value) > 1e-5f ||
+                a[i].curve != b[i].curve)
+                return false;
+        }
+        return true;
+    };
+
     if (drag_.mode == DragMode::EnvelopeNode)
     {
         if (envDragClipId_.isValid())
         {
+            const Clip* curClip = song_.findClip(patternId_, envDragClipId_);
             if (envDragIsPan_)
-                listener_.clipPanEnvelopeChanged(envDragClipId_, envDragPoints_);
+            {
+                if (curClip == nullptr || !envelopesEqual(curClip->panEnvelope, envDragPoints_))
+                    listener_.clipPanEnvelopeChanged(envDragClipId_, envDragPoints_);
+            }
             else
-                listener_.clipVolumeEnvelopeChanged(envDragClipId_, envDragPoints_);
+            {
+                if (curClip == nullptr || !envelopesEqual(curClip->volumeEnvelope, envDragPoints_))
+                    listener_.clipVolumeEnvelopeChanged(envDragClipId_, envDragPoints_);
+            }
         }
         envDragClipId_ = {};
         envDragPointIdx_ = -1;
@@ -3442,7 +3465,21 @@ void PatternGrid::mouseUp(const juce::MouseEvent& e)
     if (drag_.mode == DragMode::TrackAutoNode)
     {
         if (autoDragTrack_ >= 0 && autoDragType_ != TrackEnvelopeType::None)
-            listener_.trackAutomationChanged(autoDragTrack_, autoDragType_, autoDragPoints_);
+        {
+            bool changed = true;
+            if (const auto* pat = song_.findPattern(patternId_);
+                pat != nullptr && autoDragTrack_ < static_cast<int>(pat->tracks.size()))
+            {
+                const auto& trk = pat->tracks[static_cast<std::size_t>(autoDragTrack_)];
+                const auto& existing = (autoDragType_ == TrackEnvelopeType::Volume)
+                                           ? trk.volumeAutomation
+                                           : ((autoDragType_ == TrackEnvelopeType::Pan) ? trk.panAutomation
+                                                                                        : trk.fxAutomation);
+                changed = !envelopesEqual(existing, autoDragPoints_);
+            }
+            if (changed)
+                listener_.trackAutomationChanged(autoDragTrack_, autoDragType_, autoDragPoints_);
+        }
         autoDragTrack_ = -1;
         autoDragPointIdx_ = -1;
         drag_.active = false;

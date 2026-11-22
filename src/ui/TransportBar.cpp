@@ -235,8 +235,19 @@ void TransportBar::StepperButton::paintButton(juce::Graphics& g, bool shouldDraw
 TransportBar::TimeSigButton::TimeSigButton()
     : juce::Button("Time Signature")
 {
-    setTooltip("Time Signature: 4/4 meter (Click for details)");
+    setTooltip("Time Signature: 4/4 meter (Click to change)");
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
+}
+
+void TransportBar::TimeSigButton::setTimeSignature(int numerator, int denominator)
+{
+    if (numerator_ != numerator || denominator_ != denominator)
+    {
+        numerator_ = numerator;
+        denominator_ = denominator;
+        setTooltip("Time Signature: " + juce::String(numerator_) + "/" + juce::String(denominator_) + " (Click to change)");
+        repaint();
+    }
 }
 
 void TransportBar::TimeSigButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
@@ -255,13 +266,13 @@ void TransportBar::TimeSigButton::paintButton(juce::Graphics& g, bool shouldDraw
 
     g.setFont(Typography::bold(11.0f));
     g.setColour(shouldDrawButtonAsHighlighted ? juce::Colours::white : Palette::text);
-    g.drawText("4", 0, 1, getWidth(), 14, juce::Justification::centred);
+    g.drawText(juce::String(numerator_), 0, 1, getWidth(), 14, juce::Justification::centred);
 
     g.setColour(Palette::gridLine.brighter(0.2f));
     g.drawHorizontalLine(16, 4.0f, static_cast<float>(getWidth() - 4));
 
     g.setColour(shouldDrawButtonAsHighlighted ? juce::Colours::white : Palette::text);
-    g.drawText("4", 0, 16, getWidth(), 15, juce::Justification::centred);
+    g.drawText(juce::String(denominator_), 0, 16, getWidth(), 15, juce::Justification::centred);
 }
 
 // ==============================================================================
@@ -639,14 +650,91 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
 
     addAndMakeVisible(timeSigButton_);
     timeSigButton_.onClick = [this]() {
+        struct SigOption { int num; int den; const char* label; };
+        static constexpr SigOption kOptions[] = {
+            {2, 4, "2/4"},
+            {3, 4, "3/4 (Waltz)"},
+            {4, 4, "4/4 (Common)"},
+            {5, 4, "5/4"},
+            {6, 4, "6/4"},
+            {7, 4, "7/4"},
+            {3, 8, "3/8"},
+            {6, 8, "6/8"},
+            {7, 8, "7/8"},
+            {9, 8, "9/8"},
+            {12, 8, "12/8"},
+            {2, 2, "2/2 (Cut Time)"}
+        };
+        const int curNum = song_.timeSigNumerator();
+        const int curDen = song_.timeSigDenominator();
+
         juce::PopupMenu menu;
-        menu.addItem(1, "Time Signature: 4/4 (Active)", true, true);
+        for (int i = 0; i < static_cast<int>(std::size(kOptions)); ++i)
+        {
+            const auto& opt = kOptions[i];
+            menu.addItem(i + 1, opt.label, true, curNum == opt.num && curDen == opt.den);
+            if (i == 5)
+                menu.addSeparator();
+        }
         menu.addSeparator();
-        menu.addItem(2, "3/4 (Fixed 4/4 in v1.0)", false);
-        menu.addItem(3, "6/8 (Fixed 4/4 in v1.0)", false);
-        menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&timeSigButton_), [this](int) {
-            if (onShowToast_)
-                onShowToast_("Project locked to standard 4/4 time (32 steps per bar)");
+        menu.addItem(100, "Custom...");
+
+        menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&timeSigButton_), [this](int result) {
+            if (result <= 0)
+                return;
+            if (result == 100)
+            {
+                auto* aw = new juce::AlertWindow("Custom Time Signature",
+                                                 "Enter beats per bar (1-16) and beat unit (2, 4, 8, or 16):",
+                                                 juce::MessageBoxIconType::NoIcon);
+                aw->addTextEditor("num", juce::String(song_.timeSigNumerator()), "Beats per bar (Numerator):");
+                aw->addComboBox("den", {"2", "4", "8", "16"}, "Beat unit (Denominator):");
+                if (auto* cb = aw->getComboBoxComponent("den"))
+                {
+                    const int d = song_.timeSigDenominator();
+                    cb->setSelectedId(d == 2 ? 1 : (d == 8 ? 3 : (d == 16 ? 4 : 2)), juce::dontSendNotification);
+                }
+                aw->addButton("Apply", 1, juce::KeyPress(juce::KeyPress::returnKey));
+                aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+                aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw](int r) {
+                    if (r == 1)
+                    {
+                        const int n = std::clamp(aw->getTextEditorContents("num").getIntValue(), 1, 16);
+                        int d = 4;
+                        if (auto* cb = aw->getComboBoxComponent("den"))
+                            d = cb->getText().getIntValue();
+                        song_.setTimeSignature(n, d);
+                        updateDisplay();
+                        if (onTimeSignatureChanged_)
+                            onTimeSignatureChanged_();
+                        if (onModelModified_)
+                            onModelModified_();
+                        if (onShowToast_)
+                            onShowToast_("Time Signature: " + juce::String(song_.timeSigNumerator()) + "/" +
+                                         juce::String(song_.timeSigDenominator()));
+                    }
+                    delete aw;
+                }), false);
+                return;
+            }
+
+            static constexpr std::pair<int, int> kPairs[] = {
+                {2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {7, 4},
+                {3, 8}, {6, 8}, {7, 8}, {9, 8}, {12, 8}, {2, 2}
+            };
+            const int idx = result - 1;
+            if (idx >= 0 && idx < static_cast<int>(std::size(kPairs)))
+            {
+                song_.setTimeSignature(kPairs[idx].first, kPairs[idx].second);
+                updateDisplay();
+                if (onTimeSignatureChanged_)
+                    onTimeSignatureChanged_();
+                if (onModelModified_)
+                    onModelModified_();
+                if (onShowToast_)
+                    onShowToast_("Time Signature: " + juce::String(song_.timeSigNumerator()) + "/" +
+                                 juce::String(song_.timeSigDenominator()));
+            }
         });
     };
 
@@ -737,16 +825,17 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
         }
         else
         {
-            menu.addItem(1, "Loop 1 Bar", true, (loopEnd_ - loopStart_) == kStepsPerBar);
-            menu.addItem(2, "Loop 2 Bars", true, (loopEnd_ - loopStart_) == kStepsPerBar * 2);
-            menu.addItem(3, "Loop 4 Bars", true, (loopEnd_ - loopStart_) == kStepsPerBar * 4);
+            const int spb = song_.stepsPerBar();
+            menu.addItem(1, "Loop 1 Bar", true, (loopEnd_ - loopStart_) == spb);
+            menu.addItem(2, "Loop 2 Bars", true, (loopEnd_ - loopStart_) == spb * 2);
+            menu.addItem(3, "Loop 4 Bars", true, (loopEnd_ - loopStart_) == spb * 4);
             menu.addSeparator();
             menu.addItem(4, "Expand to Full Length");
-            menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this), [this](int result) {
+            menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this), [this, spb](int result) {
                 if (!onLoopRangeChanged_) return;
-                if (result == 1) onLoopRangeChanged_(0, kStepsPerBar);
-                else if (result == 2) onLoopRangeChanged_(0, kStepsPerBar * 2);
-                else if (result == 3) onLoopRangeChanged_(0, kStepsPerBar * 4);
+                if (result == 1) onLoopRangeChanged_(0, spb);
+                else if (result == 2) onLoopRangeChanged_(0, spb * 2);
+                else if (result == 3) onLoopRangeChanged_(0, spb * 4);
                 else if (result == 4) onLoopRangeChanged_(0, 0); // entire pattern
             });
         }
@@ -781,6 +870,7 @@ void TransportBar::updateDisplay()
         swingSlider_->setTooltip("Swing Groove: " + pctStr + " (Double-click: 0%, Right-click: Presets)");
     }
     metroButton_.setToggleState(engine_.sequencer().isMetronomeEnabled(), juce::dontSendNotification);
+    timeSigButton_.setTimeSignature(song_.timeSigNumerator(), song_.timeSigDenominator());
     const int rn = song_.projectRootNote();
     keyCombo_.setSelectedId(rn >= 0 ? ((rn % 12) + 1) : 100, juce::dontSendNotification);
     repaint();
@@ -862,12 +952,14 @@ void TransportBar::paint(juce::Graphics& g)
     }
     else
     {
-        const int sBar = (loopStart_ / kStepsPerBar) + 1;
-        const int sBeat = ((loopStart_ % kStepsPerBar) / kStepsPerBeat) + 1;
+        const int spb = song_.stepsPerBar();
+        const int spBeat = song_.stepsPerBeat();
+        const int sBar = (loopStart_ / spb) + 1;
+        const int sBeat = ((loopStart_ % spb) / spBeat) + 1;
         startStr = juce::String::formatted("%d : %d : 000", sBar, sBeat);
 
-        const int eBar = (loopEnd_ / kStepsPerBar) + 1;
-        const int eBeat = ((loopEnd_ % kStepsPerBar) / kStepsPerBeat) + 1;
+        const int eBar = (loopEnd_ / spb) + 1;
+        const int eBeat = ((loopEnd_ % spb) / spBeat) + 1;
         endStr = juce::String::formatted("%d : %d : 000", eBar, eBeat);
     }
 
@@ -1005,8 +1097,10 @@ void TransportBar::timerCallback()
     {
         const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
         const double step = static_cast<double>(pos) / timing.samplesPerStep();
-        const int bar = static_cast<int>(step / kStepsPerBar) + 1;
-        const int beat = (static_cast<int>(step) % kStepsPerBar) / kStepsPerBeat + 1;
+        const int spb = song_.stepsPerBar();
+        const int spBeat = song_.stepsPerBeat();
+        const int bar = static_cast<int>(step / spb) + 1;
+        const int beat = (static_cast<int>(step) % spb) / spBeat + 1;
         const int tick = juce::roundToInt((step - std::floor(step)) * 240.0);
 
         positionLabel_.setText(juce::String::formatted("%d : %d : %03d", bar, beat, tick),

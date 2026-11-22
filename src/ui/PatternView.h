@@ -5,9 +5,9 @@
 #include "engine/StretchCache.h"
 #include "io/SampleImporter.h"
 #include "model/Song.h"
+#include "ui/BottomDockPanel.h"
 #include "ui/IconButton.h"
 #include "ui/PatternGrid.h"
-#include "ui/SampleBrowserPanel.h"
 #include "ui/TrackHeader.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -109,6 +109,7 @@ public:
     void republish();
     void publishSnapshotQuick(const std::vector<DragClipOverride>* overrides = nullptr);
     void repaintGrid();
+    void onTimeSignatureChanged();
     void syncAllTrackMixes();
     void toggleRecording();
     void onRecordFinished(AudioData recorded);
@@ -202,7 +203,7 @@ private:
     int loopEndStep_ = 0;
 
     // Toolbar controls
-    IconButton browserToggle_{"Browser", IconButton::Icon::Browser, "Browser"};
+    IconButton browserToggle_{"Dock", IconButton::Icon::Browser, "Dock"};
     juce::Label patternTitle_;
 
     juce::Label rasterLabel_{"Raster:", "Grid:"};
@@ -219,9 +220,7 @@ private:
     juce::TextButton joinButton_{"Join (J)"};
     juce::TextButton markerButton_{"+ Marker (M)"};
 
-    // Groove Pool Selector & Edit Mode Toggles
-    juce::Label grooveLabel_{"Groove:", "Groove:"};
-    juce::ComboBox grooveCombo_;
+    // Edit Mode Toggles
     juce::TextButton autoCrossfadeToggle_{"X-Fade"};
     juce::TextButton envLockToggle_{"Env Lock"};
     juce::TextButton rippleEditToggle_{"Ripple"};
@@ -232,12 +231,12 @@ private:
     bool followPlayhead_ = true;
     bool showBrowser_ = true;
     int trackHeaderWidth_ = TrackHeaderList::kHeaderWidth;
-    int browserHeight_ = 220;
+    int browserHeight_ = 250;
     int lastGridViewportW_ = 0;
     bool needsInitialAutoFit_ = true;
     bool isUpdatingZoom_ = false;
     std::function<void(const juce::String&)> onShowToast_;
-    std::unique_ptr<SampleBrowserPanel> browserPanel_;
+    std::unique_ptr<BottomDockPanel> dockPanel_;
     std::unique_ptr<ResizeSplitter> headerSplitter_;
     std::unique_ptr<ResizeSplitter> browserSplitter_;
     std::unique_ptr<HeaderCorner> headerCorner_;
@@ -248,6 +247,7 @@ private:
     std::unique_ptr<PatternGrid> grid_;
     std::unique_ptr<SyncViewport> gridViewport_;
 
+    void ensureDockVisible();
     void scrollToPlayheadIfNeeded(double phStep);
     void handleFileDrop(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep);
     void importAndAssignToTrack(const juce::String& filePath, int targetTrack, int step, bool hasSpecificStep,

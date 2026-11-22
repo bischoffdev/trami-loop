@@ -5,6 +5,28 @@ All notable changes to `trami-loop` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-22
+
+### Added
+- **Multi-Purpose Bottom Dock (`Explorer` | `Properties` | `Mixer` | `FX`)**: Consolidated all detached windows into a single resizable tabbed dock at the bottom of the workspace with a live context readout and collapse toggle.
+- **ACID-Style Dual-Pane Explorer**: Left folder-only directory tree with draggable splitter and right multi-column audio file & subfolder browser (double-click or press Enter to open subfolders, drag audio files directly onto tracks, compact audition/waveform bar at the bottom).
+- **Docked Track Mixer**: Side-by-side horizontally scrollable track channel strips with track color bars, `FX` buttons (left-click to inspect, right-click/`Alt+click` to bypass), `M` and `S` buttons, pan sliders, vertical volume faders, live 30 Hz stereo peak meters, editable dB readouts, bidirectional selection sync with track headers, and a pinned **Master** channel strip.
+- **Signal-Flow FX Rack View**: Replaced the detached FX dialog and plugin dropdown with a docked **searchable VST3/AU Plugin Browser** (live filter + `+` / double-click insert) paired with a horizontal hardware-style **FX Rack** (`IN → [Module] → OUT`) supporting **`Track FX`**, **`Clip FX`**, and **`Master FX`** scopes with one-click cross-switching and timeline jump actions.
+- **Floating Non-Modal Plugin Editors**: External VST3/AU plugin UI windows now stay floating above the main window (`alwaysOnTop`) while remaining completely modeless.
+- **Selectable Time Signatures**: Click the Time Signature button in the transport bar to select `2/4`, `3/4`, `4/4`, `5/4`, `6/4`, `7/4`, `3/8`, `6/8`, `7/8`, `9/8`, `12/8`, `2/2`, or **Custom...** (1–16 beats per bar, beat unit 2/4/8/16); updates ruler/grid/Master bar lines, metronome bar-1 accents, transport bar/beat readouts, empty-project bar length, and `.trami` project persistence.
+- **Stretch View Zoom & Pan**: Added `-` / `1.0x` / `+` / `1:1` zoom controls (`1.0x`–`16.0x`), mouse-wheel and pinch-to-zoom anchored at the cursor, horizontal panning, and a draggable overview scrollbar in the docked Properties → Stretch view.
+- **Expanded Undo/Redo Coverage**: Point-by-point Undo/Redo for Master Volume automation, track/clip multi-point envelopes, track envelope toggles, and Stretch transient marker edits.
+
+### Changed
+- **Toolbar Cleanup**: Removed the redundant Groove preset dropdown in favor of the Transport Bar's Swing control.
+- **Inactive Loop Indicator**: Greyed out the ruler loop bar and vertical loop region shading when loop playback is turned off.
+
+### Fixed
+- **Mid-Clip Loop Wrap-Around**: Chased active mid-clip voices at the exact loop boundary offset on loop wrap so tracks that start before the loop region continue playing on the 2nd and subsequent loop passes.
+- **Master Clip Indicator**: Synced `CLIP` LED state cleanly between `Sequencer`, `MasterBusLane`, and the Mixer's Master strip, wired click-to-reset to clear the latched state in both views, and changed clip detection to `> 1.0001f` to avoid false-positive clipping on normalized `0.0 dBFS` loops.
+- **Explorer Subfolder Crash**: Fixed a use-after-free crash when opening a subfolder from the Explorer's right-hand multi-column list.
+- **Stretch Marker Clear**: Removed automatic transient re-detection inside `loadFromModel()` so clicking **Clear Markers** leaves zero markers instead of repopulating 24 detected transients.
+
 ## [0.2.0] - 2026-11-20
 
 ### Added

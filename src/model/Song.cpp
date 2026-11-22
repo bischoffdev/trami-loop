@@ -126,12 +126,26 @@ Sample* Song::findSample(SampleId id) noexcept
 
 // --- Patterns ----------------------------------------------------------------
 
+void Song::setTimeSignature(int numerator, int denominator) noexcept
+{
+    timeSigNumerator_ = std::clamp(numerator, 1, 16);
+    if (denominator == 2 || denominator == 4 || denominator == 8 || denominator == 16)
+        timeSigDenominator_ = denominator;
+    else
+        timeSigDenominator_ = 4;
+
+    const int spb = stepsPerBar();
+    for (auto& pat : patterns_)
+        pat.stepsPerBar = spb;
+}
+
 PatternId Song::addPattern(std::string name, int lengthBars)
 {
     Pattern pattern;
     pattern.id = patternIds_.next();
     pattern.name = std::move(name);
     pattern.lengthBars = std::clamp(lengthBars, 1, kMaxPatternBars);
+    pattern.stepsPerBar = stepsPerBar();
     patterns_.push_back(std::move(pattern));
     return patterns_.back().id;
 }

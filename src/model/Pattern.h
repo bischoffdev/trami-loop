@@ -153,6 +153,7 @@ struct Pattern
     PatternId id;
     std::string name;
     int lengthBars = 1;
+    int stepsPerBar = kStepsPerBar;
     std::vector<PatternTrack> tracks{1};
     std::vector<TimelineMarker> markers;
     std::vector<EnvelopePoint> masterVolumeAutomation; ///< Master bus volume automation (position in steps).

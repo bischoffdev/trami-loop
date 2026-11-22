@@ -1155,3 +1155,48 @@ TEST_CASE("Clip plays past loop region end when loop playback is disabled")
     // Block 7 covers samples 7000..7999 (past the 2-step blue loop marker) -> must still be 0.75!
     REQUIRE(left[500] == Catch::Approx(0.75f).margin(0.01f));
 }
+
+TEST_CASE("Loop starting mid-clip chases and plays audio on second and subsequent passes")
+{
+    Fixture f;
+    auto sustained = std::make_shared<AudioData>();
+    sustained->channels.push_back(std::vector<float>(96000, 0.6f));
+    sustained->channels.push_back(std::vector<float>(96000, 0.6f));
+    f.bank[f.sample] = sustained;
+
+    // 16-step sustained clip starting at step 0, loop region [4..8] (starts mid-clip!)
+    // At 120 BPM, 48 kHz: 1 step = 3000 samples -> loopStart = 12000, loopEnd = 24000, loopLen = 12000
+    f.song.placeClip(f.pattern, 0, f.sample, 0.0, 16.0);
+    auto snap = SnapshotBuilder::buildPattern(f.song, f.pattern, f.bank, kRate, 4, 8);
+    REQUIRE(snap->loopStartSample == 12000);
+    REQUIRE(snap->loopEndSample == 24000);
+
+    SnapshotExchange exchange;
+    exchange.publish(std::move(snap));
+    Sequencer seq(exchange, kRate);
+    seq.setLoopingEnabled(true);
+    seq.requestSeek(12000);
+    seq.requestPlaying(true);
+
+    // Render 3 full loop passes (3 * 12000 = 36000 samples) using a block size that does not evenly divide 12000
+    constexpr int kBlock = 512;
+    std::vector<float> left(kBlock, 0.0f), right(kBlock, 0.0f);
+    std::vector<float> rendered;
+    rendered.reserve(36000);
+    while (rendered.size() < 36000)
+    {
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        seq.process(left.data(), right.data(), kBlock);
+        rendered.insert(rendered.end(), left.begin(), left.end());
+    }
+
+    // Pass 1 (samples 0..11999): mid-pass sample 6000 must be audible
+    REQUIRE(rendered[6000] == Catch::Approx(0.6f).margin(0.01f));
+    // Pass 2 (samples 12000..23999): mid-pass sample 18000 must STILL be audible (not silent!)
+    REQUIRE(rendered[12000 + 100] == Catch::Approx(0.6f).margin(0.01f));
+    REQUIRE(rendered[18000] == Catch::Approx(0.6f).margin(0.01f));
+    // Pass 3 (samples 24000..35999): mid-pass sample 30000 must STILL be audible
+    REQUIRE(rendered[24000 + 100] == Catch::Approx(0.6f).margin(0.01f));
+    REQUIRE(rendered[30000] == Catch::Approx(0.6f).margin(0.01f));
+}

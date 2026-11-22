@@ -1,9 +1,7 @@
 #include "ui/PatternView.h"
 
 #include "model/Timing.h"
-#include "ui/PluginRackDialog.h"
 #include "ui/StudioOneZoomCorner.h"
-#include "ui/TrackPropertiesDialog.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <cmath>
@@ -465,10 +463,12 @@ class PatternView::MasterBusLane : public juce::Component
     MasterBusLane(Song& song, AudioEngine& engine, PatternGrid& grid, std::function<PatternId()> getPatternId,
                   std::function<void()> onMasterFx, std::function<void()> onMasterFxBypass,
                   std::function<void()> onAutomationChanged,
+                  std::function<void()> onPushUndo,
                   std::function<void(bool)> onMuteAll, std::function<void(bool)> onSoloAll)
         : song_(song), engine_(engine), grid_(grid), getPatternId_(std::move(getPatternId)),
           onMasterFx_(std::move(onMasterFx)), onMasterFxBypass_(std::move(onMasterFxBypass)),
           onAutomationChanged_(std::move(onAutomationChanged)),
+          onPushUndo_(std::move(onPushUndo)),
           onMuteAll_(std::move(onMuteAll)), onSoloAll_(std::move(onSoloAll))
     {
         setOpaque(true);
@@ -513,6 +513,8 @@ class PatternView::MasterBusLane : public juce::Component
             const auto* pat = song_.findPattern(pid);
             if (pat == nullptr)
                 return;
+            if (onPushUndo_)
+                onPushUndo_();
             if (envButton_.getToggleState())
             {
                 if (pat->masterVolumeAutomation.empty())
@@ -617,7 +619,7 @@ class PatternView::MasterBusLane : public juce::Component
     {
         const float nextL = std::max(l, peakL_ * 0.82f);
         const float nextR = std::max(r, peakR_ * 0.82f);
-        const bool nextClip = clipped_ || clipped || l >= 1.0f || r >= 1.0f;
+        const bool nextClip = clipped;
         if (std::abs(nextL - peakL_) > 0.002f || std::abs(nextR - peakR_) > 0.002f || nextClip != clipped_)
         {
             peakL_ = nextL < 0.001f ? 0.0f : nextL;
@@ -804,16 +806,17 @@ class PatternView::MasterBusLane : public juce::Component
         const double stepW = grid_.stepWidthDouble();
 
         // Bar lines synced with PatternGrid
+        const int spb = song_.stepsPerBar();
         if (stepW > 0.0)
         {
             const int firstBar =
-                std::max(0, static_cast<int>(std::floor(static_cast<double>(scrollX_) / (stepW * kStepsPerBar))));
+                std::max(0, static_cast<int>(std::floor(static_cast<double>(scrollX_) / (stepW * spb))));
             const int lastBar =
-                static_cast<int>(std::ceil(static_cast<double>(scrollX_ + laneW) / (stepW * kStepsPerBar)));
+                static_cast<int>(std::ceil(static_cast<double>(scrollX_ + laneW) / (stepW * spb)));
             g.setColour(juce::Colours::white.withAlpha(0.06f));
             for (int bar = firstBar; bar <= lastBar; ++bar)
             {
-                const int bx = laneX + grid_.stepToX(static_cast<double>(bar * kStepsPerBar)) - scrollX_;
+                const int bx = laneX + grid_.stepToX(static_cast<double>(bar * spb)) - scrollX_;
                 g.drawVerticalLine(bx, 1.0f, static_cast<float>(h - 1));
             }
         }
@@ -917,6 +920,8 @@ class PatternView::MasterBusLane : public juce::Component
         {
             if (hit >= 0 && hit < static_cast<int>(pts.size()))
             {
+                if (onPushUndo_)
+                    onPushUndo_();
                 pts.erase(pts.begin() + hit);
                 song_.setMasterAutomation(pid, std::move(pts));
                 if (onAutomationChanged_)
@@ -930,11 +935,15 @@ class PatternView::MasterBusLane : public juce::Component
         if (hit >= 0)
         {
             dragPointIndex_ = hit;
+            pushedUndoForDrag_ = false;
             repaint();
             return;
         }
 
         // Left-click on lane/curve: add new point and start dragging immediately
+        if (onPushUndo_)
+            onPushUndo_();
+        pushedUndoForDrag_ = true;
         const double step = std::max(0.0, grid_.xToStep(e.x - laneX + scrollX_));
         const float val = yToValue(static_cast<float>(e.y));
         if (pts.empty())
@@ -989,6 +998,12 @@ class PatternView::MasterBusLane : public juce::Component
         if (dragPointIndex_ + 1 < static_cast<int>(pts.size()))
             step = std::min(step, pts[static_cast<std::size_t>(dragPointIndex_ + 1)].position - 0.05);
 
+        if (!pushedUndoForDrag_)
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+            pushedUndoForDrag_ = true;
+        }
         pts[static_cast<std::size_t>(dragPointIndex_)].position = step;
         pts[static_cast<std::size_t>(dragPointIndex_)].value = val;
         song_.setMasterAutomation(pid, std::move(pts));
@@ -1002,6 +1017,7 @@ class PatternView::MasterBusLane : public juce::Component
         if (dragPointIndex_ >= 0)
         {
             dragPointIndex_ = -1;
+            pushedUndoForDrag_ = false;
             repaint();
         }
     }
@@ -1050,8 +1066,10 @@ class PatternView::MasterBusLane : public juce::Component
     std::function<void()> onMasterFx_;
     std::function<void()> onMasterFxBypass_;
     std::function<void()> onAutomationChanged_;
+    std::function<void()> onPushUndo_;
     std::function<void(bool)> onMuteAll_;
     std::function<void(bool)> onSoloAll_;
+    bool pushedUndoForDrag_ = false;
 
     DAWMuteButton muteAllButton_;
     DAWSoloButton soloAllButton_;
@@ -1162,12 +1180,12 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     // Toolbar setup
     browserToggle_.setClickingTogglesState(true);
     browserToggle_.setToggleState(showBrowser_, juce::dontSendNotification);
-    browserToggle_.setTooltip("Toggle Sample Browser Panel (B)");
+    browserToggle_.setTooltip("Toggle Bottom Dock (Explorer / Properties / Mixer / FX) (B)");
     browserToggle_.onClick = [this]()
     {
         showBrowser_ = browserToggle_.getToggleState();
-        if (browserPanel_ != nullptr)
-            browserPanel_->setVisible(showBrowser_);
+        if (dockPanel_ != nullptr)
+            dockPanel_->setVisible(showBrowser_);
         resized();
     };
     addAndMakeVisible(browserToggle_);
@@ -1267,36 +1285,6 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     };
     addAndMakeVisible(markerButton_);
 
-    // Groove Pool Selector
-    grooveLabel_.setFont(Typography::bold(11.5f));
-    grooveLabel_.setColour(juce::Label::textColourId, Palette::textDim);
-    grooveLabel_.setJustificationType(juce::Justification::centredRight);
-    addAndMakeVisible(grooveLabel_);
-
-    for (int i = 0; i < static_cast<int>(GroovePreset::Count); ++i)
-    {
-        const auto preset = static_cast<GroovePreset>(i);
-        grooveCombo_.addItem(groovePresetName(preset), i + 1);
-    }
-    grooveCombo_.setSelectedId(static_cast<int>(song_.groovePreset()) + 1, juce::dontSendNotification);
-    grooveCombo_.setTooltip("Groove Quantize / Groove Pool Preset (applies 16th/8th swing & shuffle feel)");
-    grooveCombo_.onChange = [this]()
-    {
-        const int idx = grooveCombo_.getSelectedId() - 1;
-        if (idx >= 0 && idx < static_cast<int>(GroovePreset::Count))
-        {
-            const auto preset = static_cast<GroovePreset>(idx);
-            song_.setGroovePreset(preset);
-            publishSnapshotQuick();
-            republish();
-            if (grid_ != nullptr)
-                grid_->repaint();
-            if (onShowToast_)
-                onShowToast_("Groove: " + juce::String(groovePresetName(preset)));
-        }
-    };
-    addAndMakeVisible(grooveCombo_);
-
     // Auto-Crossfade / Envelope Lock / Ripple Edit Toolbar Toggles
     auto setupModeToggle = [this](juce::TextButton& btn, const juce::String& tooltip, bool initial)
     {
@@ -1341,17 +1329,130 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             onShowToast_(on ? "Ripple Edit: ON" : "Ripple Edit: OFF");
     };
 
-    // Browser Panel
-    browserPanel_ = std::make_unique<SampleBrowserPanel>(song_, engine_, stretchCache_,
-                                                         [this](SampleId id)
-                                                         {
-                                                             activeSample_ = id;
-                                                             updateSampleSelector();
-                                                             republish();
-                                                         });
-    browserPanel_->setOnAddToNewTrack([this](const juce::String& filePath, SampleKind kind)
-                                      { importAndAssignToTrack(filePath, -1, 0, false, kind); });
-    addAndMakeVisible(browserPanel_.get());
+    // Multi-purpose Bottom Dock Panel (Explorer / Properties / Mixer / FX)
+    dockPanel_ = std::make_unique<BottomDockPanel>(
+        song_, engine_, stretchCache_, currentPattern_,
+        [this](SampleId id)
+        {
+            activeSample_ = id;
+            updateSampleSelector();
+            republish();
+        },
+        [this]()
+        {
+            if (trackHeaders_ != nullptr)
+                trackHeaders_->updateFromModel();
+            if (dockPanel_ != nullptr)
+                dockPanel_->refreshFromModel();
+            publishSnapshotQuick();
+            republish();
+            if (grid_ != nullptr)
+                grid_->repaint();
+        });
+    dockPanel_->explorer().setOnAddToNewTrack([this](const juce::String& filePath, SampleKind kind)
+                                              { importAndAssignToTrack(filePath, -1, 0, false, kind); });
+    dockPanel_->onCollapseRequested = [this]()
+    {
+        showBrowser_ = false;
+        browserToggle_.setToggleState(false, juce::dontSendNotification);
+        if (dockPanel_ != nullptr)
+            dockPanel_->setVisible(false);
+        resized();
+    };
+    dockPanel_->mixer().onTrackMixChanged = [this](int track)
+    {
+        if (const auto* pat = song_.findPattern(currentPattern_))
+        {
+            if (track >= 0 && track < static_cast<int>(pat->tracks.size()))
+            {
+                const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
+                engine_.sequencer().setTrackMix(track, trk.mix.volume, trk.mix.pan, trk.muted, trk.solo);
+            }
+        }
+        if (trackHeaders_ != nullptr)
+            trackHeaders_->updateFromModel();
+        if (masterBusLane_ != nullptr)
+            masterBusLane_->updateButtonStates();
+        publishSnapshotQuick();
+    };
+    dockPanel_->mixer().onTrackFxClicked = [this](int track) { openTrackFxDialog(track); };
+    dockPanel_->mixer().onTrackFxBypass = [this](int track) { toggleTrackFxBypass(track); };
+    dockPanel_->mixer().onTrackSelected = [this](int track)
+    {
+        if (trackHeaders_ != nullptr)
+            trackHeaders_->setSelectedTrack(track);
+        if (dockPanel_ != nullptr)
+            dockPanel_->selectTrack(track);
+        jumpToTrack(track);
+    };
+    dockPanel_->properties().onPushUndo = [this]()
+    {
+        if (onPushUndo_)
+            onPushUndo_();
+    };
+    dockPanel_->mixer().onMasterFxClicked = [this]() { openMasterFxDialog(); };
+    dockPanel_->mixer().onMasterFxBypass = [this]() { toggleMasterFxBypass(); };
+    dockPanel_->mixer().onMasterMixChanged = [this]()
+    {
+        if (masterBusLane_ != nullptr)
+            masterBusLane_->updateButtonStates();
+    };
+    dockPanel_->mixer().onMuteAll = [this](bool muted)
+    {
+        if (auto* pat = song_.findPattern(currentPattern_))
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+            for (auto& trk : pat->tracks)
+                trk.muted = muted;
+            syncAllTrackMixes();
+            if (trackHeaders_ != nullptr)
+                trackHeaders_->updateFromModel();
+            if (masterBusLane_ != nullptr)
+                masterBusLane_->updateButtonStates();
+            if (dockPanel_ != nullptr)
+                dockPanel_->refreshFromModel();
+            publishSnapshotQuick();
+        }
+    };
+    dockPanel_->mixer().onSoloAll = [this](bool soloed)
+    {
+        if (auto* pat = song_.findPattern(currentPattern_))
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+            for (auto& trk : pat->tracks)
+                trk.solo = soloed;
+            syncAllTrackMixes();
+            if (trackHeaders_ != nullptr)
+                trackHeaders_->updateFromModel();
+            if (masterBusLane_ != nullptr)
+                masterBusLane_->updateButtonStates();
+            if (dockPanel_ != nullptr)
+                dockPanel_->refreshFromModel();
+            publishSnapshotQuick();
+        }
+    };
+    dockPanel_->fxRack().onPushUndo = [this]()
+    {
+        if (onPushUndo_)
+            onPushUndo_();
+    };
+    dockPanel_->fxRack().onChainModified = [this]()
+    {
+        if (trackHeaders_ != nullptr)
+            trackHeaders_->updateFromModel();
+        if (masterBusLane_ != nullptr)
+            masterBusLane_->updateButtonStates();
+        if (dockPanel_ != nullptr)
+            dockPanel_->mixer().refreshFromModel();
+        if (grid_ != nullptr)
+            grid_->repaint();
+        publishSnapshotQuick();
+    };
+    dockPanel_->fxRack().onJumpToTrack = [this](int track) { jumpToTrack(track); };
+    dockPanel_->fxRack().onJumpToClip = [this](ClipId clipId) { jumpToClip(clipId); };
+    addAndMakeVisible(dockPanel_.get());
 
     // Grid & Track headers
     trackHeaders_ = std::make_unique<TrackHeaderList>(
@@ -1368,6 +1469,8 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             }
             if (masterBusLane_ != nullptr)
                 masterBusLane_->updateButtonStates();
+            if (dockPanel_ != nullptr)
+                dockPanel_->mixer().refreshFromModel();
             publishSnapshotQuick();
         });
     trackHeaders_->setOnAddTrack([this]() { addTrack(); });
@@ -1379,6 +1482,8 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
                 onPushUndo_();
             if (grid_ != nullptr)
                 grid_->repaint();
+            if (dockPanel_ != nullptr)
+                dockPanel_->refreshFromModel();
         });
     trackHeaders_->setOnDuplicateTrack([this](int track) { duplicateTrack(track); });
     trackHeaders_->setOnDeleteTrack([this](int track) { deleteTrack(track); });
@@ -1386,16 +1491,9 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     trackHeaders_->setOnTrackProperties(
         [this](int track)
         {
-            TrackPropertiesComponent::showDialog(this, song_, stretchCache_, currentPattern_, track,
-                                                 [this]()
-                                                 {
-                                                     if (trackHeaders_ != nullptr)
-                                                         trackHeaders_->updateFromModel();
-                                                     publishSnapshotQuick();
-                                                     republish();
-                                                     if (grid_ != nullptr)
-                                                         grid_->repaint();
-                                                 });
+            ensureDockVisible();
+            if (dockPanel_ != nullptr)
+                dockPanel_->showTrackProperties(track);
         });
     trackHeaders_->setOnTrackFx([this](int track) { openTrackFxDialog(track); });
     trackHeaders_->setOnTrackFxBypass([this](int track) { toggleTrackFxBypass(track); });
@@ -1406,11 +1504,20 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
                 onPushUndo_();
             if (grid_ != nullptr)
                 grid_->repaint();
+            if (dockPanel_ != nullptr)
+                dockPanel_->refreshFromModel();
         });
+    trackHeaders_->setOnPushUndo([this]()
+    {
+        if (onPushUndo_)
+            onPushUndo_();
+    });
     trackHeaders_->setTrackPeakProvider([this](int track) { return engine_.sequencer().trackPeakLevels(track); });
     trackHeaders_->setOnTrackSelected(
         [this](int track, SampleId sampleId)
         {
+            if (dockPanel_ != nullptr)
+                dockPanel_->selectTrack(track);
             if (sampleId.isValid())
             {
                 activeSample_ = sampleId;
@@ -1425,6 +1532,8 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
                         onPushUndo_();
                     song_.setPatternTrackSample(currentPattern_, track, activeSample_);
                     trackHeaders_->updateFromModel();
+                    if (dockPanel_ != nullptr)
+                        dockPanel_->refreshFromModel();
                     republish();
                 }
             }
@@ -1574,6 +1683,11 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     masterBusLane_ = std::make_unique<MasterBusLane>(
         song_, engine_, *grid_, [this]() { return currentPattern_; }, [this]() { openMasterFxDialog(); },
         [this]() { toggleMasterFxBypass(); }, [this]() { publishSnapshotQuick(); },
+        [this]()
+        {
+            if (onPushUndo_)
+                onPushUndo_();
+        },
         [this](bool muteAll)
         {
             if (auto* pat = song_.findPattern(currentPattern_))
@@ -1694,15 +1808,28 @@ void PatternView::setPattern(PatternId patternId)
         masterBusLane_->updateButtonStates();
         masterBusLane_->repaint();
     }
+    if (dockPanel_ != nullptr)
+        dockPanel_->setPattern(patternId);
     syncAllTrackMixes();
     publishSnapshotQuick();
     republish();
     resized();
 }
 
+void PatternView::ensureDockVisible()
+{
+    if (!showBrowser_)
+    {
+        showBrowser_ = true;
+        browserToggle_.setToggleState(true, juce::dontSendNotification);
+        if (dockPanel_ != nullptr)
+            dockPanel_->setVisible(true);
+        resized();
+    }
+}
+
 void PatternView::syncToolbarTogglesFromSong()
 {
-    grooveCombo_.setSelectedId(static_cast<int>(song_.groovePreset()) + 1, juce::dontSendNotification);
     autoCrossfadeToggle_.setToggleState(song_.autoCrossfadeEnabled(), juce::dontSendNotification);
     envLockToggle_.setToggleState(song_.envelopeLockEnabled(), juce::dontSendNotification);
     rippleEditToggle_.setToggleState(song_.rippleEditEnabled(), juce::dontSendNotification);
@@ -1714,96 +1841,9 @@ void PatternView::clipFxRequested(ClipId clipId)
     if (clip == nullptr)
         return;
 
-    int trackIdx = -1;
-    if (const auto* pat = song_.findPattern(currentPattern_))
-    {
-        for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
-        {
-            for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
-            {
-                if (c.id == clipId)
-                {
-                    trackIdx = t;
-                    break;
-                }
-            }
-            if (trackIdx >= 0)
-                break;
-        }
-    }
-
-    static constexpr std::uint32_t kModernPalette[] = {
-        0xff63d988, 0xffb4a2f0, 0xff72c4fa, 0xfff2bf66, 0xfff294ab,
-        0xff6ad8cc, 0xff9d94f2, 0xffa2dc6d, 0xffefa274, 0xff85b8f8
-    };
-    constexpr std::size_t kPaletteCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
-
-    const Sample* smp = song_.findSample(clip->sampleId);
-    juce::String clipName;
-    if (const auto* pat = song_.findPattern(currentPattern_); pat != nullptr && trackIdx >= 0 &&
-                                                             trackIdx < static_cast<int>(pat->tracks.size()) &&
-                                                             !pat->tracks[static_cast<std::size_t>(trackIdx)].name.empty())
-    {
-        clipName = juce::String::fromUTF8(pat->tracks[static_cast<std::size_t>(trackIdx)].name.c_str());
-    }
-    else if (smp != nullptr)
-    {
-        clipName = juce::String::fromUTF8(smp->name.c_str());
-    }
-    else
-    {
-        clipName = "Clip #" + juce::String(clipId.value);
-    }
-
-    const int bar = static_cast<int>(std::floor(clip->startStep / static_cast<double>(kStepsPerBar))) + 1;
-    const int beat = static_cast<int>(std::floor(std::fmod(std::max(0.0, clip->startStep),
-                                                           static_cast<double>(kStepsPerBar)) /
-                                                 static_cast<double>(kStepsPerBeat))) + 1;
-
-    juce::String location = "Bar " + juce::String(bar) + "." + juce::String(beat);
-    if (trackIdx >= 0)
-        location = "Track " + juce::String(trackIdx + 1) + ", " + location;
-
-    juce::Colour clipAccent = (clip->sampleId.isValid())
-                                  ? juce::Colour(kModernPalette[(clip->sampleId.value - 1) % kPaletteCount])
-                                  : Palette::accent;
-    if (const auto* pat = song_.findPattern(currentPattern_); pat != nullptr && trackIdx >= 0 &&
-                                                             trackIdx < static_cast<int>(pat->tracks.size()) &&
-                                                             pat->tracks[static_cast<std::size_t>(trackIdx)].colorArgb != 0)
-    {
-        clipAccent = juce::Colour(pat->tracks[static_cast<std::size_t>(trackIdx)].colorArgb);
-    }
-
-    PluginRackDialog::NavigationActions nav;
-    nav.primaryLabel = "Jump to Clip";
-    nav.onPrimary = [this, clipId]() { jumpToClip(clipId); };
-    nav.accentColour = clipAccent;
-    nav.targetBanner = clipName + " (" + location + ")";
-    if (trackIdx >= 0)
-    {
-        nav.secondaryLabel = "Track " + juce::String(trackIdx + 1) + " FX";
-        nav.onSecondary = [this, trackIdx]()
-        {
-            jumpToTrack(trackIdx);
-            openTrackFxDialog(trackIdx);
-        };
-    }
-
-    const juce::String title = "Clip FX: " + clipName + " (" + location + ")";
-    PluginRackDialog::showAsync(title, engine_.pluginHost(), PluginHost::TargetKind::Clip,
-                                clipId.value, clip->fxChain,
-                                [this, clipId](std::vector<PluginSlot> newChain)
-                                {
-                                    if (onPushUndo_)
-                                        onPushUndo_();
-                                    song_.setClipFxChain(currentPattern_, clipId, std::move(newChain));
-                                    if (const auto* pat = song_.findPattern(currentPattern_))
-                                        engine_.pluginHost().syncFromPattern(*pat);
-                                    publishSnapshotQuick();
-                                    if (grid_ != nullptr)
-                                        grid_->repaint();
-                                },
-                                std::move(nav));
+    ensureDockVisible();
+    if (dockPanel_ != nullptr)
+        dockPanel_->showClipFx(clipId);
 }
 
 void PatternView::jumpToClip(ClipId clipId)
@@ -1872,6 +1912,8 @@ void PatternView::clipFxBypassRequested(ClipId clipId)
     publishSnapshotQuick();
     if (grid_ != nullptr)
         grid_->repaint();
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
     if (onShowToast_)
         onShowToast_(allBypassed ? "Clip FX Enabled" : "Clip FX Bypassed");
 }
@@ -1899,6 +1941,8 @@ void PatternView::toggleTrackFxBypass(int track)
         engine_.pluginHost().syncFromPattern(*p);
     if (trackHeaders_ != nullptr)
         trackHeaders_->updateFromModel();
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
     publishSnapshotQuick();
     if (onShowToast_)
         onShowToast_(allBypassed ? ("Track " + juce::String(track + 1) + " FX Enabled")
@@ -1924,6 +1968,8 @@ void PatternView::toggleMasterFxBypass()
         engine_.pluginHost().syncFromPattern(*p);
     if (masterBusLane_ != nullptr)
         masterBusLane_->updateButtonStates();
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
     publishSnapshotQuick();
     if (onShowToast_)
         onShowToast_(allBypassed ? "Master FX Enabled" : "Master FX Bypassed");
@@ -1935,55 +1981,9 @@ void PatternView::openTrackFxDialog(int track)
     if (pat == nullptr || track < 0 || track >= static_cast<int>(pat->tracks.size()))
         return;
 
-    const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
-    juce::String trkName = trk.name.empty() ? juce::String() : juce::String::fromUTF8(trk.name.c_str());
-    if (trkName.isEmpty())
-    {
-        SampleId sid = trk.sampleId;
-        if (!sid.isValid() && !trk.clips.empty())
-            sid = trk.clips.front().sampleId;
-        if (const Sample* s = song_.findSample(sid))
-            trkName = juce::String::fromUTF8(s->name.c_str());
-    }
-    static constexpr std::uint32_t kModernPalette[] = {
-        0xff63d988, 0xffb4a2f0, 0xff72c4fa, 0xfff2bf66, 0xfff294ab,
-        0xff6ad8cc, 0xff9d94f2, 0xffa2dc6d, 0xffefa274, 0xff85b8f8
-    };
-    constexpr std::size_t kPaletteCount = sizeof(kModernPalette) / sizeof(kModernPalette[0]);
-
-    SampleId colorSid = trk.sampleId;
-    if (!colorSid.isValid() && !trk.clips.empty())
-        colorSid = trk.clips.front().sampleId;
-
-    PluginRackDialog::NavigationActions nav;
-    nav.primaryLabel = "Jump to Track";
-    nav.onPrimary = [this, track]() { jumpToTrack(track); };
-    nav.accentColour = (trk.colorArgb != 0)
-                           ? juce::Colour(trk.colorArgb)
-                           : (colorSid.isValid()
-                                  ? juce::Colour(kModernPalette[(colorSid.value - 1) % kPaletteCount])
-                                  : Palette::accent);
-    nav.targetBanner = trkName.isNotEmpty()
-                           ? ("Track " + juce::String(track + 1) + " - " + trkName)
-                           : ("Track " + juce::String(track + 1));
-
-    const juce::String title = trkName.isNotEmpty()
-                                   ? ("Track " + juce::String(track + 1) + " FX: " + trkName)
-                                   : ("Track " + juce::String(track + 1) + " FX");
-    PluginRackDialog::showAsync(title, engine_.pluginHost(), PluginHost::TargetKind::Track,
-                                static_cast<std::uint32_t>(track), trk.fxChain,
-                                [this, track](std::vector<PluginSlot> newChain)
-                                {
-                                    if (onPushUndo_)
-                                        onPushUndo_();
-                                    song_.setTrackFxChain(currentPattern_, track, std::move(newChain));
-                                    if (const auto* p = song_.findPattern(currentPattern_))
-                                        engine_.pluginHost().syncFromPattern(*p);
-                                    if (trackHeaders_ != nullptr)
-                                        trackHeaders_->updateFromModel();
-                                    publishSnapshotQuick();
-                                },
-                                std::move(nav));
+    ensureDockVisible();
+    if (dockPanel_ != nullptr)
+        dockPanel_->showTrackFx(track);
 }
 
 void PatternView::openMasterFxDialog()
@@ -1992,24 +1992,9 @@ void PatternView::openMasterFxDialog()
     if (pat == nullptr)
         return;
 
-    PluginRackDialog::NavigationActions nav;
-    nav.accentColour = juce::Colour(0xffef4444);
-    nav.targetBanner = "Master Bus";
-
-    PluginRackDialog::showAsync("Master Bus FX Rack", engine_.pluginHost(), PluginHost::TargetKind::Master, 0,
-                                pat->masterFxChain,
-                                [this](std::vector<PluginSlot> newChain)
-                                {
-                                    if (onPushUndo_)
-                                        onPushUndo_();
-                                    song_.setMasterFxChain(currentPattern_, std::move(newChain));
-                                    if (const auto* p = song_.findPattern(currentPattern_))
-                                        engine_.pluginHost().syncFromPattern(*p);
-                                    if (masterBusLane_ != nullptr)
-                                        masterBusLane_->updateButtonStates();
-                                    publishSnapshotQuick();
-                                },
-                                std::move(nav));
+    ensureDockVisible();
+    if (dockPanel_ != nullptr)
+        dockPanel_->showMasterFx();
 }
 
 void PatternView::loopRegionChanged(int startStep, int endStep)
@@ -2104,6 +2089,8 @@ void PatternView::updateTrackHeaders()
         grid_->setPattern(currentPattern_);
         grid_->repaint();
     }
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
 }
 
 void PatternView::addTrack()
@@ -2112,6 +2099,8 @@ void PatternView::addTrack()
         onPushUndo_();
     song_.addTrackToPattern(currentPattern_, activeSample_);
     trackHeaders_->updateFromModel();
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
     republish();
     resized();
 }
@@ -2123,6 +2112,8 @@ void PatternView::duplicateTrack(int track)
     if (song_.duplicateTrackInPattern(currentPattern_, track) >= 0)
     {
         trackHeaders_->updateFromModel();
+        if (dockPanel_ != nullptr)
+            dockPanel_->refreshFromModel();
         publishSnapshotQuick();
         republish();
         resized();
@@ -2138,6 +2129,8 @@ void PatternView::deleteTrack(int track)
     {
         autoAdjustPatternLength();
         trackHeaders_->updateFromModel();
+        if (dockPanel_ != nullptr)
+            dockPanel_->refreshFromModel();
         publishSnapshotQuick();
         republish();
         resized();
@@ -2152,6 +2145,8 @@ void PatternView::moveTrack(int from, int to)
     if (song_.movePatternTrack(currentPattern_, from, to))
     {
         trackHeaders_->updateFromModel();
+        if (dockPanel_ != nullptr)
+            dockPanel_->refreshFromModel();
         publishSnapshotQuick();
         republish();
         resized();
@@ -2196,6 +2191,8 @@ void PatternView::setTrackKind(int trackIndex, SampleKind newKind)
 
     updateSampleSelector();
     trackHeaders_->updateFromModel();
+    if (dockPanel_ != nullptr)
+        dockPanel_->refreshFromModel();
     publishSnapshotQuick();
     republish();
     grid_->repaint();
@@ -2215,6 +2212,8 @@ void PatternView::syncAllTrackMixes()
         const auto& trk = pat->tracks[t];
         engine_.sequencer().setTrackMix(static_cast<int>(t), trk.mix.volume, trk.mix.pan, trk.muted, trk.solo);
     }
+    if (dockPanel_ != nullptr)
+        dockPanel_->mixer().refreshFromModel();
 }
 
 void PatternView::publishSnapshotQuick(const std::vector<DragClipOverride>* overrides)
@@ -2228,7 +2227,50 @@ void PatternView::publishSnapshotQuick(const std::vector<DragClipOverride>* over
 void PatternView::repaintGrid()
 {
     if (grid_ != nullptr)
+    {
+        grid_->setLoopEnabled(engine_.sequencer().isLoopingEnabled());
         grid_->repaint();
+    }
+    if (ruler_ != nullptr)
+        ruler_->repaint();
+    if (masterBusLane_ != nullptr)
+        masterBusLane_->repaint();
+}
+
+void PatternView::onTimeSignatureChanged()
+{
+    const auto* pat = song_.findPattern(currentPattern_);
+    bool hasAnyClips = false;
+    if (pat != nullptr)
+    {
+        for (const auto& trk : pat->tracks)
+        {
+            if (!trk.clips.empty())
+            {
+                hasAnyClips = true;
+                break;
+            }
+        }
+    }
+
+    if (pat != nullptr && !hasAnyClips)
+    {
+        loopStartStep_ = 0;
+        loopEndStep_ = pat->lengthSteps();
+        if (grid_ != nullptr)
+            grid_->setLoopRegion(loopStartStep_, loopEndStep_);
+        if (onLoopRegionChanged_)
+            onLoopRegionChanged_(loopStartStep_, loopEndStep_);
+    }
+
+    if (grid_ != nullptr)
+    {
+        grid_->setPattern(currentPattern_);
+        grid_->resized();
+    }
+    if (gridViewport_ != nullptr)
+        gridViewport_->syncZoomBars();
+    repaintGrid();
 }
 
 void PatternView::clipsDragging(const std::vector<DragClipOverride>& items)
@@ -2390,7 +2432,30 @@ void PatternView::onRecordFinished(AudioData recorded)
         onShowToast_("Recorded " + juce::String(s.name) + " onto Track " + juce::String(targetTrackIdx + 1));
 }
 
-void PatternView::clipClicked(ClipId) {}
+void PatternView::clipClicked(ClipId clipId)
+{
+    if (dockPanel_ == nullptr || !clipId.isValid())
+        return;
+
+    int trackIdx = -1;
+    if (const auto* pat = song_.findPattern(currentPattern_))
+    {
+        for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
+        {
+            for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
+            {
+                if (c.id == clipId)
+                {
+                    trackIdx = t;
+                    break;
+                }
+            }
+            if (trackIdx >= 0)
+                break;
+        }
+    }
+    dockPanel_->selectClip(clipId, trackIdx);
+}
 
 void PatternView::clipMoved(ClipId clipId, int newTrack, double newStep)
 {
@@ -4155,6 +4220,7 @@ void PatternView::timerCallback()
 {
     if (grid_ != nullptr)
     {
+        grid_->setLoopEnabled(engine_.sequencer().isLoopingEnabled());
         const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
         const double samplesPerStep = timing.samplesPerStep();
         if (samplesPerStep > 0.0)
@@ -4168,13 +4234,15 @@ void PatternView::timerCallback()
             grid_->setPlayheadStep(phStep);
             if (ruler_ != nullptr)
                 ruler_->repaint();
+            const auto lv = engine_.sequencer().outputLevels();
             if (masterBusLane_ != nullptr)
             {
-                const auto lv = engine_.sequencer().outputLevels();
                 masterBusLane_->setMeterLevels(lv.peakL, lv.peakR, lv.clipped);
                 if (engine_.sequencer().isPlaying())
                     masterBusLane_->repaint();
             }
+            if (dockPanel_ != nullptr)
+                dockPanel_->setMasterMeterLevels(lv.peakL, lv.peakR, lv.clipped);
 
             if (followPlayhead_ && engine_.sequencer().isPlaying())
                 scrollToPlayheadIfNeeded(phStep);
@@ -4396,13 +4464,7 @@ void PatternView::resized()
     joinButton_.setBounds(toolbar.removeFromLeft(56));
     toolbar.removeFromLeft(4);
     markerButton_.setBounds(toolbar.removeFromLeft(84));
-    toolbar.removeFromLeft(10);
-
-    // Groove Pool Selector
-    grooveLabel_.setBounds(toolbar.removeFromLeft(46));
-    toolbar.removeFromLeft(2);
-    grooveCombo_.setBounds(toolbar.removeFromLeft(142));
-    toolbar.removeFromLeft(8);
+    toolbar.removeFromLeft(12);
 
     // Auto-Crossfade / Envelope Lock / Ripple Edit Toggles
     autoCrossfadeToggle_.setBounds(toolbar.removeFromLeft(52));
@@ -4418,10 +4480,10 @@ void PatternView::resized()
     constexpr int kHeaderSplitterW = 5;
 
     int timelineH = totalH;
-    if (showBrowser_ && browserPanel_ != nullptr)
+    if (showBrowser_ && dockPanel_ != nullptr)
     {
-        const int maxBrowserH = std::max(110, totalH * 65 / 100);
-        const int clampedBrowserH = std::clamp(browserHeight_, 110, maxBrowserH);
+        const int maxBrowserH = std::max(140, totalH * 65 / 100);
+        const int clampedBrowserH = std::clamp(browserHeight_, 140, maxBrowserH);
         timelineH = std::max(100, totalH - clampedBrowserH - kBrowserSplitterH);
 
         if (browserSplitter_ != nullptr)
@@ -4429,16 +4491,16 @@ void PatternView::resized()
             browserSplitter_->setVisible(true);
             browserSplitter_->setBounds(0, contentY + timelineH, getWidth(), kBrowserSplitterH);
         }
-        browserPanel_->setVisible(true);
-        browserPanel_->setBounds(0, contentY + timelineH + kBrowserSplitterH, getWidth(),
-                                 std::max(0, totalH - timelineH - kBrowserSplitterH));
+        dockPanel_->setVisible(true);
+        dockPanel_->setBounds(0, contentY + timelineH + kBrowserSplitterH, getWidth(),
+                              std::max(0, totalH - timelineH - kBrowserSplitterH));
     }
     else
     {
         if (browserSplitter_ != nullptr)
             browserSplitter_->setVisible(false);
-        if (browserPanel_ != nullptr)
-            browserPanel_->setVisible(false);
+        if (dockPanel_ != nullptr)
+            dockPanel_->setVisible(false);
     }
 
     const int masterLaneH =

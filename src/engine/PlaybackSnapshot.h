@@ -92,6 +92,7 @@ struct PlaybackSnapshot
     std::int64_t loopEndSample = 0;
     bool looping = true;
     double samplesPerBeat = 0.0;
+    int beatsPerBar = 4;
     inline static constexpr int kMaxTrackMixes = 64;
     std::array<TrackMixSnapshot, kMaxTrackMixes> trackMixes{};
     bool hasTrackMixes = false;

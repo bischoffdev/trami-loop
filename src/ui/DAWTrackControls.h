@@ -42,7 +42,7 @@ void drawAudioWaveformIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juc
 
 namespace DAWLoopRuler
 {
-void drawStudioOneLoopIndicator(juce::Graphics& g, int loopStartX, int loopEndX, int rulerHeight);
+void drawStudioOneLoopIndicator(juce::Graphics& g, int loopStartX, int loopEndX, int rulerHeight, bool active = true);
 } // namespace DAWLoopRuler
 
 } // namespace trami

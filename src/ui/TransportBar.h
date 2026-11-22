@@ -28,6 +28,7 @@ public:
     void setOnLoopRangeChanged(std::function<void(int start, int end)> callback) { onLoopRangeChanged_ = std::move(callback); }
     void setOnShowToast(std::function<void(const juce::String&)> cb) { onShowToast_ = std::move(cb); }
     void setOnSwingChanged(std::function<void(double)> cb) { onSwingChanged_ = std::move(cb); }
+    void setOnTimeSignatureChanged(std::function<void()> cb) { onTimeSignatureChanged_ = std::move(cb); }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -79,7 +80,12 @@ private:
     {
     public:
         TimeSigButton();
+        void setTimeSignature(int numerator, int denominator);
         void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
+
+    private:
+        int numerator_ = 4;
+        int denominator_ = 4;
     };
 
     void timerCallback() override;
@@ -99,6 +105,7 @@ private:
     std::function<void(int start, int end)> onLoopRangeChanged_;
     std::function<void(const juce::String&)> onShowToast_;
     std::function<void(double)> onSwingChanged_;
+    std::function<void()> onTimeSignatureChanged_;
 
     // Transport buttons cluster
     TransportButton recordButton_{TransportIcon::Record, "Record (R)"};

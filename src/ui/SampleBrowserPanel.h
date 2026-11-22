@@ -10,6 +10,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <vector>
 
 namespace trami
 {
@@ -30,10 +31,8 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
 
-    // FileBrowserListener
+    // FileBrowserListener (for left folder tree)
     void selectionChanged() override;
     void fileClicked(const juce::File& file, const juce::MouseEvent& e) override;
     void fileDoubleClicked(const juce::File& file) override;
@@ -42,9 +41,18 @@ public:
     void previewCurrentSelection();
     void importCurrentSelection(SampleKind kind, int loopBars = 1);
     void refreshDrives();
-    void selectDirectory(const juce::File& dir);
+    void selectDirectory(juce::File dir);
 
 private:
+    class AudioFileListView;
+    class FolderTreeSplitter;
+
+    void populateFilesForDirectory(juce::File dir);
+    void onAudioFileSelected(juce::File file);
+    void onAudioFileDoubleClicked(juce::File file);
+    void startSampleDrag(const juce::File& file);
+    void timerCallback() override;
+
     Song& song_;
     AudioEngine& engine_;
     StretchCache& stretchCache_;
@@ -53,9 +61,19 @@ private:
 
     SampleImporter importer_;
     juce::TimeSliceThread formatThread_{"AudioFormatThread"};
-    juce::WildcardFileFilter filter_{"*.wav;*.mp3;*.aif;*.aiff;*.ogg;*.flac;*.WAV;*.MP3;*.AIF;*.AIFF;*.OGG;*.FLAC", "*", "Audio Files"};
+
+    // Left pane: folder-only hierarchical tree (Sonic Foundry ACID style)
+    juce::WildcardFileFilter dirFilter_{"", "*", "Folders"};
     std::unique_ptr<juce::DirectoryContentsList> directoryList_;
-    std::unique_ptr<juce::FileTreeComponent> fileTree_;
+    std::unique_ptr<juce::FileTreeComponent> folderTree_;
+
+    // Resizable vertical divider between folder tree and multi-column file list
+    std::unique_ptr<FolderTreeSplitter> paneSplitter_;
+    int treeWidth_ = 230;
+
+    // Right pane: multi-column horizontal-scrolling audio file list
+    std::unique_ptr<AudioFileListView> fileListView_;
+    std::unique_ptr<juce::Viewport> fileListViewport_;
 
     juce::ComboBox driveSelector_;
     IconButton upFolderButton_{"Up", IconButton::Icon::Undo, ""};
@@ -64,26 +82,25 @@ private:
     std::vector<juce::File> driveList_;
 
     IconButton previewButton_{"Preview", IconButton::Icon::Play, "Preview"};
-    juce::ToggleButton autoPreviewToggle_{"Auto Preview"};
-    juce::ToggleButton syncPreviewToggle_{"Sync Tempo/Key"};
-    IconButton addLoopButton_{"AddLoop", IconButton::Icon::Duplicate, "Add as Loop"};
-    IconButton addOneShotButton_{"AddOneShot", IconButton::Icon::Duplicate, "Add as One-Shot"};
-    IconButton addDiskButton_{"AddDisk", IconButton::Icon::Duplicate, "Add as Disk"};
+    juce::ToggleButton autoPreviewToggle_{"Auto"};
+    juce::ToggleButton syncPreviewToggle_{"Sync"};
+    IconButton addLoopButton_{"AddLoop", IconButton::Icon::Duplicate, "+ Loop"};
+    IconButton addOneShotButton_{"AddOneShot", IconButton::Icon::Duplicate, "+ One-Shot"};
+    IconButton addDiskButton_{"AddDisk", IconButton::Icon::Duplicate, "+ Disk"};
 
-    juce::Label titleLabel_;
     juce::Label pathLabel_;
     juce::Label fileNameLabel_;
     juce::Label fileDetailsLabel_;
 
+    juce::File currentDirectory_;
+    juce::File selectedFile_;
     std::shared_ptr<const AudioData> selectedAudio_;
     std::optional<AcidMetadata> selectedAcidMeta_;
     std::string currentPreviewPath_;
     double previewDuration_ = 0.0;
     double previewProgress_ = 0.0;
     juce::Rectangle<int> waveformRect_;
-
-    void startSampleDrag(const juce::File& file);
-    void timerCallback() override;
+    juce::Rectangle<int> previewStripRect_;
 };
 
 } // namespace trami
