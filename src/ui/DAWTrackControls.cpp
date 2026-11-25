@@ -1,5 +1,7 @@
 #include "ui/DAWTrackControls.h"
 
+#include "ui/TramiLookAndFeel.h"
+
 #include <algorithm>
 
 namespace trami
@@ -252,10 +254,20 @@ namespace DAWInputSources
 {
 namespace
 {
-juce::String deviceName(const juce::StringArray& names, int ch)
+bool isRedundantChannelName(const juce::String& raw, int ch)
 {
-    if (ch >= 0 && ch < names.size() && names[ch].isNotEmpty())
-        return names[ch];
+    const auto s = raw.trim().toLowerCase();
+    if (s.isEmpty())
+        return true;
+    const auto num = juce::String(ch + 1);
+    return s == num || s == ("input " + num) || s == ("in " + num) ||
+           s == ("channel " + num) || s == ("ch " + num) || s == ("input" + num) || s == ("in" + num);
+}
+
+juce::String meaningfulChannelName(const juce::StringArray& names, int ch)
+{
+    if (ch >= 0 && ch < names.size() && !isRedundantChannelName(names[ch], ch))
+        return names[ch].trim();
     return {};
 }
 } // namespace
@@ -264,31 +276,51 @@ juce::String sourceLabel(int channel, bool stereo, const juce::StringArray& devi
 {
     if (!stereo)
     {
-        const auto n = deviceName(deviceNames, channel);
+        const auto n = meaningfulChannelName(deviceNames, channel);
         return "Input " + juce::String(channel + 1) + " (Mono)" + (n.isNotEmpty() ? ("  -  " + n) : juce::String());
     }
-    const auto n1 = deviceName(deviceNames, channel);
-    const auto n2 = deviceName(deviceNames, channel + 1);
+    const auto n1 = meaningfulChannelName(deviceNames, channel);
+    const auto n2 = meaningfulChannelName(deviceNames, channel + 1);
     return "Inputs " + juce::String(channel + 1) + "+" + juce::String(channel + 2) + " (Stereo)" +
            ((n1.isNotEmpty() && n2.isNotEmpty()) ? ("  -  " + n1 + " & " + n2) : juce::String());
 }
 
-int channelCount(const juce::StringArray& deviceNames, int currentChannel, bool currentStereo)
+int channelCount(const juce::StringArray& deviceNames)
 {
-    const int minNeeded = currentChannel + (currentStereo ? 2 : 1);
-    return std::max({2, deviceNames.size(), minNeeded});
+    return deviceNames.size();
 }
 
-void populateMenu(juce::PopupMenu& menu, const juce::StringArray& deviceNames, int currentChannel, bool currentStereo)
+void populateMenu(juce::PopupMenu& menu, const juce::StringArray& deviceNames, int currentChannel, bool currentStereo,
+                  const juce::String& deviceName, bool includeAudioSettings)
 {
-    const int n = channelCount(deviceNames, currentChannel, currentStereo);
-    for (int ch = 0; ch < n; ++ch)
-        menu.addItem(kMonoBase + ch, sourceLabel(ch, false, deviceNames), true,
-                     !currentStereo && currentChannel == ch);
-    menu.addSeparator();
-    for (int ch = 0; ch + 1 < n; ch += 2)
-        menu.addItem(kStereoBase + ch, sourceLabel(ch, true, deviceNames), true,
-                     currentStereo && currentChannel == ch);
+    menu.addSectionHeader(deviceName.isNotEmpty() ? ("Recording Source - " + deviceName) : "Recording Source");
+
+    const int n = channelCount(deviceNames);
+    if (n <= 0)
+    {
+        menu.addItem(-1, "No active input channels", false, false);
+    }
+    else
+    {
+        for (int ch = 0; ch < n; ++ch)
+        {
+            const bool isCurrent = (!currentStereo && currentChannel == ch) || (n == 1 && ch == 0);
+            menu.addItem(kMonoBase + ch, sourceLabel(ch, false, deviceNames), true, isCurrent);
+        }
+        if (n >= 2)
+        {
+            menu.addSeparator();
+            for (int ch = 0; ch + 1 < n; ch += 2)
+                menu.addItem(kStereoBase + ch, sourceLabel(ch, true, deviceNames), true,
+                             currentStereo && currentChannel == ch);
+        }
+    }
+
+    if (includeAudioSettings)
+    {
+        menu.addSeparator();
+        menu.addItem(kAudioSettingsId, "Audio Settings...");
+    }
 }
 
 bool decode(int id, int& channel, bool& stereo)

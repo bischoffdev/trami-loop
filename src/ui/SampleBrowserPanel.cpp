@@ -647,7 +647,7 @@ void SampleBrowserPanel::onAudioFileSelected(juce::File file)
         previewProgress_ = 0.0;
         pathLabel_.setText(file.getFullPathName(), juce::dontSendNotification);
         fileNameLabel_.setText(file.getFileName(), juce::dontSendNotification);
-        fileDetailsLabel_.setText("Folder — double-click or press Enter to open", juce::dontSendNotification);
+        fileDetailsLabel_.setText("Folder - double-click or press Enter to open", juce::dontSendNotification);
         repaint();
         return;
     }

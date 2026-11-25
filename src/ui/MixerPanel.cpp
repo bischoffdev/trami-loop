@@ -1,9 +1,11 @@
 #include "ui/MixerPanel.h"
 
+#include "ui/DAWTrackControls.h"
 #include "ui/TramiLookAndFeel.h"
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace trami
 {
@@ -329,11 +331,15 @@ public:
                 return;
             auto& trk = pat->tracks[static_cast<std::size_t>(trackIndex_)];
             const float vol = parseDbText(volLabel_.getText(), trk.mix.volume);
-            trk.mix.volume = vol;
+            for (int idx : owner_.targetTracksFor(trackIndex_))
+            {
+                pat->tracks[static_cast<std::size_t>(idx)].mix.volume = vol;
+                if (owner_.onTrackMixChanged)
+                    owner_.onTrackMixChanged(idx);
+            }
             fader_.setValue(vol, juce::dontSendNotification);
             volLabel_.setText(formatDb(vol), juce::dontSendNotification);
-            if (owner_.onTrackMixChanged)
-                owner_.onTrackMixChanged(trackIndex_);
+            owner_.refreshFromModel();
         };
         addAndMakeVisible(volLabel_);
 
@@ -394,14 +400,17 @@ public:
         soloButton_.setToggleState(trk.solo, juce::dontSendNotification);
         armButton_.setToggleState(trk.armed, juce::dontSendNotification);
         armed_ = trk.armed;
-        monoInput_ = !trk.inputStereo;
+        const int availCh = owner_.engine_.numInputChannels();
+        const bool effStereo = trk.inputStereo && (availCh != 1);
+        const int effCh = (availCh == 1) ? 0 : trk.inputChannel;
+        monoInput_ = !effStereo;
 
-        inputButton_.setInputState(trk.inputChannel, trk.inputStereo, trk.armed);
+        inputButton_.setInputState(effCh, effStereo, trk.armed);
         inputButton_.setTooltip(
             "Track " + juce::String(trackIndex_ + 1) + " Recording Source: " +
-            (trk.inputStereo
-                 ? ("Inputs " + juce::String(trk.inputChannel + 1) + "+" + juce::String(trk.inputChannel + 2) + " (Stereo)")
-                 : ("Input " + juce::String(trk.inputChannel + 1) + " (Mono)")) +
+            (effStereo
+                 ? ("Inputs " + juce::String(effCh + 1) + "+" + juce::String(effCh + 2) + " (Stereo)")
+                 : ("Input " + juce::String(effCh + 1) + " (Mono)")) +
             " - click to choose a different source (does not arm the track)");
 
         if (!panSlider_.isMouseButtonDown())
@@ -452,6 +461,8 @@ public:
         lastHandledMouseTime_ = e.eventTime;
 
         const bool isChildClick = (e.eventComponent != this);
+        if (isChildClick && e.mods.isPopupMenu())
+            return;
         const bool hasMod = e.mods.isCommandDown() || e.mods.isCtrlDown() || e.mods.isShiftDown();
         if (isChildClick && !hasMod && owner_.selectedTracks_.count(trackIndex_) > 0)
             return;
@@ -575,14 +586,21 @@ private:
 
         const auto& trk = pat->tracks[static_cast<std::size_t>(trackIndex_)];
         const juce::StringArray chNames = owner_.engine_.inputChannelNames();
+        const juce::String devName = owner_.engine_.inputDeviceName();
 
         juce::PopupMenu m;
-        m.addSectionHeader("Recording Source");
-        DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo);
+        DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo, devName,
+                                      static_cast<bool>(owner_.onOpenAudioSettings));
 
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&inputButton_),
                         [this](int res)
                         {
+                            if (res == DAWInputSources::kAudioSettingsId)
+                            {
+                                if (owner_.onOpenAudioSettings)
+                                    owner_.onOpenAudioSettings();
+                                return;
+                            }
                             int newCh = 0;
                             bool newStereo = true;
                             if (!DAWInputSources::decode(res, newCh, newStereo))
@@ -883,6 +901,9 @@ MixerPanel::~MixerPanel()
 void MixerPanel::setPattern(PatternId patternId)
 {
     patternId_ = patternId;
+    selectedTracks_.clear();
+    selectedTrack_ = -1;
+    lastClickedTrack_ = -1;
     rebuildStrips();
 }
 
@@ -935,16 +956,19 @@ void MixerPanel::setSelectedTrack(int trackIndex)
 
 void MixerPanel::setSelectedTracks(const std::unordered_set<int>& tracks, int primaryTrack)
 {
+    const bool selectionChanged = (selectedTracks_ != tracks);
     selectedTracks_ = tracks;
     if (primaryTrack >= 0)
     {
         selectedTrack_ = primaryTrack;
-        lastClickedTrack_ = primaryTrack;
+        if (selectionChanged || lastClickedTrack_ < 0 || selectedTracks_.count(lastClickedTrack_) == 0)
+            lastClickedTrack_ = primaryTrack;
     }
     else if (!selectedTracks_.empty())
     {
         selectedTrack_ = *selectedTracks_.begin();
-        lastClickedTrack_ = selectedTrack_;
+        if (selectionChanged || lastClickedTrack_ < 0 || selectedTracks_.count(lastClickedTrack_) == 0)
+            lastClickedTrack_ = selectedTrack_;
     }
     else
     {

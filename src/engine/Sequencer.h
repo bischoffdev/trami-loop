@@ -64,6 +64,8 @@ public:
     }
     void setMetronomeEnabled(bool enabled) noexcept { metronomeEnabled_.store(enabled); }
     void setLoopingEnabled(bool enabled) noexcept { loopingEnabled_.store(enabled); }
+    /// Triggers a single pre-count click on the dedicated metronome voice pool (independent of metronome toggle and playback state).
+    void triggerCountInClick(bool accent, int delay = 0) noexcept;
 
     bool isPlaying() const noexcept { return playing_.load(); }
     bool isMetronomeEnabled() const noexcept { return metronomeEnabled_.load(); }

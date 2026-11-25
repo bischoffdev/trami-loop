@@ -497,16 +497,23 @@ void TrackHeaderList::showInputMenuForTrack(int track, juce::Component* anchorCo
 
     const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
     const juce::StringArray chNames = inputChannelNamesProvider_ ? inputChannelNamesProvider_() : juce::StringArray{};
+    const juce::String devName = inputDeviceNameProvider_ ? inputDeviceNameProvider_() : juce::String{};
 
     juce::PopupMenu m;
-    m.addSectionHeader("Recording Source");
-    DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo);
+    DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo, devName,
+                                  static_cast<bool>(onOpenAudioSettings_));
 
     auto opts = juce::PopupMenu::Options();
     opts = opts.withTargetComponent(anchorComp != nullptr ? anchorComp : static_cast<juce::Component*>(this));
 
     m.showMenuAsync(opts, [this, track](int res)
     {
+        if (res == DAWInputSources::kAudioSettingsId)
+        {
+            if (onOpenAudioSettings_)
+                onOpenAudioSettings_();
+            return;
+        }
         int newCh = 0;
         bool newStereo = true;
         if (!DAWInputSources::decode(res, newCh, newStereo))
@@ -912,12 +919,15 @@ void TrackHeaderList::updateFromModel()
 
             if (c.inputButton != nullptr)
             {
-                c.inputButton->setInputState(track.inputChannel, track.inputStereo, track.armed);
+                const int availCh = inputChannelNamesProvider_ ? inputChannelNamesProvider_().size() : 2;
+                const bool effStereo = track.inputStereo && (availCh != 1);
+                const int effCh = (availCh == 1) ? 0 : track.inputChannel;
+                c.inputButton->setInputState(effCh, effStereo, track.armed);
                 c.inputButton->setTooltip(
                     "Track " + juce::String(t + 1) + " Recording Source: " +
-                    (track.inputStereo
-                         ? ("Inputs " + juce::String(track.inputChannel + 1) + "+" + juce::String(track.inputChannel + 2) + " (Stereo)")
-                         : ("Input " + juce::String(track.inputChannel + 1) + " (Mono)")) +
+                    (effStereo
+                         ? ("Inputs " + juce::String(effCh + 1) + "+" + juce::String(effCh + 2) + " (Stereo)")
+                         : ("Input " + juce::String(effCh + 1) + " (Mono)")) +
                     " - click to choose a different source (does not arm the track)");
             }
 

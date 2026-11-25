@@ -3,13 +3,11 @@
 #include "engine/AudioEngine.h"
 #include "model/Ids.h"
 #include "model/Song.h"
-#include "ui/DAWTrackControls.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
 #include <memory>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -42,6 +40,7 @@ public:
     std::function<void()> onMasterMixChanged;
     std::function<void(bool muted)> onMuteAll;
     std::function<void(bool soloed)> onSoloAll;
+    std::function<void()> onOpenAudioSettings;
 
     void paint(juce::Graphics& g) override;
     void resized() override;

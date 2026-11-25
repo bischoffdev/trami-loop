@@ -850,15 +850,29 @@ void Sequencer::startMetronomeVoice(const AudioData* audio, int delay, float gai
     *target = Voice{audio, nullptr, 0, 0, audio->numFrames(), delay, gainL, gainR, gainL, gainR, true, -1, 0, 0, 0, false};
 }
 
-void Sequencer::renderMetronome(float* left, float* right, int numSamples) noexcept
+void Sequencer::triggerCountInClick(bool accent, int delay) noexcept
 {
-    if (!playing_.load(std::memory_order_relaxed) && !metronomeEnabled_.load(std::memory_order_relaxed))
-    {
-        for (auto& voice : metronomeVoices_)
-            voice.active = false;
+    const AudioData* sound = accent ? &accentClick_ : &click_;
+    if (sound == nullptr || sound->numFrames() == 0)
         return;
+
+    Voice* target = &metronomeVoices_.front();
+    for (auto& voice : metronomeVoices_)
+    {
+        if (!voice.active)
+        {
+            target = &voice;
+            break;
+        }
+        if (voice.readPosition > target->readPosition)
+            target = &voice;
     }
 
+    *target = Voice{sound, nullptr, 0, 0, sound->numFrames(), std::max(0, delay), 0.55f, 0.55f, 0.55f, 0.55f, true, -2, 0, 0, 0, false};
+}
+
+void Sequencer::renderMetronome(float* left, float* right, int numSamples) noexcept
+{
     for (auto& voice : metronomeVoices_)
     {
         if (!voice.active || voice.audio == nullptr)
@@ -1213,6 +1227,8 @@ void Sequencer::stopAllVoices() noexcept
     }
     for (auto& voice : metronomeVoices_)
     {
+        if (voice.track == -2)
+            continue; // Preserve active pre-count clicks while playhead is parked
         voice.active = false;
         voice.owner = nullptr;
     }

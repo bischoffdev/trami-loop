@@ -12,27 +12,63 @@ AudioRecorder::AudioRecorder()
 }
 
 void AudioRecorder::start(int countInSamples, int latencySamples, RecordFinishedCallback onFinished,
-                          int inputChannel, bool stereo)
+                          int inputChannel, bool stereo, int countInBeatSamples)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         recordedChannels_.clear();
+        liveWaveformPeaks_.clear();
+        currentBucketPeak_ = 0.0f;
+        currentBucketCount_ = 0;
         onFinished_ = std::move(onFinished);
     }
 
+    recordedFrames_.store(0, std::memory_order_relaxed);
     inputChannel_.store(std::max(0, inputChannel), std::memory_order_relaxed);
     inputStereo_.store(stereo, std::memory_order_relaxed);
     latencySamples_.store(std::max(0, latencySamples));
+
     if (countInSamples > 0)
     {
-        countInRemaining_.store(countInSamples);
+        const int beatSamples = std::max(0, countInBeatSamples);
+        const int totalBeats = (beatSamples > 0)
+            ? std::max(1, static_cast<int>(std::llround(static_cast<double>(countInSamples) / static_cast<double>(beatSamples))))
+            : 0;
+        countInTotalSamples_.store(countInSamples, std::memory_order_relaxed);
+        countInElapsed_.store(0, std::memory_order_relaxed);
+        countInBeatSamples_.store(beatSamples, std::memory_order_relaxed);
+        countInTotalBeats_.store(totalBeats, std::memory_order_relaxed);
         state_.store(RecordState::CountingIn);
     }
     else
     {
-        countInRemaining_.store(0);
+        countInTotalSamples_.store(0, std::memory_order_relaxed);
+        countInElapsed_.store(0, std::memory_order_relaxed);
+        countInBeatSamples_.store(0, std::memory_order_relaxed);
+        countInTotalBeats_.store(0, std::memory_order_relaxed);
         state_.store(RecordState::Recording);
     }
+}
+
+int AudioRecorder::currentCountInBeat() const noexcept
+{
+    if (state_.load() != RecordState::CountingIn)
+        return 0;
+    const int beatSamples = countInBeatSamples_.load(std::memory_order_relaxed);
+    const int totalBeats = countInTotalBeats_.load(std::memory_order_relaxed);
+    if (beatSamples <= 0 || totalBeats <= 0)
+        return 1;
+    const int elapsed = countInElapsed_.load(std::memory_order_relaxed);
+    return std::clamp((elapsed / beatSamples) + 1, 1, totalBeats);
+}
+
+std::vector<float> AudioRecorder::copyLiveWaveformPeaks() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<float> out = liveWaveformPeaks_;
+    if (currentBucketCount_ > 0)
+        out.push_back(currentBucketPeak_);
+    return out;
 }
 
 void AudioRecorder::stop()
@@ -43,6 +79,11 @@ void AudioRecorder::stop()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.store(RecordState::Idle);
+        countInTotalSamples_.store(0, std::memory_order_relaxed);
+        countInElapsed_.store(0, std::memory_order_relaxed);
+        countInBeatSamples_.store(0, std::memory_order_relaxed);
+        countInTotalBeats_.store(0, std::memory_order_relaxed);
+        recordedFrames_.store(0, std::memory_order_relaxed);
 
         if (!recordedChannels_.empty())
         {
@@ -60,6 +101,9 @@ void AudioRecorder::stop()
         }
 
         recordedChannels_.clear();
+        liveWaveformPeaks_.clear();
+        currentBucketPeak_ = 0.0f;
+        currentBucketCount_ = 0;
         callback = std::move(onFinished_);
     }
 
@@ -67,14 +111,41 @@ void AudioRecorder::stop()
         callback(std::move(result));
 }
 
-void AudioRecorder::advanceSamples(int numSamples) noexcept
+AudioRecorder::AdvanceResult AudioRecorder::advanceSamples(int numSamples) noexcept
 {
-    if (state_.load() == RecordState::CountingIn)
+    AdvanceResult res;
+    if (numSamples <= 0 || state_.load() != RecordState::CountingIn)
+        return res;
+
+    const int total = countInTotalSamples_.load(std::memory_order_relaxed);
+    const int beatLen = countInBeatSamples_.load(std::memory_order_relaxed);
+    const int totalBeats = countInTotalBeats_.load(std::memory_order_relaxed);
+    const int prevElapsed = countInElapsed_.load(std::memory_order_relaxed);
+    const int nextElapsed = prevElapsed + numSamples;
+
+    if (beatLen > 0 && totalBeats > 0)
     {
-        const int remaining = countInRemaining_.fetch_sub(numSamples) - numSamples;
-        if (remaining <= 0)
-            state_.store(RecordState::Recording);
+        const int firstBeat = (prevElapsed == 0) ? 0 : ((prevElapsed + beatLen - 1) / beatLen);
+        if (firstBeat < totalBeats)
+        {
+            const int beatPos = firstBeat * beatLen;
+            if (beatPos >= prevElapsed && beatPos < nextElapsed && beatPos < total)
+            {
+                res.triggerClick = true;
+                res.clickAccent = (firstBeat == 0);
+                res.clickOffset = beatPos - prevElapsed;
+            }
+        }
     }
+
+    countInElapsed_.store(nextElapsed, std::memory_order_relaxed);
+    if (nextElapsed >= total)
+    {
+        state_.store(RecordState::Recording);
+        res.countInFinished = true;
+        res.finishedOffset = std::clamp(total - prevElapsed, 0, numSamples);
+    }
+    return res;
 }
 
 void AudioRecorder::processInput(const float* const* inputs, int numChannels, int numSamples) noexcept
@@ -128,10 +199,35 @@ void AudioRecorder::processInput(const float* const* inputs, int numChannels, in
     if (!stereo)
     {
         auto& chData = recordedChannels_[0];
-        if (inputs[baseCh] != nullptr)
-            chData.insert(chData.end(), inputs[baseCh], inputs[baseCh] + numSamples);
+        const float* src = inputs[baseCh];
+        if (src != nullptr)
+        {
+            chData.insert(chData.end(), src, src + numSamples);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float a = std::abs(src[i]);
+                if (a > currentBucketPeak_)
+                    currentBucketPeak_ = a;
+                if (++currentBucketCount_ >= kLivePeakBucketSamples)
+                {
+                    liveWaveformPeaks_.push_back(currentBucketPeak_);
+                    currentBucketPeak_ = 0.0f;
+                    currentBucketCount_ = 0;
+                }
+            }
+        }
         else
+        {
             chData.insert(chData.end(), static_cast<std::size_t>(numSamples), 0.0f);
+            currentBucketCount_ += numSamples;
+            while (currentBucketCount_ >= kLivePeakBucketSamples)
+            {
+                liveWaveformPeaks_.push_back(currentBucketPeak_);
+                currentBucketPeak_ = 0.0f;
+                currentBucketCount_ -= kLivePeakBucketSamples;
+            }
+        }
+        recordedFrames_.store(static_cast<std::int64_t>(chData.size()), std::memory_order_relaxed);
     }
     else
     {
@@ -146,6 +242,23 @@ void AudioRecorder::processInput(const float* const* inputs, int numChannels, in
             else
                 chData.insert(chData.end(), static_cast<std::size_t>(numSamples), 0.0f);
         }
+        const float* srcL = inputs[baseCh];
+        const float* srcR = inputs[rightCh];
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float aL = srcL != nullptr ? std::abs(srcL[i]) : 0.0f;
+            const float aR = srcR != nullptr ? std::abs(srcR[i]) : 0.0f;
+            const float a = std::max(aL, aR);
+            if (a > currentBucketPeak_)
+                currentBucketPeak_ = a;
+            if (++currentBucketCount_ >= kLivePeakBucketSamples)
+            {
+                liveWaveformPeaks_.push_back(currentBucketPeak_);
+                currentBucketPeak_ = 0.0f;
+                currentBucketCount_ = 0;
+            }
+        }
+        recordedFrames_.store(static_cast<std::int64_t>(recordedChannels_[0].size()), std::memory_order_relaxed);
     }
 }
 

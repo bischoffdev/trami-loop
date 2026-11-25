@@ -121,6 +121,17 @@ class PatternGrid : public juce::Component,
     double lastClickedStepOnClip() const noexcept { return lastClickedStepOnClip_; }
     void setPlayheadStep(double step);
     double playheadStep() const noexcept { return playheadStep_; }
+
+    struct LiveRecordingPreview
+    {
+        bool active = false;
+        int trackIndex = -1;
+        double startStep = 0.0;
+        double lengthSteps = 0.0;
+        std::vector<float> peaks;
+    };
+    void setLiveRecordingPreview(LiveRecordingPreview preview);
+    void clearLiveRecordingPreview();
     double clipSpan(const Clip& clip, int trackIndex = -1) const;
     int loopStartStep() const noexcept { return loopStartStep_; }
     int loopEndStep() const noexcept { return loopEndStep_; }
@@ -314,6 +325,7 @@ class PatternGrid : public juce::Component,
     int rulerDragOriginalStart_ = 0;
     int rulerDragOriginalEnd_ = 16;
     juce::String currentTooltip_;
+    LiveRecordingPreview liveRecording_;
 };
 
 } // namespace trami

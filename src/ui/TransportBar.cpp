@@ -523,7 +523,7 @@ class TransportBar::PerformanceIndicator final : public juce::Component, public 
 public:
     PerformanceIndicator()
     {
-        setTooltip("System Performance — Audio DSP Load: 0.0% | Active Voices: 0");
+        setTooltip("System Performance - Audio DSP Load: 0.0% | Active Voices: 0");
     }
 
     void setMetrics(const AudioEngine::PerformanceMetrics& m)
@@ -541,7 +541,7 @@ public:
             pdcLatencySamples_ = m.pdcLatencySamples;
 
             juce::String tip = juce::String::formatted(
-                "System Performance — Audio CPU: %.1f%% | Voice/Peak Load: %.1f%% | Active Voices: %d",
+                "System Performance - Audio CPU: %.1f%% | Voice/Peak Load: %.1f%% | Active Voices: %d",
                 cpuLoad_ * 100.0f, secondaryLoad_ * 100.0f, activeVoices_);
             if (pdcLatencySamples_ > 0)
                 tip += " | PDC Latency: " + juce::String(pdcLatencySamples_) + " smp";
@@ -658,11 +658,13 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
     };
     addAndMakeVisible(loopButton_);
 
-    // Count-in
+    // Count-in (Pre-count, independent of Metronome)
     countInButton_.setClickingTogglesState(true);
+    isCountIn_ = engine_.recorder().isPreCountEnabled();
     countInButton_.setToggleState(isCountIn_, juce::dontSendNotification);
     countInButton_.onClick = [this]() {
         isCountIn_ = countInButton_.getToggleState();
+        engine_.recorder().setPreCountEnabled(isCountIn_);
     };
     addAndMakeVisible(countInButton_);
 
@@ -971,6 +973,9 @@ void TransportBar::updateDisplay()
         swingSlider_->setTooltip("Swing Groove: " + pctStr + " (Double-click: 0%, Right-click: Presets)");
     }
     metroButton_.setToggleState(engine_.sequencer().isMetronomeEnabled(), juce::dontSendNotification);
+    isCountIn_ = engine_.recorder().isPreCountEnabled();
+    countInButton_.setToggleState(isCountIn_, juce::dontSendNotification);
+    countInButton_.setTooltip("Toggle Pre-count (" + juce::String(song_.timeSigNumerator()) + " beats, independent of Metronome)");
     timeSigButton_.setTimeSignature(song_.timeSigNumerator(), song_.timeSigDenominator());
     const int rn = song_.projectRootNote();
     keyCombo_.setSelectedId(rn >= 0 ? ((rn % 12) + 1) : 100, juce::dontSendNotification);
@@ -1190,6 +1195,17 @@ void TransportBar::timerCallback()
 
     if (performanceIndicator_ != nullptr)
         performanceIndicator_->setMetrics(engine_.performanceMetrics());
+
+    if (recState == RecordState::CountingIn)
+    {
+        const int beat = engine_.recorder().currentCountInBeat();
+        const int totalBeats = std::max(1, engine_.recorder().countInTotalBeats());
+        positionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff59e0b));
+        positionLabel_.setText("PRE  " + juce::String(beat) + " / " + juce::String(totalBeats),
+                               juce::dontSendNotification);
+        return;
+    }
+    positionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffedf2f7));
 
     const std::int64_t pos = engine_.sequencer().position();
 

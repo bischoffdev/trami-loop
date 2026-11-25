@@ -39,6 +39,21 @@ void PatternGrid::setLoopRegion(int startStep, int endStep)
     repaint();
 }
 
+void PatternGrid::setLiveRecordingPreview(LiveRecordingPreview preview)
+{
+    liveRecording_ = std::move(preview);
+    repaint();
+}
+
+void PatternGrid::clearLiveRecordingPreview()
+{
+    if (liveRecording_.active)
+    {
+        liveRecording_ = {};
+        repaint();
+    }
+}
+
 void PatternGrid::setSelectedClip(ClipId clipId)
 {
     selectedClips_.clear();
@@ -1773,6 +1788,57 @@ void PatternGrid::paint(juce::Graphics& g)
         }
     }
 
+    // Live growing recording clip + waveform preview
+    if (liveRecording_.active && liveRecording_.trackIndex >= 0 && liveRecording_.lengthSteps > 0.0)
+    {
+        const auto rBounds = clipBounds(liveRecording_.trackIndex, liveRecording_.startStep, liveRecording_.lengthSteps)
+                                 .reduced(1, 2);
+        if (rBounds.getWidth() >= 2 && rBounds.getHeight() >= 4)
+        {
+            const auto rf = rBounds.toFloat();
+            g.setColour(juce::Colour(0xff7f1d1d).withAlpha(0.78f));
+            g.fillRoundedRectangle(rf, 6.0f);
+
+            // Live waveform drawn from captured peak buckets
+            const auto& peaks = liveRecording_.peaks;
+            if (!peaks.empty())
+            {
+                const auto waveBounds = rBounds.reduced(2, 5);
+                const float midY = static_cast<float>(waveBounds.getCentreY());
+                const float maxAmp = std::max(2.0f, static_cast<float>(waveBounds.getHeight()) * 0.46f);
+                const int w = std::max(1, waveBounds.getWidth());
+                const std::size_t numPeaks = peaks.size();
+
+                g.setColour(juce::Colour(0xfffca5a5).withAlpha(0.92f));
+                for (int px = 0; px < w; ++px)
+                {
+                    const std::size_t idx0 = (static_cast<std::size_t>(px) * numPeaks) / static_cast<std::size_t>(w);
+                    const std::size_t idx1 = std::max(
+                        idx0 + 1,
+                        ((static_cast<std::size_t>(px) + 1) * numPeaks) / static_cast<std::size_t>(w));
+                    float pk = 0.0f;
+                    for (std::size_t k = idx0; k < std::min(idx1, numPeaks); ++k)
+                        pk = std::max(pk, peaks[k]);
+                    const float h = std::max(1.0f, std::min(1.0f, pk) * maxAmp);
+                    g.drawVerticalLine(waveBounds.getX() + px, midY - h, midY + h);
+                }
+            }
+
+            g.setColour(juce::Colour(0xffef4444));
+            g.drawRoundedRectangle(rf, 6.0f, 1.5f);
+
+            if (rBounds.getWidth() >= 34)
+            {
+                const auto badge = juce::Rectangle<float>(rf.getX() + 4.0f, rf.getY() + 3.0f, 28.0f, 13.0f);
+                g.setColour(juce::Colour(0xffdc2626));
+                g.fillRoundedRectangle(badge, 3.0f);
+                g.setColour(juce::Colours::white);
+                g.setFont(Typography::bold(8.5f));
+                g.drawText("REC", badge, juce::Justification::centred, false);
+            }
+        }
+    }
+
     // Paint tool live clip preview
     if (drag_.active && drag_.mode == DragMode::PaintClip && paintTrack_ >= 0 && paintCurrentLen_ > 0.0)
     {
@@ -3161,30 +3227,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Move %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), clampedDelta)
-                        : juce::String::formatted("Move %d clips -> Step %g", static_cast<int>(drag_.items.size()),
-                                                  (primaryItem != nullptr ? primaryItem->currentStartStep + 1.0 : 1.0));
-            }
-            else if (!drag_.items.empty())
-            {
-                const double stepDisplay = drag_.items[0].currentStartStep + 1.0;
-                if (e.mods.isAltDown())
-                {
-                    dragTooltipText_ = disableSnap
-                                           ? juce::String::formatted("Duplicate -> Step %.2f (Free)", stepDisplay)
-                                           : juce::String::formatted("Duplicate -> Step %g", stepDisplay);
-                }
-                else
-                {
-                    dragTooltipText_ = disableSnap ? juce::String::formatted("Step %.2f (Free / No Snap)", stepDisplay)
-                                                   : juce::String::formatted("Step %g", stepDisplay);
-                }
-            }
+            dragTooltipText_.clear();
             repaint();
         }
 
@@ -3246,22 +3289,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Resize %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), deltaStepsRaw)
-                        : juce::String::formatted("Resize %d clips (%+d st)", static_cast<int>(drag_.items.size()),
-                                                  juce::roundToInt(deltaStepsRaw / raster) * effectiveRasterSteps);
-            }
-            else if (!drag_.items.empty())
-            {
-                dragTooltipText_ = disableSnap
-                                       ? juce::String::formatted("Length: %.2f steps (Free / No Snap)",
-                                                                 drag_.items[0].currentLengthSteps)
-                                       : juce::String::formatted("Length: %g steps", drag_.items[0].currentLengthSteps);
-            }
+            dragTooltipText_.clear();
             repaint();
         }
     }
@@ -3312,22 +3340,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Resize %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), -deltaStepsRaw)
-                        : juce::String::formatted("Resize %d clips (%+d st)", static_cast<int>(drag_.items.size()),
-                                                  -juce::roundToInt(deltaStepsRaw / raster) * effectiveRasterSteps);
-            }
-            else if (!drag_.items.empty())
-            {
-                dragTooltipText_ =
-                    disableSnap ? juce::String::formatted("Start: %.2f steps (Free / No Snap)",
-                                                          drag_.items[0].currentStartStep + 1.0)
-                                : juce::String::formatted("Start: %g steps", drag_.items[0].currentStartStep + 1.0);
-            }
+            dragTooltipText_.clear();
             repaint();
         }
     }

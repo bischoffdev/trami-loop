@@ -27,7 +27,7 @@ public:
     PatternView(Song& song, AudioEngine& engine, StretchCache& stretchCache);
     ~PatternView() override;
 
-    void setPattern(PatternId patternId);
+    void setPattern(PatternId patternId, bool forceReload = false);
     void paint(juce::Graphics& g) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -96,6 +96,7 @@ public:
     void setOnPushUndo(PushUndoCallback cb) { onPushUndo_ = std::move(cb); }
     void setOnShowToast(std::function<void(const juce::String&)> cb) { onShowToast_ = std::move(cb); }
     void setOnSongRenamed(std::function<void(const juce::String&)> cb) { onSongRenamed_ = std::move(cb); }
+    void setOnOpenAudioSettings(std::function<void()> cb) { onOpenAudioSettings_ = std::move(cb); }
 
     void updateSampleSelector();
     void autoAdjustPatternLength();
@@ -232,6 +233,7 @@ private:
     IconButton rippleEditToggle_{"Ripple", IconButton::Icon::RippleEdit, "Ripple"};
 
     double recordStartStep_ = 0.0;
+    int recordTargetTrack_ = -1;
     void setActiveTool(PatternGrid::EditTool tool);
 
     bool followPlayhead_ = true;
@@ -243,6 +245,7 @@ private:
     bool isUpdatingZoom_ = false;
     std::function<void(const juce::String&)> onShowToast_;
     std::function<void(const juce::String&)> onSongRenamed_;
+    std::function<void()> onOpenAudioSettings_;
     std::unique_ptr<BottomDockPanel> dockPanel_;
     std::unique_ptr<ResizeSplitter> headerSplitter_;
     std::unique_ptr<ResizeSplitter> browserSplitter_;

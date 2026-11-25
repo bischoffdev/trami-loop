@@ -49,6 +49,7 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
         currentProjectName_ = newName;
         updateWindowTitle();
     });
+    patternView_->setOnOpenAudioSettings([this]() { showSettingsDialog(); });
     addAndMakeVisible(patternView_.get());
 
     // Bottom Transport Bar
@@ -254,8 +255,7 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
 
     ProjectSerializer::saveProject(song_, stretchCache_, dir);
 
-    patternView_->resetPlayhead();
-    patternView_->setPattern(songPattern);
+    patternView_->setPattern(songPattern, true);
     updateAllViews();
     updateWindowTitle();
     patternView_->fitZoomToProject(8, 32);
@@ -395,14 +395,11 @@ void MainContainer::openProjectDialog()
                         currentProjectName_ = juce::String::fromUTF8(chosen.stem().string().c_str());
                         currentProjectIsAcidImport_ = true;
                         history_.clear();
+                        engine_.pluginHost().clearAllChains();
                         engine_.sequencer().resetTrackMix();
                         engine_.sequencer().setMasterVolume(song_.masterVolume());
-                        if (patternView_ != nullptr)
-                        {
-                            patternView_->resetPlayhead();
-                            if (!song_.patterns().empty())
-                                patternView_->setPattern(song_.patterns().front().id);
-                        }
+                        if (patternView_ != nullptr && !song_.patterns().empty())
+                            patternView_->setPattern(song_.patterns().front().id, true);
                         updateAllViews();
                         updateWindowTitle();
                         if (patternView_ != nullptr)
@@ -463,14 +460,11 @@ void MainContainer::openProjectDialog()
                     currentProjectName_ = juce::String::fromUTF8(projStem.c_str());
                     currentProjectIsAcidImport_ = false;
                     history_.clear();
+                    engine_.pluginHost().clearAllChains();
                     engine_.sequencer().resetTrackMix();
                     engine_.sequencer().setMasterVolume(song_.masterVolume());
-                    if (patternView_ != nullptr)
-                    {
-                        patternView_->resetPlayhead();
-                        if (!song_.patterns().empty())
-                            patternView_->setPattern(song_.patterns().front().id);
-                    }
+                    if (patternView_ != nullptr && !song_.patterns().empty())
+                        patternView_->setPattern(song_.patterns().front().id, true);
                     updateAllViews();
                     updateWindowTitle();
                     if (patternView_ != nullptr)
@@ -667,17 +661,7 @@ void MainContainer::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xfff0f0f6));
     g.drawText("TramiLoop", 43, 0, 90, kTopBarHeight, juce::Justification::centredLeft);
 
-    // Subtle version badge on the right of the top bar, plus active project name in the top bar
-    const juce::String projName = activeProjectDisplayName();
-    const int projX = 635;
-    const int projW = std::max(0, mainW - projX - 104);
-    if (projW >= 80)
-    {
-        g.setColour(Palette::text.withAlpha(0.88f));
-        g.setFont(Typography::bold(12.5f));
-        g.drawText(projName, projX, 0, projW, kTopBarHeight, juce::Justification::centredRight, true);
-    }
-
+    // Subtle version badge on the right of the top bar
     g.setColour(Palette::textDim.withAlpha(0.75f));
     g.setFont(Typography::regular(11.5f));
     g.drawText("v" + juce::String(JUCE_APPLICATION_VERSION_STRING),

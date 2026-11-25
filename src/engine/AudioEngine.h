@@ -26,8 +26,10 @@ public:
     int outputLatencySamples() const noexcept;
     int recordingLatencySamples() const noexcept;
 
-    /// Returns names of available hardware input channels (always at least "Input 1", "Input 2").
+    /// Returns names of active hardware input channels on the current audio input device (empty if none).
     juce::StringArray inputChannelNames() const;
+    /// Returns the name of the currently active audio input device (empty if none).
+    juce::String inputDeviceName() const;
     int numInputChannels() const noexcept;
 
     /// Returns live (L, R) input peak levels for the specified 0-based `inputChannel` and `stereo` mode.
@@ -68,9 +70,9 @@ private:
     juce::AudioDeviceManager deviceManager_;
     SnapshotExchange exchange_;
     PluginHost pluginHost_;
+    double sampleRate_ = 0.0;
     std::unique_ptr<Sequencer> sequencer_;
     AudioRecorder recorder_;
-    double sampleRate_ = 0.0;
     std::atomic<float> dspLoad_{0.0f};
     std::atomic<float> peakDspLoad_{0.0f};
 

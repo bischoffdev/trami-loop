@@ -747,3 +747,24 @@ TEST_CASE("SongHistory undoes and redoes multi-point automation curves point by 
     REQUIRE(history.redo(song));
     REQUIRE(song.findPattern(patId)->masterVolumeAutomation.size() == 4);
 }
+
+TEST_CASE("Changing track recording source does not arm the track")
+{
+    Song song;
+    const auto patId = song.addPattern("Rec", 2);
+    song.addTrackToPattern(patId);
+
+    const auto* pat = song.findPattern(patId);
+    REQUIRE(pat != nullptr);
+    REQUIRE(pat->tracks[0].armed == false);
+
+    REQUIRE(song.setPatternTrackInput(patId, 0, 2, false));
+    REQUIRE(song.patternTrackInputChannel(patId, 0) == 2);
+    REQUIRE(song.patternTrackInputStereo(patId, 0) == false);
+    REQUIRE(song.findPattern(patId)->tracks[0].armed == false);
+
+    REQUIRE(song.setPatternTrackInput(patId, 0, 0, true));
+    REQUIRE(song.patternTrackInputChannel(patId, 0) == 0);
+    REQUIRE(song.patternTrackInputStereo(patId, 0) == true);
+    REQUIRE(song.findPattern(patId)->tracks[0].armed == false);
+}

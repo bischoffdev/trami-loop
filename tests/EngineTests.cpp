@@ -1312,3 +1312,68 @@ TEST_CASE("AudioRecorder measures per-channel input peak levels and records sele
     REQUIRE(recordedStereo.left()[0] == Catch::Approx(0.75f).margin(1e-5f));
     REQUIRE(recordedStereo.right()[0] == Catch::Approx(0.90f).margin(1e-5f));
 }
+
+TEST_CASE("AudioRecorder pre-count fires exact time-signature beats independently of metronome and tracks live waveform peaks")
+{
+    AudioRecorder rec;
+    REQUIRE(rec.isPreCountEnabled() == false);
+    rec.setPreCountEnabled(true);
+    REQUIRE(rec.isPreCountEnabled() == true);
+
+    // 3/4 time signature: 3 beats of 1000 samples each = 3000 samples total pre-count
+    constexpr int kBeatSamples = 1000;
+    constexpr int kTotalCountIn = kBeatSamples * 3;
+    rec.start(kTotalCountIn, 0, nullptr, 0, false, kBeatSamples);
+    REQUIRE(rec.isCountingIn());
+    REQUIRE(rec.countInTotalBeats() == 3);
+    REQUIRE(rec.currentCountInBeat() == 1);
+
+    int clicksTriggered = 0;
+    int accentsTriggered = 0;
+    bool finished = false;
+
+    for (int pos = 0; pos < kTotalCountIn; pos += 250)
+    {
+        const auto adv = rec.advanceSamples(250);
+        if (adv.triggerClick)
+        {
+            ++clicksTriggered;
+            if (adv.clickAccent)
+                ++accentsTriggered;
+        }
+        if (adv.countInFinished)
+            finished = true;
+    }
+
+    REQUIRE(clicksTriggered == 3);
+    REQUIRE(accentsTriggered == 1);
+    REQUIRE(finished == true);
+    REQUIRE(rec.isRecording());
+
+    // Live waveform peaks grow as audio is captured
+    std::vector<float> buf(512, 0.6f);
+    const float* inPtrs[1] = {buf.data()};
+    rec.processInput(inPtrs, 1, 512);
+    REQUIRE(rec.recordedFrames() == 512);
+    const auto peaks = rec.copyLiveWaveformPeaks();
+    REQUIRE(peaks.size() == 2); // 512 / 256
+    REQUIRE(peaks[0] == Catch::Approx(0.6f).margin(1e-4f));
+
+    // Sequencer::triggerCountInClick renders audible click even when stopped & metronome is OFF
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, 44100.0);
+    seq.setMetronomeEnabled(false);
+    REQUIRE(!seq.isPlaying());
+    REQUIRE(!seq.isMetronomeEnabled());
+    seq.triggerCountInClick(true, 0);
+    std::vector<float> outL(256, 0.0f), outR(256, 0.0f);
+    seq.process(outL.data(), outR.data(), 256);
+    float maxOut = 0.0f;
+    for (float v : outL)
+        maxOut = std::max(maxOut, std::abs(v));
+    REQUIRE(maxOut > 0.05f);
+
+    rec.stop();
+    REQUIRE(rec.recordedFrames() == 0);
+    REQUIRE(rec.copyLiveWaveformPeaks().empty());
+}

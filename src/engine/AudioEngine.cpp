@@ -76,9 +76,22 @@ int AudioEngine::numInputChannels() const noexcept
         const int totalNames = device->getInputChannelNames().size();
         if (totalNames > 0)
             return std::min(totalNames, AudioRecorder::kMaxInputChannels);
+        return 0;
     }
-    const int recActive = recorder_.activeInputChannels();
-    return std::max(2, recActive);
+    return recorder_.activeInputChannels();
+}
+
+juce::String AudioEngine::inputDeviceName() const
+{
+    const auto setup = deviceManager_.getAudioDeviceSetup();
+    if (setup.inputDeviceName.isNotEmpty())
+        return setup.inputDeviceName;
+    if (auto* device = deviceManager_.getCurrentAudioDevice())
+    {
+        if (device->getActiveInputChannels().countNumberOfSetBits() > 0 || !device->getInputChannelNames().isEmpty())
+            return device->getName();
+    }
+    return {};
 }
 
 juce::StringArray AudioEngine::inputChannelNames() const
@@ -101,11 +114,6 @@ juce::StringArray AudioEngine::inputChannelNames() const
             for (int i = 0; i < allNames.size() && names.size() < AudioRecorder::kMaxInputChannels; ++i)
                 names.add(allNames[i].isNotEmpty() ? allNames[i] : ("Input " + juce::String(i + 1)));
         }
-    }
-    if (names.isEmpty())
-    {
-        names.add("Input 1");
-        names.add("Input 2");
     }
     return names;
 }
@@ -171,8 +179,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputs, i
 {
     const auto startTicks = juce::Time::getHighResolutionTicks();
 
-    // Advance recorder count-in and process incoming inputs
-    recorder_.advanceSamples(numSamples);
+    // Advance recorder pre-count, trigger audible pre-count clicks, and start playback when pre-count completes
+    const auto adv = recorder_.advanceSamples(numSamples);
+    if (adv.triggerClick && sequencer_ != nullptr)
+        sequencer_->triggerCountInClick(adv.clickAccent, adv.clickOffset);
+    if (adv.countInFinished && sequencer_ != nullptr)
+        sequencer_->requestPlaying(true);
     if (numInputs > 0 && inputs != nullptr)
         recorder_.processInput(inputs, numInputs, numSamples);
 

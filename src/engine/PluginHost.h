@@ -36,6 +36,7 @@ public:
     /// Known scanned VST3 / AU effect plugins.
     const juce::KnownPluginList& knownPlugins() const noexcept { return knownPlugins_; }
     juce::Array<juce::PluginDescription> availableEffectPlugins() const;
+    static bool isAudioEffectPlugin(const juce::PluginDescription& desc) noexcept;
 
     /// Scans system VST3 / AU directories for audio effect plugins and caches the list.
     int scanDefaultPluginPaths(std::function<void(const juce::String&)> onStatus = nullptr);

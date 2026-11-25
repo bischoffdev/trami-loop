@@ -6,7 +6,6 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-#include <array>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -65,6 +64,8 @@ public:
     void setOnPushUndo(std::function<void()> cb) { onPushUndo_ = std::move(cb); }
     void setTrackPeakProvider(TrackPeakProvider cb);
     void setInputChannelNamesProvider(InputChannelNamesProvider cb) { inputChannelNamesProvider_ = std::move(cb); }
+    void setInputDeviceNameProvider(std::function<juce::String()> cb) { inputDeviceNameProvider_ = std::move(cb); }
+    void setOnOpenAudioSettings(std::function<void()> cb) { onOpenAudioSettings_ = std::move(cb); }
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
     std::function<void(const juce::MouseEvent&)> onMarqueeStart;
@@ -143,6 +144,8 @@ private:
     std::function<void()> onPushUndo_;
     TrackPeakProvider trackPeakProvider_;
     InputChannelNamesProvider inputChannelNamesProvider_;
+    std::function<juce::String()> inputDeviceNameProvider_;
+    std::function<void()> onOpenAudioSettings_;
     std::vector<float> peakL_;
     std::vector<float> peakR_;
     std::unordered_set<int> selectedTracks_;

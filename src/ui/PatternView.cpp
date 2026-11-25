@@ -1389,6 +1389,11 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             masterBusLane_->updateButtonStates();
         publishSnapshotQuick();
     };
+    dockPanel_->mixer().onOpenAudioSettings = [this]()
+    {
+        if (onOpenAudioSettings_)
+            onOpenAudioSettings_();
+    };
     dockPanel_->mixer().onTrackFxClicked = [this](int track) { openTrackFxDialog(track); };
     dockPanel_->mixer().onTrackFxBypass = [this](int track) { toggleTrackFxBypass(track); };
     dockPanel_->mixer().onTracksSelected = [this](const std::unordered_set<int>& tracks, int primary)
@@ -1534,6 +1539,12 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             onPushUndo_();
     });
     trackHeaders_->setInputChannelNamesProvider([this]() { return engine_.inputChannelNames(); });
+    trackHeaders_->setInputDeviceNameProvider([this]() { return engine_.inputDeviceName(); });
+    trackHeaders_->setOnOpenAudioSettings([this]()
+    {
+        if (onOpenAudioSettings_)
+            onOpenAudioSettings_();
+    });
     trackHeaders_->setTrackPeakProvider([this](int track) -> std::pair<float, float>
     {
         if (const auto* pat = song_.findPattern(currentPattern_))
@@ -1558,20 +1569,6 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             {
                 activeSample_ = sampleId;
                 updateSampleSelector();
-            }
-            else if (activeSample_.isValid())
-            {
-                const auto* pat = song_.findPattern(currentPattern_);
-                if (pat != nullptr && track >= 0 && track < static_cast<int>(pat->tracks.size()))
-                {
-                    if (onPushUndo_)
-                        onPushUndo_();
-                    song_.setPatternTrackSample(currentPattern_, track, activeSample_);
-                    trackHeaders_->updateFromModel();
-                    if (dockPanel_ != nullptr)
-                        dockPanel_->refreshFromModel();
-                    republish();
-                }
             }
         });
     trackHeaders_->setOnFileDropped([this](const juce::String& filePath, int track)
@@ -1815,9 +1812,9 @@ PatternView::~PatternView()
     stopTimer();
 }
 
-void PatternView::setPattern(PatternId patternId)
+void PatternView::setPattern(PatternId patternId, bool forceReload)
 {
-    const bool isSamePattern = (currentPattern_ == patternId);
+    const bool isSamePattern = !forceReload && (currentPattern_ == patternId);
     const auto savedViewPos =
         (gridViewport_ != nullptr) ? gridViewport_->getViewPosition() : juce::Point<int>{0, 0};
 
@@ -2163,7 +2160,7 @@ void PatternView::addTrack()
 {
     if (onPushUndo_)
         onPushUndo_();
-    song_.addTrackToPattern(currentPattern_, activeSample_);
+    song_.addTrackToPattern(currentPattern_);
     trackHeaders_->updateFromModel();
     if (dockPanel_ != nullptr)
         dockPanel_->refreshFromModel();
@@ -2409,11 +2406,16 @@ void PatternView::toggleRecording()
         const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
         const double samplesPerStep = timing.samplesPerStep();
         const auto* pat = song_.findPattern(currentPattern_);
-        const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+        const int totalSteps = pat != nullptr ? pat->lengthSteps() : song_.stepsPerBar();
         const double rawStep = (samplesPerStep > 0.0) ? (static_cast<double>(seq.position()) / samplesPerStep) : 0.0;
         recordStartStep_ = std::fmod(std::max(0.0, rawStep), static_cast<double>(std::max(1, totalSteps)));
 
-        const int countInSamples = static_cast<int>(timing.samplesPerBar());
+        const bool usePreCount = rec.isPreCountEnabled();
+        const int beatsInBar = std::max(1, song_.timeSigNumerator());
+        const double samplesPerQuarter = (60.0 / std::max(20.0, song_.bpm())) * engine_.sampleRate();
+        const int beatSamples = std::max(
+            1, static_cast<int>(std::llround(samplesPerQuarter * (4.0 / static_cast<double>(song_.timeSigDenominator())))));
+        const int countInSamples = usePreCount ? (beatSamples * beatsInBar) : 0;
 
         int recInputChannel = 0;
         bool recStereo = true;
@@ -2446,31 +2448,50 @@ void PatternView::toggleRecording()
             {
                 recInputChannel = mutPat->tracks[static_cast<std::size_t>(armedTrackIdx)].inputChannel;
                 recStereo = mutPat->tracks[static_cast<std::size_t>(armedTrackIdx)].inputStereo;
+                if (engine_.numInputChannels() == 1)
+                {
+                    recInputChannel = 0;
+                    recStereo = false;
+                }
             }
         }
 
-        seq.setMetronomeEnabled(true);
+        recordTargetTrack_ = armedTrackIdx;
+
+        // Pre-count is independent of the metronome: keep the playhead parked until pre-count finishes.
+        if (usePreCount)
+            seq.requestPlaying(false);
+
         rec.start(countInSamples, engine_.recordingLatencySamples(),
                   [this](AudioData recorded)
                   {
                       juce::MessageManager::callAsync([this, audio = std::move(recorded)]() mutable
                                                       { onRecordFinished(std::move(audio)); });
                   },
-                  recInputChannel, recStereo);
-        seq.requestPlaying(true);
+                  recInputChannel, recStereo, usePreCount ? beatSamples : 0);
+
+        if (!usePreCount)
+            seq.requestPlaying(true);
+
         if (onShowToast_)
         {
             const juce::String modeStr = recStereo
-                ? ("In " + juce::String(recInputChannel + 1) + "-" + juce::String(recInputChannel + 2) + " Stereo")
+                ? ("In " + juce::String(recInputChannel + 1) + "+" + juce::String(recInputChannel + 2) + " Stereo")
                 : ("In " + juce::String(recInputChannel + 1) + " Mono");
+            const juce::String preStr = usePreCount
+                ? (", " + juce::String(beatsInBar) + "-beat pre-count")
+                : juce::String();
             onShowToast_("Recording Track " + juce::String(std::max(0, armedTrackIdx) + 1) +
-                         " (" + modeStr + ", 1-bar count-in)...");
+                         " (" + modeStr + preStr + ")...");
         }
     }
     else
     {
         rec.stop();
         seq.requestPlaying(false);
+        recordTargetTrack_ = -1;
+        if (grid_ != nullptr)
+            grid_->clearLiveRecordingPreview();
         if (onShowToast_)
             onShowToast_("Recording stopped");
     }
@@ -2524,8 +2545,9 @@ void PatternView::onRecordFinished(AudioData recorded)
     {
         if (endStep > static_cast<double>(pat->lengthSteps()))
         {
+            const int spb = std::max(1, song_.stepsPerBar());
             const int neededBars =
-                std::max(pat->lengthBars + 1, static_cast<int>(std::ceil(endStep / static_cast<double>(kStepsPerBar))));
+                std::max(pat->lengthBars + 1, static_cast<int>(std::ceil(endStep / static_cast<double>(spb))));
             patternLengthExtensionRequested(neededBars);
         }
     }
@@ -3359,7 +3381,7 @@ void PatternView::clipsDeleteRequested(const std::vector<ClipId>& clipIds)
                                          [lastDeletedId](const Clip& c) { return c.id == lastDeletedId; });
             if (it != track.clips.end())
             {
-                const int curStep = it->startStep;
+                const double curStep = it->startStep;
                 const Clip* nextClip = nullptr;
                 const Clip* prevClip = nullptr;
 
@@ -3518,7 +3540,7 @@ void PatternView::copySelectedClip()
         {
             if (std::find(targetIds.begin(), targetIds.end(), c.id) != targetIds.end())
             {
-                const int span = grid_->clipSpan(c, t);
+                const double span = grid_->clipSpan(c, t);
                 ClipboardClipItem item;
                 item.sampleId = c.sampleId;
                 item.sourceTrackIndex = t;
@@ -4364,7 +4386,6 @@ void PatternView::fitZoomToProject(int minBarsVisible, int maxBarsVisible)
 
 void PatternView::resetPlayhead()
 {
-    currentPattern_ = {};
     if (grid_ != nullptr)
         grid_->setPlayheadStep(0.0);
     if (gridViewport_ != nullptr)
@@ -4393,12 +4414,57 @@ void PatternView::timerCallback()
         if (samplesPerStep > 0.0)
         {
             const auto* pat = song_.findPattern(currentPattern_);
-            const int totalSteps = pat != nullptr ? pat->lengthSteps() : kStepsPerBar;
+            int totalSteps = pat != nullptr ? pat->lengthSteps() : song_.stepsPerBar();
 
             const std::int64_t pos = engine_.sequencer().position();
             const double currentStep = static_cast<double>(pos) / samplesPerStep;
-            const double phStep = std::fmod(currentStep, static_cast<double>(totalSteps));
+
+            // While recording, automatically append a new measure before the playhead hits the end of the song
+            if (pat != nullptr && engine_.sequencer().isPlaying() &&
+                engine_.recorder().state() != RecordState::Idle)
+            {
+                const double leadSteps = static_cast<double>(std::max(2, song_.stepsPerBeat()));
+                const bool loopCoversFullSong = !engine_.sequencer().isLoopingEnabled() || (loopEndStep_ >= totalSteps);
+                if (loopCoversFullSong && currentStep >= static_cast<double>(totalSteps) - leadSteps)
+                {
+                    const int oldTotalSteps = totalSteps;
+                    const int nextBars = pat->lengthBars + 1;
+                    if (song_.setPatternLength(currentPattern_, nextBars))
+                    {
+                        const auto* updatedPat = song_.findPattern(currentPattern_);
+                        totalSteps = updatedPat != nullptr ? updatedPat->lengthSteps() : (nextBars * song_.stepsPerBar());
+                        if (loopEndStep_ >= oldTotalSteps)
+                        {
+                            loopEndStep_ = totalSteps;
+                            grid_->setLoopRegion(loopStartStep_, loopEndStep_);
+                            if (onLoopRegionChanged_)
+                                onLoopRegionChanged_(loopStartStep_, loopEndStep_);
+                        }
+                        updateLengthSelector();
+                        publishSnapshotQuick();
+                        resized();
+                    }
+                }
+            }
+
+            const double phStep = std::fmod(currentStep, static_cast<double>(std::max(1, totalSteps)));
             grid_->setPlayheadStep(phStep);
+
+            if (engine_.recorder().isRecording() && recordTargetTrack_ >= 0)
+            {
+                const double durSteps = static_cast<double>(engine_.recorder().recordedFrames()) / samplesPerStep;
+                PatternGrid::LiveRecordingPreview preview;
+                preview.active = true;
+                preview.trackIndex = recordTargetTrack_;
+                preview.startStep = recordStartStep_;
+                preview.lengthSteps = std::max(0.25, durSteps);
+                preview.peaks = engine_.recorder().copyLiveWaveformPeaks();
+                grid_->setLiveRecordingPreview(std::move(preview));
+            }
+            else
+            {
+                grid_->clearLiveRecordingPreview();
+            }
             if (ruler_ != nullptr)
                 ruler_->repaint();
             const auto lv = engine_.sequencer().outputLevels();

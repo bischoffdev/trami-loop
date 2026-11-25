@@ -920,7 +920,7 @@ void FxRackPanel::refreshAvailablePlugins()
     applyPluginFilter();
 
     if (available_.isEmpty())
-        statusLabel_.setText("0 plugins cached — click Scan...", juce::dontSendNotification);
+        statusLabel_.setText("0 plugins cached - click Scan...", juce::dontSendNotification);
     else
         statusLabel_.setText(juce::String(available_.size()) + " VST3/AU plugins", juce::dontSendNotification);
 }

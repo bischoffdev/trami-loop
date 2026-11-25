@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ui/TramiLookAndFeel.h"
-
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace trami
@@ -66,18 +64,20 @@ namespace DAWInputSources
 {
 constexpr int kMonoBase = 100;
 constexpr int kStereoBase = 200;
+constexpr int kAudioSettingsId = 900;
 
 /// Display text, e.g. "Input 3 (Mono)" or "Inputs 3+4 (Stereo)".
 juce::String sourceLabel(int channel, bool stereo, const juce::StringArray& deviceNames);
 
-/// Adds every mono channel and every stereo pair as a separate entry to `menu` (ids kMonoBase+ch / kStereoBase+ch).
-void populateMenu(juce::PopupMenu& menu, const juce::StringArray& deviceNames, int currentChannel, bool currentStereo);
+/// Adds every real mono channel and (when 2+ channels exist) every stereo pair as a separate entry to `menu`.
+void populateMenu(juce::PopupMenu& menu, const juce::StringArray& deviceNames, int currentChannel, bool currentStereo,
+                  const juce::String& deviceName = {}, bool includeAudioSettings = false);
 
 /// Decodes a menu result id into (channel, stereo). Returns false if `id` is not a source id.
 bool decode(int id, int& channel, bool& stereo);
 
-/// Number of hardware channels to offer (at least 2, and always enough to contain the current selection).
-int channelCount(const juce::StringArray& deviceNames, int currentChannel, bool currentStereo);
+/// Number of real hardware channels available on the active input device.
+int channelCount(const juce::StringArray& deviceNames);
 } // namespace DAWInputSources
 
 namespace DAWTrackIcons

@@ -204,7 +204,7 @@ private:
             bypassBtn.onClick = std::move(onBypass);
 
             addAndMakeVisible(editBtn);
-            editBtn.setTooltip("Open native VST3/AU plugin editor window");
+            editBtn.setTooltip("Open / close native VST3/AU plugin editor window (click again to close)");
             editBtn.onClick = std::move(onEdit);
 
             addAndMakeVisible(upBtn);

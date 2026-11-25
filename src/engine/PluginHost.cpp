@@ -120,12 +120,35 @@ void PluginHost::releaseResources()
     relChain(masterChain_);
 }
 
+bool PluginHost::isAudioEffectPlugin(const juce::PluginDescription& desc) noexcept
+{
+    if (desc.isInstrument)
+        return false;
+
+    // Audio effects must accept audio input and produce audio output.
+    // This filters out synths/instruments/generators with 0 inputs and MIDI-only plugins.
+    if (desc.numInputChannels <= 0 || desc.numOutputChannels <= 0)
+        return false;
+
+    const auto cat = desc.category.trim().toLowerCase();
+    if (cat.contains("midi") || cat.contains("music device") || cat.contains("generator"))
+        return false;
+
+    if (cat.contains("instrument") || cat.contains("synth") || cat.contains("sampler"))
+    {
+        if (!cat.contains("fx") && !cat.contains("effect"))
+            return false;
+    }
+
+    return true;
+}
+
 juce::Array<juce::PluginDescription> PluginHost::availableEffectPlugins() const
 {
     juce::Array<juce::PluginDescription> result;
     for (const auto& desc : knownPlugins_.getTypes())
     {
-        if (!desc.isInstrument)
+        if (isAudioEffectPlugin(desc))
             result.add(desc);
     }
     return result;
