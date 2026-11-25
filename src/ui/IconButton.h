@@ -37,7 +37,16 @@ public:
         ZoomIn,
         ZoomOut,
         ZoomReset,
-        Follow
+        Follow,
+        SelectTool,
+        PaintTool,
+        EraseTool,
+        SplitTool,
+        JoinClips,
+        Marker,
+        Crossfade,
+        EnvelopeLock,
+        RippleEdit
     };
 
     IconButton(const juce::String& buttonName, Icon icon, const juce::String& label);

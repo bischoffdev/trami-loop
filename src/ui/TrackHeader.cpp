@@ -134,6 +134,23 @@ public:
     }
 };
 
+class TrackInputButton : public juce::TextButton
+{
+public:
+    explicit TrackInputButton(const juce::String& text) : juce::TextButton(text) {}
+    std::function<void()> onQuickToggleStereo;
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if ((e.mods.isPopupMenu() || e.mods.isAltDown()) && onQuickToggleStereo)
+        {
+            onQuickToggleStereo();
+            return;
+        }
+        juce::TextButton::mouseDown(e);
+    }
+};
+
 class TrackNameLabel : public juce::Label
 {
 public:
@@ -267,20 +284,47 @@ public:
 
         if (!isPan)
         {
-            // Dual horizontal rows of subtle LED dots inside the recessed capsule (matching screenshot)
+            // Dual horizontal rows of LED dots inside the recessed volume capsule,
+            // reflecting live audio / recording input level in real time!
             const float padX = 7.0f;
             const float usableW = std::max(6.0f, r.getWidth() - padX * 2.0f);
             const int numDots = std::clamp(static_cast<int>(usableW / 6.0f), 6, 16);
             const float stepX = (numDots > 1) ? (usableW / static_cast<float>(numDots - 1)) : 0.0f;
             const float rowY[2] = {ty - 2.8f, ty + 2.8f};
 
+            const float peakL = static_cast<float>(slider.getProperties().getWithDefault("peakL", 0.0));
+            const float peakR = static_cast<float>(slider.getProperties().getWithDefault("peakR", 0.0));
+            const float peaks[2] = {peakL, peakR};
+
             for (int row = 0; row < 2; ++row)
             {
+                const float lv = peaks[row];
+                float levelNorm = 0.0f;
+                if (lv > 0.001f)
+                {
+                    const float db = 20.0f * std::log10(std::max(1e-5f, lv));
+                    levelNorm = std::clamp((db + 48.0f) / 51.0f, 0.0f, 1.0f);
+                }
+
                 for (int i = 0; i < numDots; ++i)
                 {
                     const float dx = r.getX() + padX + static_cast<float>(i) * stepX;
-                    const bool active = (dx <= tx);
-                    g.setColour(active ? juce::Colour(0xff4a5562) : juce::Colour(0xff2a2a31));
+                    const float dotNorm = (numDots > 1)
+                        ? (static_cast<float>(i) / static_cast<float>(numDots - 1))
+                        : 0.0f;
+
+                    if (levelNorm > 0.001f && dotNorm <= levelNorm)
+                    {
+                        const juce::Colour litCol = (dotNorm >= 0.86f)
+                            ? juce::Colour(0xffef4444)
+                            : ((dotNorm >= 0.68f) ? juce::Colour(0xfff59e0b) : juce::Colour(0xff22c55e));
+                        g.setColour(litCol);
+                    }
+                    else
+                    {
+                        const bool active = (dx <= tx);
+                        g.setColour(active ? juce::Colour(0xff4a5562) : juce::Colour(0xff2a2a31));
+                    }
                     g.fillEllipse(dx - 1.25f, rowY[row] - 1.25f, 2.5f, 2.5f);
                 }
             }
@@ -373,6 +417,13 @@ void TrackHeaderList::timerCallback()
         {
             peakL_[static_cast<std::size_t>(t)] = nextL < 0.001f ? 0.0f : nextL;
             peakR_[static_cast<std::size_t>(t)] = nextR < 0.001f ? 0.0f : nextR;
+            if (controls_[static_cast<std::size_t>(t)].volumeSlider != nullptr)
+            {
+                auto& props = controls_[static_cast<std::size_t>(t)].volumeSlider->getProperties();
+                props.set("peakL", peakL_[static_cast<std::size_t>(t)]);
+                props.set("peakR", peakR_[static_cast<std::size_t>(t)]);
+                controls_[static_cast<std::size_t>(t)].volumeSlider->repaint();
+            }
             changed = true;
         }
     }
@@ -436,6 +487,46 @@ void TrackHeaderList::showColorPickerForTrack(int track, juce::Rectangle<int> an
             repaint();
         });
     juce::CallOutBox::launchAsynchronously(std::move(picker), localAreaToGlobal(anchorRect), nullptr);
+}
+
+void TrackHeaderList::showInputMenuForTrack(int track, juce::Component* anchorComp)
+{
+    const auto* pat = song_.findPattern(patternId_);
+    if (pat == nullptr || track < 0 || track >= static_cast<int>(pat->tracks.size()))
+        return;
+
+    const auto& trk = pat->tracks[static_cast<std::size_t>(track)];
+    const juce::StringArray chNames = inputChannelNamesProvider_ ? inputChannelNamesProvider_() : juce::StringArray{};
+
+    juce::PopupMenu m;
+    m.addSectionHeader("Recording Source");
+    DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo);
+
+    auto opts = juce::PopupMenu::Options();
+    opts = opts.withTargetComponent(anchorComp != nullptr ? anchorComp : static_cast<juce::Component*>(this));
+
+    m.showMenuAsync(opts, [this, track](int res)
+    {
+        int newCh = 0;
+        bool newStereo = true;
+        if (!DAWInputSources::decode(res, newCh, newStereo))
+            return;
+        auto* p = song_.findPattern(patternId_);
+        if (p == nullptr || track < 0 || track >= static_cast<int>(p->tracks.size()))
+            return;
+
+        if (onPushUndo_)
+            onPushUndo_();
+
+        // Only change the source; never touch the arm state.
+        for (int idx : targetTracksFor(track))
+        {
+            song_.setPatternTrackInput(patternId_, idx, newCh, newStereo);
+            if (onMixChanged_)
+                onMixChanged_(idx);
+        }
+        updateFromModel();
+    });
 }
 
 void TrackHeaderList::updateFromModel()
@@ -575,10 +666,19 @@ void TrackHeaderList::updateFromModel()
                             if (onMixChanged_)
                                 onMixChanged_(idx);
                         }
+                        updateFromModel();
                     }
                 }
             };
             addAndMakeVisible(c.armButton.get());
+
+            auto inBtn = std::make_unique<DAWInputButton>();
+            inBtn->onSelectInputChannel = [this, t]() {
+                if (t < static_cast<int>(controls_.size()))
+                    showInputMenuForTrack(t, controls_[static_cast<std::size_t>(t)].inputButton.get());
+            };
+            c.inputButton = std::move(inBtn);
+            addAndMakeVisible(c.inputButton.get());
 
             c.volLabel = std::make_unique<juce::Label>("vol", "0.0dB");
             c.volLabel->setFont(Typography::bold(9.5f));
@@ -810,6 +910,17 @@ void TrackHeaderList::updateFromModel()
             c.soloButton->setToggleState(track.solo, juce::dontSendNotification);
             c.armButton->setToggleState(track.armed, juce::dontSendNotification);
 
+            if (c.inputButton != nullptr)
+            {
+                c.inputButton->setInputState(track.inputChannel, track.inputStereo, track.armed);
+                c.inputButton->setTooltip(
+                    "Track " + juce::String(t + 1) + " Recording Source: " +
+                    (track.inputStereo
+                         ? ("Inputs " + juce::String(track.inputChannel + 1) + "+" + juce::String(track.inputChannel + 2) + " (Stereo)")
+                         : ("Input " + juce::String(track.inputChannel + 1) + " (Mono)")) +
+                    " - click to choose a different source (does not arm the track)");
+            }
+
             if (c.fxButton != nullptr)
             {
                 const bool hasFx = !track.fxChain.empty();
@@ -926,6 +1037,27 @@ void TrackHeaderList::setSelectedTrack(int track)
     repaint();
 }
 
+void TrackHeaderList::setSelectedTracks(const std::unordered_set<int>& tracks, int primaryTrack)
+{
+    selectedTracks_ = tracks;
+    if (primaryTrack >= 0)
+        lastClickedTrack_ = primaryTrack;
+    else if (!selectedTracks_.empty())
+        lastClickedTrack_ = *selectedTracks_.begin();
+    else
+        lastClickedTrack_ = -1;
+    repaint();
+}
+
+int TrackHeaderList::firstSelectedTrack() const noexcept
+{
+    if (lastClickedTrack_ >= 0)
+        return lastClickedTrack_;
+    if (!selectedTracks_.empty())
+        return *selectedTracks_.begin();
+    return -1;
+}
+
 void TrackHeaderList::setTrackHeight(int height)
 {
     const int clamped = std::max(kMinTrackHeight, height);
@@ -1010,22 +1142,28 @@ void TrackHeaderList::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff16161a));
         g.drawHorizontalLine(y + trackHeight_ - 1, 0.0f, static_cast<float>(getWidth()));
 
-        // Per-Track Live Stereo Peak Meter bar along the bottom of the track header
+        // Per-Track Live Stereo / Mono Peak Meter bar along the bottom of the track header
         {
             const float meterX = static_cast<float>(kStripWidth + 8);
             const float meterW = std::max(24.0f, static_cast<float>(getWidth() - kStripWidth - 16));
             const float meterY = static_cast<float>(y + trackHeight_ - 12);
             const float chanH = 3.5f;
             const float gapH = 1.5f;
+            const float troughH = chanH * 2.0f + gapH + 2.0f;
 
-            // Dark recessed meter trough
+            // Dark recessed meter trough (highlighted with red recording border when track is armed)
             g.setColour(juce::Colour(0xff111115));
-            g.fillRoundedRectangle(meterX, meterY - 1.0f, meterW, chanH * 2.0f + gapH + 2.0f, 2.0f);
+            g.fillRoundedRectangle(meterX, meterY - 1.0f, meterW, troughH, 2.0f);
+            if (track.armed)
+            {
+                g.setColour(Palette::danger.withAlpha(0.45f));
+                g.drawRoundedRectangle(meterX, meterY - 1.0f, meterW, troughH, 2.0f, 1.0f);
+            }
 
             const float lvL = (t < static_cast<int>(peakL_.size())) ? peakL_[static_cast<std::size_t>(t)] : 0.0f;
             const float lvR = (t < static_cast<int>(peakR_.size())) ? peakR_[static_cast<std::size_t>(t)] : 0.0f;
 
-            auto drawChannelMeter = [&](float cy, float level) {
+            auto drawChannelMeter = [&](float cy, float chH, float level) {
                 if (level <= 0.001f)
                     return;
                 // Convert linear peak to perceptual dB scale (-48dB .. +3dB)
@@ -1040,10 +1178,19 @@ void TrackHeaderList::paint(juce::Graphics& g)
                 grad.addColour(0.68, juce::Colour(0xff84cc16));
                 grad.addColour(0.84, juce::Colour(0xfff59e0b));
                 g.setGradientFill(grad);
-                g.fillRect(meterX + 1.0f, cy, std::max(1.0f, fillW - 2.0f), chanH);
+                g.fillRect(meterX + 1.0f, cy, std::max(1.0f, fillW - 2.0f), chH);
             };
-            drawChannelMeter(meterY, lvL);
-            drawChannelMeter(meterY + chanH + gapH, lvR);
+
+            if (track.armed && !track.inputStereo)
+            {
+                // Unified full-height Mono meter bar
+                drawChannelMeter(meterY, chanH * 2.0f + gapH, std::max(lvL, lvR));
+            }
+            else
+            {
+                drawChannelMeter(meterY, chanH, lvL);
+                drawChannelMeter(meterY + chanH + gapH, chanH, lvR);
+            }
         }
 
         // Drag hover highlight
@@ -1106,26 +1253,28 @@ void TrackHeaderList::resized()
         const int btnY = y + 26;
         const int btnH = std::clamp(trackHeight_ - 44, 19, 22);
 
-        c.muteButton->setBounds(kStripWidth + 8, btnY, 24, btnH);
-        c.soloButton->setBounds(kStripWidth + 32, btnY, 24, btnH);
-        c.armButton->setBounds(kStripWidth + 60, btnY, 19, btnH);
+        c.muteButton->setBounds(kStripWidth + 8, btnY, 22, btnH);
+        c.soloButton->setBounds(kStripWidth + 30, btnY, 22, btnH);
+        c.armButton->setBounds(kStripWidth + 55, btnY, 19, btnH);
+        if (c.inputButton != nullptr)
+            c.inputButton->setBounds(kStripWidth + 77, btnY, 84, btnH);
 
-        const int slidersX = kStripWidth + 85;
+        const int slidersX = kStripWidth + 165;
         const int availW = std::max(40, getWidth() - slidersX - 8);
 
-        // Bottom row: [ M | S ] (•)  [=== Volume ===] [0.0dB]  [=== Pan ===] [ C ]
+        // Bottom row: [ M | S ] (•) [⚭ Stereo | In 1+2 ▾]  [=== Volume ===] [0.0dB]  [=== Pan ===] [ C ]
         c.volumeSlider->setVisible(true);
         c.volLabel->setVisible(true);
 
         constexpr int volReadoutW = 42;
-        constexpr int panReadoutW = 32;
-        constexpr int gap = 4;
+        constexpr int panReadoutW = 30;
+        constexpr int gap = 3;
 
-        if (availW >= 180)
+        if (availW >= 160)
         {
             const int totalSlidersW = availW - volReadoutW - panReadoutW - gap * 3;
-            const int panW = std::clamp(totalSlidersW * 42 / 100, 56, 130);
-            const int volW = std::max(56, totalSlidersW - panW);
+            const int panW = std::clamp(totalSlidersW * 40 / 100, 42, 120);
+            const int volW = std::max(44, totalSlidersW - panW);
 
             int curX = slidersX;
             c.volumeSlider->setBounds(curX, btnY, volW, btnH);
@@ -1199,6 +1348,8 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         m.addItem(3, "Track Type: One-Shot (Natural Speed)", true, kind == SampleKind::OneShot);
         m.addItem(6, "Track Type: Disk-Based (Stream Long Audio)", true, kind == SampleKind::DiskStream);
         m.addSeparator();
+        m.addItem(40, "Recording Source...");
+        m.addSeparator();
         juce::PopupMenu envMenu;
         envMenu.addItem(30, "Off (Hide Track Automation)", true, visEnv == TrackEnvelopeType::None);
         envMenu.addItem(31, "Volume Envelope", true, visEnv == TrackEnvelopeType::Volume);
@@ -1238,6 +1389,12 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                                 onTrackTypeChanged_(t, SampleKind::OneShot);
                             else if (result == 6 && onTrackTypeChanged_)
                                 onTrackTypeChanged_(t, SampleKind::DiskStream);
+                            else if (result == 40)
+                            {
+                                showInputMenuForTrack(t, (t < static_cast<int>(controls_.size()))
+                                                             ? controls_[static_cast<std::size_t>(t)].inputButton.get()
+                                                             : nullptr);
+                            }
                             else if (result >= 30 && result <= 33)
                             {
                                 if (auto* p = song_.findPattern(patternId_))
@@ -1328,6 +1485,8 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         repaint();
     }
 
+    if (onTracksSelected_)
+        onTracksSelected_(selectedTracks_, t);
     if (onTrackSelected_)
         onTrackSelected_(t, sid);
 }

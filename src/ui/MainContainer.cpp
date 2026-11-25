@@ -44,6 +44,11 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
     // Multitrack Song View (the single primary timeline view)
     patternView_ = std::make_unique<PatternView>(song_, engine_, stretchCache_);
     patternView_->setOnPushUndo([this]() { pushUndoState(); });
+    patternView_->setOnSongRenamed([this](const juce::String& newName)
+    {
+        currentProjectName_ = newName;
+        updateWindowTitle();
+    });
     addAndMakeVisible(patternView_.get());
 
     // Bottom Transport Bar
@@ -98,9 +103,41 @@ MainContainer::MainContainer(Song& song, AudioEngine& engine, StretchCache& stre
     patternView_->setPattern(song_.patterns().front().id);
     patternView_->fitZoomToProject(8, 32);
     transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
+    updateWindowTitle();
 }
 
 MainContainer::~MainContainer() = default;
+
+void MainContainer::parentHierarchyChanged()
+{
+    updateWindowTitle();
+}
+
+juce::String MainContainer::activeProjectDisplayName() const
+{
+    if (currentProjectName_.isNotEmpty())
+        return currentProjectName_;
+    if (currentProjectDir_.has_value())
+    {
+        const auto dirName = currentProjectDir_->filename().string();
+        if (!dirName.empty())
+            return juce::String::fromUTF8(dirName.c_str());
+    }
+    if (!song_.patterns().empty() && !song_.patterns().front().name.empty())
+        return juce::String::fromUTF8(song_.patterns().front().name.c_str());
+    return "Untitled Project";
+}
+
+void MainContainer::updateWindowTitle()
+{
+    const juce::String projName = activeProjectDisplayName();
+    const juce::String fullTitle = juce::String(JUCE_APPLICATION_NAME_STRING) +
+                                   " v" + juce::String(JUCE_APPLICATION_VERSION_STRING) +
+                                   " - " + projName;
+    if (auto* docWin = findParentComponentOfClass<juce::DocumentWindow>())
+        docWin->setName(fullTitle);
+    repaint(0, 0, getWidth(), 44);
+}
 
 void MainContainer::pushUndoState()
 {
@@ -209,15 +246,18 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
 
     stretchCache_.clear();
     currentProjectDir_ = dir;
+    currentProjectName_ = juce::String::fromUTF8(dir.filename().string().c_str());
+    currentProjectIsAcidImport_ = false;
     history_.clear();
 
     engine_.sequencer().setMasterVolume(song_.masterVolume());
 
     ProjectSerializer::saveProject(song_, stretchCache_, dir);
 
-    patternView_->setPattern(songPattern);
     patternView_->resetPlayhead();
+    patternView_->setPattern(songPattern);
     updateAllViews();
+    updateWindowTitle();
     patternView_->fitZoomToProject(8, 32);
     showToast("New Project Created: " + juce::String(dir.filename().string()));
 }
@@ -235,7 +275,7 @@ void MainContainer::saveProjectDialog(bool promptForNewLocation)
             engine_.pluginHost().captureStatesIntoPattern(*pat);
     }
 
-    if (!promptForNewLocation && currentProjectDir_.has_value())
+    if (!promptForNewLocation && !currentProjectIsAcidImport_ && currentProjectDir_.has_value())
     {
         if (ProjectSerializer::saveProject(song_, stretchCache_, *currentProjectDir_))
         {
@@ -251,7 +291,21 @@ void MainContainer::saveProjectDialog(bool promptForNewLocation)
     juce::File initialLoc;
     if (currentProjectDir_.has_value())
     {
-        initialLoc = juce::File(juce::String::fromUTF8(currentProjectDir_->string().c_str()));
+        const juce::File baseDir(juce::String::fromUTF8(currentProjectDir_->string().c_str()));
+        if (currentProjectIsAcidImport_)
+        {
+            juce::String defaultProjectName = currentProjectName_.isNotEmpty()
+                ? currentProjectName_
+                : (song_.patterns().empty() ? "MyProject" : juce::String(song_.patterns().front().name));
+            defaultProjectName = juce::File::createLegalFileName(defaultProjectName);
+            if (defaultProjectName.isEmpty())
+                defaultProjectName = "MyProject";
+            initialLoc = baseDir.getChildFile(defaultProjectName + ".trami");
+        }
+        else
+        {
+            initialLoc = baseDir;
+        }
     }
     else
     {
@@ -291,6 +345,9 @@ void MainContainer::saveProjectDialog(bool promptForNewLocation)
                 if (ProjectSerializer::saveProject(song_, stretchCache_, dir))
                 {
                     currentProjectDir_ = dir;
+                    currentProjectName_ = juce::String::fromUTF8(dir.filename().string().c_str());
+                    currentProjectIsAcidImport_ = false;
+                    updateWindowTitle();
                     showToast("Project saved: " + juce::String(dir.filename().string()));
                 }
                 else
@@ -334,17 +391,20 @@ void MainContainer::openProjectDialog()
                     if (auto loaded = AcidProjectReader::loadProject(chosen, stretchCache_, importer_, engine_.sampleRate(), &extractedDir))
                     {
                         song_ = std::move(*loaded);
-                        currentProjectDir_ = extractedDir.empty() ? chosen.parent_path() : extractedDir;
+                        currentProjectDir_ = chosen.parent_path();
+                        currentProjectName_ = juce::String::fromUTF8(chosen.stem().string().c_str());
+                        currentProjectIsAcidImport_ = true;
                         history_.clear();
                         engine_.sequencer().resetTrackMix();
                         engine_.sequencer().setMasterVolume(song_.masterVolume());
                         if (patternView_ != nullptr)
                         {
+                            patternView_->resetPlayhead();
                             if (!song_.patterns().empty())
                                 patternView_->setPattern(song_.patterns().front().id);
-                            patternView_->resetPlayhead();
                         }
                         updateAllViews();
+                        updateWindowTitle();
                         if (patternView_ != nullptr)
                             patternView_->fitZoomToProject(8, 32);
                         int missingAudio = 0;
@@ -397,16 +457,22 @@ void MainContainer::openProjectDialog()
                 {
                     song_ = std::move(*loaded);
                     currentProjectDir_ = std::filesystem::is_directory(projectPath) ? projectPath : projectPath.parent_path();
+                    const auto projStem = (chosen.filename() == "project.trami")
+                                              ? chosen.parent_path().filename().string()
+                                              : chosen.stem().string();
+                    currentProjectName_ = juce::String::fromUTF8(projStem.c_str());
+                    currentProjectIsAcidImport_ = false;
                     history_.clear();
                     engine_.sequencer().resetTrackMix();
                     engine_.sequencer().setMasterVolume(song_.masterVolume());
                     if (patternView_ != nullptr)
                     {
+                        patternView_->resetPlayhead();
                         if (!song_.patterns().empty())
                             patternView_->setPattern(song_.patterns().front().id);
-                        patternView_->resetPlayhead();
                     }
                     updateAllViews();
+                    updateWindowTitle();
                     if (patternView_ != nullptr)
                         patternView_->fitZoomToProject(8, 32);
                     showToast("Project loaded: " + juce::String(chosen.stem().string()));
@@ -422,8 +488,8 @@ void MainContainer::openProjectDialog()
 void MainContainer::showSettingsDialog()
 {
     auto* comp =
-        new juce::AudioDeviceSelectorComponent(engine_.deviceManager(), 0, 2, 0, 2, false, false, true, false);
-    comp->setSize(500, 380);
+        new juce::AudioDeviceSelectorComponent(engine_.deviceManager(), 0, 32, 0, 2, false, false, true, false);
+    comp->setSize(500, 420);
 
     juce::DialogWindow::LaunchOptions opt;
     opt.dialogTitle = "Audio Settings";
@@ -522,6 +588,7 @@ void MainContainer::updateAllViews()
             transportBar_->setLoopRange(patternView_->loopStartStep(), patternView_->loopEndStep(), false);
         transportBar_->updateDisplay();
     }
+    updateWindowTitle();
 }
 
 bool MainContainer::keyPressed(const juce::KeyPress& key)
@@ -600,7 +667,17 @@ void MainContainer::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xfff0f0f6));
     g.drawText("TramiLoop", 43, 0, 90, kTopBarHeight, juce::Justification::centredLeft);
 
-    // Subtle version badge on the right of the top bar
+    // Subtle version badge on the right of the top bar, plus active project name in the top bar
+    const juce::String projName = activeProjectDisplayName();
+    const int projX = 635;
+    const int projW = std::max(0, mainW - projX - 104);
+    if (projW >= 80)
+    {
+        g.setColour(Palette::text.withAlpha(0.88f));
+        g.setFont(Typography::bold(12.5f));
+        g.drawText(projName, projX, 0, projW, kTopBarHeight, juce::Justification::centredRight, true);
+    }
+
     g.setColour(Palette::textDim.withAlpha(0.75f));
     g.setFont(Typography::regular(11.5f));
     g.drawText("v" + juce::String(JUCE_APPLICATION_VERSION_STRING),

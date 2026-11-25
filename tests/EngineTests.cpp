@@ -1,3 +1,4 @@
+#include "engine/AudioRecorder.h"
 #include "engine/Sequencer.h"
 #include "engine/SnapshotBuilder.h"
 #include "engine/SnapshotExchange.h"
@@ -1199,4 +1200,115 @@ TEST_CASE("Loop starting mid-clip chases and plays audio on second and subsequen
     // Pass 3 (samples 24000..35999): mid-pass sample 30000 must STILL be audible
     REQUIRE(rendered[24000 + 100] == Catch::Approx(0.6f).margin(0.01f));
     REQUIRE(rendered[30000] == Catch::Approx(0.6f).margin(0.01f));
+}
+
+TEST_CASE("Sequencer Plugin Delay Compensation (PDC) aligns channels with different plugin latencies across blocks")
+{
+    // Mock processor where Track 0 has a 600-sample delay line (latency = 600 samples across multiple 256-sample blocks)
+    // and Track 1 has 0 latency. Both tracks trigger an impulse at sample 0.
+    // With PDC enabled, Track 1 must be automatically delayed by 600 samples so both impulses arrive at sample 600!
+    struct DelayedTrackProcessor : public AudioPluginProcessor
+    {
+        int kLatency = 600;
+        std::vector<float> delayLineL = std::vector<float>(600, 0.0f);
+        std::vector<float> delayLineR = std::vector<float>(600, 0.0f);
+        int writeIdx = 0;
+
+        void processClip(std::uint32_t, float*, float*, int) noexcept override {}
+        void processTrack(int trackIndex, float* l, float* r, int n) noexcept override
+        {
+            if (trackIndex != 0)
+                return;
+            for (int i = 0; i < n; ++i)
+            {
+                const float inL = l[i];
+                const float inR = r[i];
+                l[i] = delayLineL[static_cast<std::size_t>(writeIdx)];
+                r[i] = delayLineR[static_cast<std::size_t>(writeIdx)];
+                delayLineL[static_cast<std::size_t>(writeIdx)] = inL;
+                delayLineR[static_cast<std::size_t>(writeIdx)] = inR;
+                writeIdx = (writeIdx + 1) % kLatency;
+            }
+        }
+        void processMaster(float*, float*, int) noexcept override {}
+
+        int trackLatencySamples(int trackIndex) const noexcept override
+        {
+            return (trackIndex == 0) ? kLatency : 0;
+        }
+    };
+
+    Fixture f;
+    f.song.addTrackToPattern(f.pattern, f.sample);
+    f.song.placeClip(f.pattern, 0, f.sample, 0.0); // Track 0: impulse at step 0 (has 600-sample plugin latency)
+    f.song.placeClip(f.pattern, 1, f.sample, 0.0); // Track 1: impulse at step 0 (0-sample plugin latency)
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+    DelayedTrackProcessor proc;
+    seq.setPluginProcessor(&proc);
+    seq.requestPlaying(true);
+
+    REQUIRE(seq.trackLatencySamples(0) == 600);
+    REQUIRE(seq.trackLatencySamples(1) == 0);
+    REQUIRE(seq.trackCompensationSamples(0) == 0);
+    REQUIRE(seq.trackCompensationSamples(1) == 600);
+    REQUIRE(seq.totalLatencySamples() == 600);
+
+    // Render 2048 samples in 256-sample blocks
+    std::vector<float> outL(2048, 0.0f), outR(2048, 0.0f);
+    for (int pos = 0; pos < 2048; pos += 256)
+        seq.process(outL.data() + pos, outR.data() + pos, 256);
+
+    // Because both tracks are aligned at sample 600, sample 0 must be 0.0f and sample 600 must be 2.0f (1.0 + 1.0)!
+    REQUIRE(outL[0] == Catch::Approx(0.0f).margin(1e-5f));
+    REQUIRE(outL[600] == Catch::Approx(2.0f).margin(1e-4f));
+}
+
+TEST_CASE("AudioRecorder measures per-channel input peak levels and records selected mono or stereo inputs")
+{
+    AudioRecorder rec;
+    constexpr int kFrames = 128;
+    std::vector<float> ch0(kFrames, 0.25f);
+    std::vector<float> ch1(kFrames, 0.50f);
+    std::vector<float> ch2(kFrames, 0.75f);
+    std::vector<float> ch3(kFrames, 0.90f);
+    const float* inputs[4] = {ch0.data(), ch1.data(), ch2.data(), ch3.data()};
+
+    // 1. Live input metering works even while Idle (monitoring armed tracks)
+    rec.processInput(inputs, 4, kFrames);
+    REQUIRE(rec.activeInputChannels() == 4);
+
+    // Mono input metering on channel 1 (Input 2) reflects 0.50 on both L and R meter bars
+    const auto [monoL, monoR] = rec.inputPeakLevels(1, false);
+    REQUIRE(monoL == Catch::Approx(0.50f).margin(1e-4f));
+    REQUIRE(monoR == Catch::Approx(0.50f).margin(1e-4f));
+
+    // Stereo input metering on channels 2-3 (Input 3-4) reflects 0.75 on L and 0.90 on R
+    const auto [stL, stR] = rec.inputPeakLevels(2, true);
+    REQUIRE(stL == Catch::Approx(0.75f).margin(1e-4f));
+    REQUIRE(stR == Catch::Approx(0.90f).margin(1e-4f));
+
+    // 2. Recording Mono from Input 2 (channel index 1) produces 1-channel AudioData with 0.50f
+    AudioData recordedMono;
+    rec.start(0, 0, [&](AudioData data) { recordedMono = std::move(data); }, /*inputChannel=*/1, /*stereo=*/false);
+    rec.processInput(inputs, 4, kFrames);
+    rec.stop();
+
+    REQUIRE(recordedMono.numChannels() == 1);
+    REQUIRE(recordedMono.numFrames() == kFrames);
+    REQUIRE(recordedMono.left()[0] == Catch::Approx(0.50f).margin(1e-5f));
+    REQUIRE(recordedMono.right()[0] == Catch::Approx(0.50f).margin(1e-5f));
+
+    // 3. Recording Stereo from Input 3-4 (channel index 2) produces 2-channel AudioData with L=0.75f, R=0.90f
+    AudioData recordedStereo;
+    rec.start(0, 0, [&](AudioData data) { recordedStereo = std::move(data); }, /*inputChannel=*/2, /*stereo=*/true);
+    rec.processInput(inputs, 4, kFrames);
+    rec.stop();
+
+    REQUIRE(recordedStereo.numChannels() == 2);
+    REQUIRE(recordedStereo.numFrames() == kFrames);
+    REQUIRE(recordedStereo.left()[0] == Catch::Approx(0.75f).margin(1e-5f));
+    REQUIRE(recordedStereo.right()[0] == Catch::Approx(0.90f).margin(1e-5f));
 }

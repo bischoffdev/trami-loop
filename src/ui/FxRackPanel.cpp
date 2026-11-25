@@ -216,8 +216,8 @@ public:
         removeBtn_.onClick = std::move(onRemove);
         addAndMakeVisible(removeBtn_);
 
-        editBtn_.setButtonText("Open UI");
-        editBtn_.setTooltip("Open native VST3/AU plugin editor window");
+        editBtn_.setButtonText("UI");
+        editBtn_.setTooltip("Open / close the native VST3/AU plugin editor window (click again to close)");
         editBtn_.onClick = [this]()
         {
             if (onEdit_)
@@ -274,12 +274,19 @@ public:
         g.setFont(Typography::bold(12.5f));
         g.drawFittedText(juce::String(slot_.name), body.withTrimmedBottom(18), juce::Justification::centred, 2, 0.85f);
 
-        // Format pill badge
-        if (!slot_.format.empty())
+        // Format + Latency pill badge
+        if (!slot_.format.empty() || slot_.latencySamples > 0)
         {
-            const juce::String fmt = juce::String(slot_.format).containsIgnoreCase("AudioUnit") ? "AU" : juce::String(slot_.format);
-            const auto pill = juce::Rectangle<float>(static_cast<float>(getWidth()) * 0.5f - 22.0f,
-                                                     static_cast<float>(body.getBottom() - 16), 44.0f, 14.0f);
+            juce::String fmt = juce::String(slot_.format).containsIgnoreCase("AudioUnit") ? "AU" : juce::String(slot_.format);
+            if (slot_.latencySamples > 0)
+            {
+                if (fmt.isNotEmpty())
+                    fmt += " · ";
+                fmt += juce::String(slot_.latencySamples) + " smp";
+            }
+            const float pillW = (slot_.latencySamples > 0) ? 94.0f : 44.0f;
+            const auto pill = juce::Rectangle<float>(static_cast<float>(getWidth()) * 0.5f - pillW * 0.5f,
+                                                     static_cast<float>(body.getBottom() - 16), pillW, 14.0f);
             g.setColour(Palette::background.withAlpha(0.85f));
             g.fillRoundedRectangle(pill, 3.0f);
             g.setColour(Palette::textDim);
@@ -459,6 +466,25 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
         }
     };
     addAndMakeVisible(switchPartnerButton_);
+
+    pdcToggleButton_.setClickingTogglesState(true);
+    pdcToggleButton_.setToggleState(song_.pdcEnabled(), juce::dontSendNotification);
+    pdcToggleButton_.setColour(juce::TextButton::buttonOnColourId, Palette::accent.withAlpha(0.35f));
+    pdcToggleButton_.setColour(juce::TextButton::textColourOnId, Palette::accent);
+    pdcToggleButton_.setTooltip("Plugin Delay Compensation (PDC): Automatically time-align channels for plugin & channel latency");
+    pdcToggleButton_.onClick = [this]()
+    {
+        if (onPushUndo)
+            onPushUndo();
+        const bool on = pdcToggleButton_.getToggleState();
+        song_.setPdcEnabled(on);
+        engine_.sequencer().setPdcEnabled(on);
+        rebuildRackModules();
+        if (onChainModified)
+            onChainModified();
+        repaint();
+    };
+    addAndMakeVisible(pdcToggleButton_);
 
     bypassAllButton_.setClickingTogglesState(true);
     bypassAllButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb45309));
@@ -800,6 +826,9 @@ void FxRackPanel::rebuildTargetSelector()
 
 void FxRackPanel::loadChainFromModel()
 {
+    if (auto* patMut = song_.findPattern(patternId_))
+        engine_.pluginHost().syncLatenciesIntoPattern(*patMut);
+
     chain_.clear();
     const auto* pat = song_.findPattern(patternId_);
     if (pat != nullptr)
@@ -815,6 +844,7 @@ void FxRackPanel::loadChainFromModel()
         }
     }
 
+    pdcToggleButton_.setToggleState(song_.pdcEnabled(), juce::dontSendNotification);
     rebuildRackModules();
     updateNavigationControls();
     repaint();
@@ -837,8 +867,20 @@ void FxRackPanel::commitChain(std::vector<PluginSlot> newChain)
     else if (scope_ == Scope::Clip)
         song_.setClipFxChain(patternId_, targetClip_, chain_);
 
-    if (const auto* pat = song_.findPattern(patternId_))
+    if (auto* pat = song_.findPattern(patternId_))
+    {
         engine_.pluginHost().syncFromPattern(*pat);
+        engine_.pluginHost().syncLatenciesIntoPattern(*pat);
+        if (scope_ == Scope::Master)
+            chain_ = pat->masterFxChain;
+        else if (scope_ == Scope::Track && targetTrack_ >= 0 && targetTrack_ < static_cast<int>(pat->tracks.size()))
+            chain_ = pat->tracks[static_cast<std::size_t>(targetTrack_)].fxChain;
+        else if (scope_ == Scope::Clip && targetClip_.isValid())
+        {
+            if (const Clip* c = song_.findClip(patternId_, targetClip_))
+                chain_ = c->fxChain;
+        }
+    }
 
     rebuildTargetSelector();
     rebuildRackModules();
@@ -995,7 +1037,7 @@ void FxRackPanel::rebuildRackModules()
             },
             [this, i]()
             {
-                if (!engine_.pluginHost().openPluginEditor(currentHostTargetKind(), currentHostTargetId(), i))
+                if (!engine_.pluginHost().openPluginEditor(currentHostTargetKind(), currentHostTargetId(), i, true))
                     statusLabel_.setText("Could not open plugin UI", juce::dontSendNotification);
             },
             [this, i]()
@@ -1052,6 +1094,16 @@ void FxRackPanel::rebuildRackModules()
                                                      [](const PluginSlot& s) { return s.bypassed; });
     bypassAllButton_.setEnabled(hasSlots);
     bypassAllButton_.setToggleState(allBypassed, juce::dontSendNotification);
+
+    const int chainLat = activeChainLatencySamples(chain_);
+    const int projLat = song_.totalProjectLatencySamples(patternId_);
+    const double sr = std::max(8000.0, engine_.sampleRate());
+    const double projMs = (static_cast<double>(projLat) * 1000.0) / sr;
+    pdcToggleButton_.setButtonText(projLat > 0 ? ("PDC (" + juce::String(projLat) + " smp)") : "PDC");
+    pdcToggleButton_.setTooltip("Plugin Delay Compensation: " + juce::String(song_.pdcEnabled() ? "ON" : "OFF") +
+                                " | Chain Latency: " + juce::String(chainLat) + " smp" +
+                                " | Total Project PDC: " + juce::String(projLat) + " smp (" +
+                                juce::String(projMs, 1) + " ms)");
 }
 
 void FxRackPanel::layoutRackModules()
@@ -1122,6 +1174,8 @@ void FxRackPanel::resized()
     topBar.removeFromLeft(10);
 
     bypassAllButton_.setBounds(topBar.removeFromRight(84));
+    topBar.removeFromRight(6);
+    pdcToggleButton_.setBounds(topBar.removeFromRight(92));
     topBar.removeFromRight(6);
 
     if (switchPartnerButton_.isVisible())

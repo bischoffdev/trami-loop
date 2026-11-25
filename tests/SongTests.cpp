@@ -513,6 +513,120 @@ TEST_CASE("Clip reverse flag can be set and toggled")
     REQUIRE_FALSE(song.isClipReversed(patId, clipId));
 }
 
+TEST_CASE("Reversing a clip reverses its multipoint curves and fades when Envelope Lock is enabled")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    const auto clipId = *song.placeClip(patId, 0, s, 0.0, 16.0);
+
+    // Configure volume & pan multipoint curves + fadeIn/fadeOut
+    song.setClipEnvelope(patId, clipId, 1.0f, 2.0f, 6.0f);
+    song.setClipVolumeEnvelope(patId, clipId, {
+        {0.0, 0.2f, EnvelopeCurve::Fast},
+        {0.25, 0.8f, EnvelopeCurve::Linear},
+        {1.0, 1.6f, EnvelopeCurve::Linear}
+    });
+    song.setClipPanEnvelope(patId, clipId, {
+        {0.0, -0.75f, EnvelopeCurve::Slow},
+        {1.0, 0.5f, EnvelopeCurve::Linear}
+    });
+
+    // 1. Envelope Lock ON (default): reversing clip reverses volumeEnvelope, panEnvelope, and swaps fadeIn/fadeOut
+    REQUIRE(song.envelopeLockEnabled());
+    REQUIRE(song.setClipReversed(patId, clipId, true));
+    const auto* clip = song.findClip(patId, clipId);
+    REQUIRE(clip != nullptr);
+    REQUIRE(clip->reversed == true);
+    REQUIRE(clip->fadeInSteps == Catch::Approx(6.0f));
+    REQUIRE(clip->fadeOutSteps == Catch::Approx(2.0f));
+    REQUIRE(clip->volumeEnvelope.size() == 3);
+    REQUIRE(clip->volumeEnvelope[0].position == Catch::Approx(0.0));
+    REQUIRE(clip->volumeEnvelope[0].value == Catch::Approx(1.6f));
+    REQUIRE(clip->volumeEnvelope[0].curve == EnvelopeCurve::Linear);
+    REQUIRE(clip->volumeEnvelope[1].position == Catch::Approx(0.75));
+    REQUIRE(clip->volumeEnvelope[1].value == Catch::Approx(0.8f));
+    REQUIRE(clip->volumeEnvelope[1].curve == EnvelopeCurve::Slow); // Fast inverted to Slow
+    REQUIRE(clip->volumeEnvelope[2].position == Catch::Approx(1.0));
+    REQUIRE(clip->volumeEnvelope[2].value == Catch::Approx(0.2f));
+
+    REQUIRE(clip->panEnvelope.size() == 2);
+    REQUIRE(clip->panEnvelope[0].position == Catch::Approx(0.0));
+    REQUIRE(clip->panEnvelope[0].value == Catch::Approx(0.5f));
+    REQUIRE(clip->panEnvelope[0].curve == EnvelopeCurve::Fast); // Slow inverted to Fast
+    REQUIRE(clip->panEnvelope[1].position == Catch::Approx(1.0));
+    REQUIRE(clip->panEnvelope[1].value == Catch::Approx(-0.75f));
+
+    // Reversing back restores the exact original multipoint curves and fades
+    REQUIRE(song.setClipReversed(patId, clipId, false));
+    REQUIRE(clip->fadeInSteps == Catch::Approx(2.0f));
+    REQUIRE(clip->fadeOutSteps == Catch::Approx(6.0f));
+    REQUIRE(clip->volumeEnvelope[0].value == Catch::Approx(0.2f));
+    REQUIRE(clip->volumeEnvelope[0].curve == EnvelopeCurve::Fast);
+    REQUIRE(clip->volumeEnvelope[1].position == Catch::Approx(0.25));
+    REQUIRE(clip->volumeEnvelope[2].value == Catch::Approx(1.6f));
+    REQUIRE(clip->panEnvelope[0].value == Catch::Approx(-0.75f));
+    REQUIRE(clip->panEnvelope[0].curve == EnvelopeCurve::Slow);
+
+    // 2. Envelope Lock OFF: reversing clip keeps multipoint curves and fades in their original timeline orientation
+    song.setEnvelopeLockEnabled(false);
+    REQUIRE(song.setClipReversed(patId, clipId, true));
+    REQUIRE(clip->reversed == true);
+    REQUIRE(clip->fadeInSteps == Catch::Approx(2.0f));
+    REQUIRE(clip->fadeOutSteps == Catch::Approx(6.0f));
+    REQUIRE(clip->volumeEnvelope[0].value == Catch::Approx(0.2f));
+    REQUIRE(clip->volumeEnvelope[1].position == Catch::Approx(0.25));
+    REQUIRE(clip->volumeEnvelope[2].value == Catch::Approx(1.6f));
+}
+
+TEST_CASE("Song computes per-channel and project PDC latency and compensation")
+{
+    Song song;
+    const auto s = song.addSample(makeLoop(2.0, 1));
+    const auto patId = song.addPattern("P", 1);
+    song.addTrackToPattern(patId, s);
+    song.addTrackToPattern(patId, s);
+
+    PluginSlot eqSlot;
+    eqSlot.name = "LinearPhaseEQ";
+    eqSlot.identifierString = "eq-id";
+    eqSlot.latencySamples = 512;
+
+    PluginSlot limSlot;
+    limSlot.name = "LookaheadLimiter";
+    limSlot.identifierString = "lim-id";
+    limSlot.latencySamples = 256;
+
+    // Track 0: 512 smp plugin + 128 smp manual channel latency = 640 smp
+    song.setTrackFxChain(patId, 0, {eqSlot});
+    song.setPatternTrackLatency(patId, 0, 128);
+
+    // Track 1: 256 smp plugin
+    song.setTrackFxChain(patId, 1, {limSlot});
+
+    // Track 2: 0 smp
+    // Master: 256 smp plugin
+    song.setMasterFxChain(patId, {limSlot});
+
+    REQUIRE(song.channelLatencySamples(patId, 0) == 640);
+    REQUIRE(song.channelLatencySamples(patId, 1) == 256);
+    REQUIRE(song.channelLatencySamples(patId, 2) == 0);
+    REQUIRE(song.maxChannelLatencySamples(patId) == 640);
+
+    // Per-channel compensation aligns all tracks to max (640 smp)
+    REQUIRE(song.channelCompensationSamples(patId, 0) == 0);
+    REQUIRE(song.channelCompensationSamples(patId, 1) == 384);
+    REQUIRE(song.channelCompensationSamples(patId, 2) == 640);
+    REQUIRE(song.masterLatencySamples(patId) == 256);
+    REQUIRE(song.totalProjectLatencySamples(patId) == 640 + 256);
+
+    // Disabling PDC zeroes channel compensation
+    song.setPdcEnabled(false);
+    REQUIRE(song.channelCompensationSamples(patId, 1) == 0);
+    REQUIRE(song.channelCompensationSamples(patId, 2) == 0);
+    REQUIRE(song.totalProjectLatencySamples(patId) == 0);
+}
+
 TEST_CASE("Clip transposition semitones can be set, clamped, and queried")
 {
     Song song;

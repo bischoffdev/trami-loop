@@ -9,6 +9,8 @@
 
 #include <functional>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace trami
@@ -25,12 +27,16 @@ public:
     void setPattern(PatternId patternId);
     void refreshFromModel();
     void setSelectedTrack(int trackIndex);
+    void setSelectedTracks(const std::unordered_set<int>& tracks, int primaryTrack = -1);
+    const std::unordered_set<int>& selectedTracks() const noexcept { return selectedTracks_; }
+    std::vector<int> targetTracksFor(int primaryTrack) const;
     void setMasterMeterLevels(float l, float r, bool clipped);
 
     std::function<void(int track)> onTrackMixChanged;
     std::function<void(int track)> onTrackFxClicked;
     std::function<void(int track)> onTrackFxBypass;
     std::function<void(int track)> onTrackSelected;
+    std::function<void(const std::unordered_set<int>& tracks, int primaryTrack)> onTracksSelected;
     std::function<void()> onMasterFxClicked;
     std::function<void()> onMasterFxBypass;
     std::function<void()> onMasterMixChanged;
@@ -55,6 +61,8 @@ private:
     AudioEngine& engine_;
     PatternId patternId_;
     int selectedTrack_ = -1;
+    std::unordered_set<int> selectedTracks_;
+    int lastClickedTrack_ = -1;
 
     juce::Viewport stripViewport_;
     juce::Component stripContainer_;

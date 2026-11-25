@@ -52,6 +52,7 @@ public:
     void tabLoopToMarkerSection(int direction) override;
     void clipReverseRequested(ClipId clipId) override;
     void clipsReverseRequested(const std::vector<ClipId>& clipIds) override;
+    void envelopeLockToggleRequested() override;
     void clipFxRequested(ClipId clipId) override;
     void clipFxBypassRequested(ClipId clipId) override;
     void clipsTransposeDelta(const std::vector<ClipId>& clipIds, int deltaSemitones) override;
@@ -94,6 +95,7 @@ public:
     using PushUndoCallback = std::function<void()>;
     void setOnPushUndo(PushUndoCallback cb) { onPushUndo_ = std::move(cb); }
     void setOnShowToast(std::function<void(const juce::String&)> cb) { onShowToast_ = std::move(cb); }
+    void setOnSongRenamed(std::function<void(const juce::String&)> cb) { onSongRenamed_ = std::move(cb); }
 
     void updateSampleSelector();
     void autoAdjustPatternLength();
@@ -146,6 +148,10 @@ public:
         float fadeInSteps = 0.0f;
         float fadeOutSteps = 0.0f;
         bool reversed = false;
+        int transposeSemitones = 0;
+        std::vector<EnvelopePoint> volumeEnvelope;
+        std::vector<EnvelopePoint> panEnvelope;
+        std::vector<PluginSlot> fxChain;
         double originalStartStep = 0.0;
         double span = 0.0;
     };
@@ -213,17 +219,17 @@ private:
     IconButton followToggle_{"Follow", IconButton::Icon::Follow, "Follow"};
 
     // Edit Tool & Action buttons
-    juce::TextButton selectToolButton_{"Select (V)"};
-    juce::TextButton paintToolButton_{"Paint (P)"};
-    juce::TextButton eraseToolButton_{"Erase (E)"};
-    juce::TextButton splitButton_{"Split (S)"};
-    juce::TextButton joinButton_{"Join (J)"};
-    juce::TextButton markerButton_{"+ Marker (M)"};
+    IconButton selectToolButton_{"Select", IconButton::Icon::SelectTool, "Select"};
+    IconButton paintToolButton_{"Paint", IconButton::Icon::PaintTool, "Paint"};
+    IconButton eraseToolButton_{"Erase", IconButton::Icon::EraseTool, "Erase"};
+    IconButton splitButton_{"Split", IconButton::Icon::SplitTool, "Split"};
+    IconButton joinButton_{"Join", IconButton::Icon::JoinClips, "Join"};
+    IconButton markerButton_{"Marker", IconButton::Icon::Marker, "Marker"};
 
     // Edit Mode Toggles
-    juce::TextButton autoCrossfadeToggle_{"X-Fade"};
-    juce::TextButton envLockToggle_{"Env Lock"};
-    juce::TextButton rippleEditToggle_{"Ripple"};
+    IconButton autoCrossfadeToggle_{"X-Fade", IconButton::Icon::Crossfade, "X-Fade"};
+    IconButton envLockToggle_{"Env Lock", IconButton::Icon::EnvelopeLock, "Env Lock"};
+    IconButton rippleEditToggle_{"Ripple", IconButton::Icon::RippleEdit, "Ripple"};
 
     double recordStartStep_ = 0.0;
     void setActiveTool(PatternGrid::EditTool tool);
@@ -236,6 +242,7 @@ private:
     bool needsInitialAutoFit_ = true;
     bool isUpdatingZoom_ = false;
     std::function<void(const juce::String&)> onShowToast_;
+    std::function<void(const juce::String&)> onSongRenamed_;
     std::unique_ptr<BottomDockPanel> dockPanel_;
     std::unique_ptr<ResizeSplitter> headerSplitter_;
     std::unique_ptr<ResizeSplitter> browserSplitter_;

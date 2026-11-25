@@ -31,6 +31,8 @@ public:
     bool autoCrossfadeEnabled() const noexcept { return autoCrossfadeEnabled_; }
     bool envelopeLockEnabled() const noexcept { return envelopeLockEnabled_; }
     bool rippleEditEnabled() const noexcept { return rippleEditEnabled_; }
+    bool pdcEnabled() const noexcept { return pdcEnabled_; }
+    int projectLatencySamples() const noexcept { return projectLatencySamples_; }
 
     void setBpm(double bpm) noexcept;
     void setSwing(double swing) noexcept;
@@ -41,6 +43,17 @@ public:
     void setAutoCrossfadeEnabled(bool enabled) noexcept { autoCrossfadeEnabled_ = enabled; }
     void setEnvelopeLockEnabled(bool enabled) noexcept { envelopeLockEnabled_ = enabled; }
     void setRippleEditEnabled(bool enabled) noexcept { rippleEditEnabled_ = enabled; }
+    void setPdcEnabled(bool enabled) noexcept { pdcEnabled_ = enabled; }
+    void setProjectLatencySamples(int samples) noexcept { projectLatencySamples_ = std::max(0, samples); }
+
+    // --- Plugin Delay Compensation (PDC) & Latency Queries -------------------
+    bool setPatternTrackLatency(PatternId pattern, int trackIndex, int latencySamples);
+    int patternTrackLatency(PatternId pattern, int trackIndex) const noexcept;
+    int channelLatencySamples(PatternId pattern, int trackIndex) const noexcept;
+    int maxChannelLatencySamples(PatternId pattern) const noexcept;
+    int channelCompensationSamples(PatternId pattern, int trackIndex) const noexcept;
+    int masterLatencySamples(PatternId pattern) const noexcept;
+    int totalProjectLatencySamples(PatternId pattern) const noexcept;
 
     /// Returns total transpose in semitones combining master project key conforming (for Loops with a rootNote)
     /// and the clip's individual transposeSemitones.
@@ -105,6 +118,9 @@ public:
     std::string patternTrackName(PatternId pattern, int trackIndex) const;
     bool setPatternTrackKind(PatternId pattern, int trackIndex, SampleKind kind);
     SampleKind patternTrackKind(PatternId pattern, int trackIndex) const;
+    bool setPatternTrackInput(PatternId pattern, int trackIndex, int inputChannel, bool stereo);
+    int patternTrackInputChannel(PatternId pattern, int trackIndex) const noexcept;
+    bool patternTrackInputStereo(PatternId pattern, int trackIndex) const noexcept;
 
     // --- Arrangement ---------------------------------------------------------
     std::optional<BlockId> placeBlock(int arrangerTrack, PatternId pattern, int startBar);
@@ -150,6 +166,8 @@ private:
     bool autoCrossfadeEnabled_ = true;
     bool envelopeLockEnabled_ = true;
     bool rippleEditEnabled_ = false;
+    bool pdcEnabled_ = true;
+    int projectLatencySamples_ = 0;
     float patternZoomX_ = 1.0f;
     float patternZoomY_ = 1.0f;
     float arrangerZoomX_ = 1.0f;

@@ -93,6 +93,7 @@ void PluginHost::prepareToPlay(double sampleRate, int maxBlockSize)
             {
                 s.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
                 s.instance->prepareToPlay(sampleRate_, maxBlockSize_);
+                s.latencySamples = std::max(0, s.instance->getLatencySamples());
             }
         }
     };
@@ -412,6 +413,7 @@ std::vector<PluginHost::HostedSlot> PluginHost::buildNextChain(
         HostedSlot hosted;
         hosted.identifierString = key;
         hosted.bypassed = mSlot.bypassed;
+        hosted.latencySamples = std::max(0, mSlot.latencySamples);
 
         auto it = std::find(availableKeys.begin(), availableKeys.end(), key);
         if (it != availableKeys.end())
@@ -422,6 +424,8 @@ std::vector<PluginHost::HostedSlot> PluginHost::buildNextChain(
         else
         {
             hosted.instance = instantiateSlot(mSlot);
+            if (hosted.instance != nullptr)
+                hosted.latencySamples = std::max(0, hosted.instance->getLatencySamples());
         }
 
         nextChain.push_back(std::move(hosted));
@@ -598,6 +602,33 @@ void PluginHost::captureChainStates(const std::vector<HostedSlot>& liveChain, st
             juce::MemoryBlock stateBlock;
             liveChain[i].instance->getStateInformation(stateBlock);
             modelChain[i].stateBase64 = stateBlock.toBase64Encoding().toStdString();
+            modelChain[i].latencySamples = std::max(0, liveChain[i].instance->getLatencySamples());
+        }
+    }
+}
+
+void PluginHost::syncChainLatencies(const std::vector<HostedSlot>& liveChain, std::vector<PluginSlot>& modelChain)
+{
+    const std::size_t n = std::min(liveChain.size(), modelChain.size());
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        if (liveChain[i].instance != nullptr)
+            modelChain[i].latencySamples = std::max(0, liveChain[i].instance->getLatencySamples());
+    }
+}
+
+void PluginHost::syncLatenciesIntoPattern(Pattern& pattern) const
+{
+    const juce::SpinLock::ScopedLockType lock(audioLock_);
+    syncChainLatencies(masterChain_, pattern.masterFxChain);
+    for (std::size_t t = 0; t < pattern.tracks.size(); ++t)
+    {
+        if (auto it = trackChains_.find(static_cast<int>(t)); it != trackChains_.end())
+            syncChainLatencies(it->second, pattern.tracks[t].fxChain);
+        for (auto& c : pattern.tracks[t].clips)
+        {
+            if (auto it = clipChains_.find(c.id.value); it != clipChains_.end())
+                syncChainLatencies(it->second, c.fxChain);
         }
     }
 }
@@ -617,7 +648,7 @@ void PluginHost::captureStatesIntoPattern(Pattern& pattern)
     }
 }
 
-bool PluginHost::openPluginEditor(TargetKind kind, std::uint32_t targetId, int slotIndex)
+bool PluginHost::openPluginEditor(TargetKind kind, std::uint32_t targetId, int slotIndex, bool toggleIfOpen)
 {
     std::vector<HostedSlot>* chain = nullptr;
     if (kind == TargetKind::Master)
@@ -642,12 +673,15 @@ bool PluginHost::openPluginEditor(TargetKind kind, std::uint32_t targetId, int s
     if (instance == nullptr)
         return false;
 
-    // Bring existing window to front if already open
-    for (auto& w : openEditors_)
+    // If already open: close it (toggle) or bring it to front
+    for (auto it = openEditors_.begin(); it != openEditors_.end(); ++it)
     {
-        if (w != nullptr && w->ownerInstance() == instance)
+        if (*it != nullptr && (*it)->ownerInstance() == instance)
         {
-            w->toFront(true);
+            if (toggleIfOpen)
+                openEditors_.erase(it);
+            else
+                (*it)->toFront(true);
             return true;
         }
     }
@@ -715,6 +749,7 @@ void PluginHost::processChain(std::vector<HostedSlot>& chain, float* left, float
 
             juce::AudioBuffer<float> view(scratchBuffer_.getArrayOfWritePointers(), reqCh, n);
             slot.instance->processBlock(view, emptyMidi_);
+            slot.latencySamples = std::max(0, slot.instance->getLatencySamples());
 
             if (outCh == 1)
                 std::memcpy(scratchBuffer_.getWritePointer(1), scratchBuffer_.getReadPointer(0),
@@ -757,6 +792,48 @@ void PluginHost::processMaster(float* left, float* right, int numSamples) noexce
     if (!tryLock.isLocked())
         return;
     processChain(masterChain_, left, right, numSamples);
+}
+
+int PluginHost::computeChainLatency(const std::vector<HostedSlot>& chain) noexcept
+{
+    int total = 0;
+    for (const auto& s : chain)
+    {
+        if (!s.bypassed)
+        {
+            const int lat = (s.instance != nullptr)
+                ? std::max(0, s.instance->getLatencySamples())
+                : std::max(0, s.latencySamples);
+            total += lat;
+        }
+    }
+    return total;
+}
+
+int PluginHost::clipLatencySamples(std::uint32_t clipId) const noexcept
+{
+    const juce::SpinLock::ScopedTryLockType tryLock(audioLock_);
+    if (!tryLock.isLocked())
+        return 0;
+    auto it = clipChains_.find(clipId);
+    return (it != clipChains_.end()) ? computeChainLatency(it->second) : 0;
+}
+
+int PluginHost::trackLatencySamples(int trackIndex) const noexcept
+{
+    const juce::SpinLock::ScopedTryLockType tryLock(audioLock_);
+    if (!tryLock.isLocked())
+        return 0;
+    auto it = trackChains_.find(trackIndex);
+    return (it != trackChains_.end()) ? computeChainLatency(it->second) : 0;
+}
+
+int PluginHost::masterLatencySamples() const noexcept
+{
+    const juce::SpinLock::ScopedTryLockType tryLock(audioLock_);
+    if (!tryLock.isLocked())
+        return 0;
+    return computeChainLatency(masterChain_);
 }
 
 } // namespace trami

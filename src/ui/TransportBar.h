@@ -140,6 +140,10 @@ private:
 
     // Master Project Key selector
     juce::ComboBox keyCombo_;
+
+    // Real-time System / Audio Performance indicator (CPU & Voice/Disk load bars)
+    class PerformanceIndicator;
+    std::unique_ptr<PerformanceIndicator> performanceIndicator_;
 };
 
 } // namespace trami

@@ -22,6 +22,7 @@ class TrackHeaderList : public juce::Component,
 public:
     using MixChangedCallback = std::function<void(int track)>;
     using TrackSelectedCallback = std::function<void(int track, SampleId sampleId)>;
+    using TracksSelectedCallback = std::function<void(const std::unordered_set<int>& tracks, int primaryTrack)>;
     using FileDroppedCallback = std::function<void(const juce::String& filePath, int track)>;
     using AddTrackCallback = std::function<void()>;
     using TrackTypeChangedCallback = std::function<void(int track, SampleKind newKind)>;
@@ -34,6 +35,7 @@ public:
     using TrackFxBypassCallback = std::function<void(int track)>;
     using TrackColorChangedCallback = std::function<void()>;
     using TrackPeakProvider = std::function<std::pair<float, float>(int track)>;
+    using InputChannelNamesProvider = std::function<juce::StringArray()>;
 
     TrackHeaderList(Song& song, PatternId patternId, MixChangedCallback onMixChanged);
     ~TrackHeaderList() override;
@@ -41,10 +43,14 @@ public:
     void setPattern(PatternId patternId);
     void updateFromModel();
     void setSelectedTrack(int track);
+    void setSelectedTracks(const std::unordered_set<int>& tracks, int primaryTrack = -1);
+    const std::unordered_set<int>& selectedTracks() const noexcept { return selectedTracks_; }
+    int firstSelectedTrack() const noexcept;
     void setTrackHeight(int height);
     int trackHeight() const noexcept { return trackHeight_; }
 
     void setOnTrackSelected(TrackSelectedCallback cb) { onTrackSelected_ = std::move(cb); }
+    void setOnTracksSelected(TracksSelectedCallback cb) { onTracksSelected_ = std::move(cb); }
     void setOnFileDropped(FileDroppedCallback cb) { onFileDropped_ = std::move(cb); }
     void setOnAddTrack(AddTrackCallback cb) { onAddTrack_ = std::move(cb); }
     void setOnTrackTypeChanged(TrackTypeChangedCallback cb) { onTrackTypeChanged_ = std::move(cb); }
@@ -58,6 +64,7 @@ public:
     void setOnTrackColorChanged(TrackColorChangedCallback cb) { onTrackColorChanged_ = std::move(cb); }
     void setOnPushUndo(std::function<void()> cb) { onPushUndo_ = std::move(cb); }
     void setTrackPeakProvider(TrackPeakProvider cb);
+    void setInputChannelNamesProvider(InputChannelNamesProvider cb) { inputChannelNamesProvider_ = std::move(cb); }
 
     std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onMouseWheel;
     std::function<void(const juce::MouseEvent&)> onMarqueeStart;
@@ -86,9 +93,9 @@ public:
     void itemDragExit(const SourceDetails& dragSourceDetails) override;
     void itemDropped(const SourceDetails& dragSourceDetails) override;
 
-    static constexpr int kHeaderWidth = 360;
+    static constexpr int kHeaderWidth = 400;
     static constexpr int kMinHeaderWidth = 280;
-    static constexpr int kMaxHeaderWidth = 560;
+    static constexpr int kMaxHeaderWidth = 580;
     static constexpr int kMinTrackHeight = 66;
 
 private:
@@ -104,6 +111,7 @@ private:
         std::unique_ptr<DAWMuteButton> muteButton;
         std::unique_ptr<DAWSoloButton> soloButton;
         std::unique_ptr<DAWArmButton> armButton;
+        std::unique_ptr<DAWInputButton> inputButton;
         std::unique_ptr<juce::Label> volLabel;
         std::unique_ptr<juce::Slider> volumeSlider;
         std::unique_ptr<juce::Label> panLabel;
@@ -114,11 +122,13 @@ private:
     int pointToTrack(juce::Point<int> pt) const;
     std::vector<int> targetTracksFor(int primaryTrack) const;
     void showColorPickerForTrack(int track, juce::Rectangle<int> anchorRect);
+    void showInputMenuForTrack(int track, juce::Component* anchorComp);
 
     Song& song_;
     PatternId patternId_;
     MixChangedCallback onMixChanged_;
     TrackSelectedCallback onTrackSelected_;
+    TracksSelectedCallback onTracksSelected_;
     FileDroppedCallback onFileDropped_;
     AddTrackCallback onAddTrack_;
     TrackTypeChangedCallback onTrackTypeChanged_;
@@ -132,6 +142,7 @@ private:
     TrackColorChangedCallback onTrackColorChanged_;
     std::function<void()> onPushUndo_;
     TrackPeakProvider trackPeakProvider_;
+    InputChannelNamesProvider inputChannelNamesProvider_;
     std::vector<float> peakL_;
     std::vector<float> peakR_;
     std::unordered_set<int> selectedTracks_;

@@ -150,10 +150,21 @@ void BottomDockPanel::refreshFromModel()
 
 void BottomDockPanel::selectTrack(int trackIndex)
 {
-    selectedTrack_ = trackIndex;
-    properties_->setTrack(patternId_, trackIndex);
-    mixer_->setSelectedTrack(trackIndex);
-    fxRack_->notifyTrackSelected(trackIndex);
+    std::unordered_set<int> sel;
+    if (trackIndex >= 0)
+        sel.insert(trackIndex);
+    selectTracks(sel, trackIndex);
+}
+
+void BottomDockPanel::selectTracks(const std::unordered_set<int>& tracks, int primaryTrack)
+{
+    selectedTrack_ = primaryTrack;
+    if (primaryTrack >= 0)
+    {
+        properties_->setTrack(patternId_, primaryTrack);
+        fxRack_->notifyTrackSelected(primaryTrack);
+    }
+    mixer_->setSelectedTracks(tracks, primaryTrack);
     updateContextLabel();
 }
 
@@ -235,7 +246,11 @@ void BottomDockPanel::updateContextLabel()
     {
         const auto* pat = song_.findPattern(patternId_);
         const int n = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
-        contextLabel_.setText(juce::String(n) + (n == 1 ? " Track + Master" : " Tracks + Master"),
+        const int selCount = static_cast<int>(mixer_->selectedTracks().size());
+        const juce::String selPrefix = (selCount > 1)
+            ? (juce::String(selCount) + " Tracks Selected · ")
+            : "";
+        contextLabel_.setText(selPrefix + juce::String(n) + (n == 1 ? " Track + Master" : " Tracks + Master"),
                               juce::dontSendNotification);
     }
     else if (activeTab_ == Tab::Fx)

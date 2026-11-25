@@ -155,6 +155,162 @@ void DAWArmButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlig
 }
 
 // ==============================================================================
+// DAWInputButton  (single recording source selector)
+// ==============================================================================
+DAWInputButton::DAWInputButton()
+{
+    setMouseCursor(juce::MouseCursor::PointingHandCursor);
+}
+
+void DAWInputButton::setInputState(int inputChannel, bool stereo, bool armed)
+{
+    const int clampedCh = std::max(0, inputChannel);
+    if (inputChannel_ != clampedCh || stereo_ != stereo || armed_ != armed)
+    {
+        inputChannel_ = clampedCh;
+        stereo_ = stereo;
+        armed_ = armed;
+        repaint();
+    }
+}
+
+void DAWInputButton::paint(juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced(0.5f);
+    constexpr float radius = 3.5f;
+
+    const juce::Colour baseBg = armed_ ? juce::Colour(0xff3a1d20) : juce::Colour(0xff262930);
+    const juce::Colour hoverBg = armed_ ? juce::Colour(0xff4d2529) : juce::Colour(0xff343943);
+    const juce::Colour borderCol = armed_ ? juce::Colour(0xffe53935).withAlpha(0.75f) : juce::Colour(0xff434952);
+
+    g.setColour(hover_ ? hoverBg : baseBg);
+    g.fillRoundedRectangle(r, radius);
+    g.setColour(borderCol);
+    g.drawRoundedRectangle(r, radius, 1.0f);
+
+    // Icon: single ring = mono source, two interlocking rings = stereo source
+    const juce::Colour iconCol = armed_
+        ? juce::Colour(0xffffb4ab)
+        : (stereo_ ? juce::Colour(0xff7dd3fc) : juce::Colour(0xfffcd34d));
+    g.setColour(iconCol);
+    const float cy = r.getCentreY();
+    const float circleR = 3.4f;
+    const float iconCx = 11.0f;
+    if (!stereo_)
+    {
+        g.drawEllipse(iconCx - circleR, cy - circleR, circleR * 2.0f, circleR * 2.0f, 1.35f);
+    }
+    else
+    {
+        const float offset = 2.3f;
+        g.drawEllipse(iconCx - offset - circleR, cy - circleR, circleR * 2.0f, circleR * 2.0f, 1.25f);
+        g.drawEllipse(iconCx + offset - circleR, cy - circleR, circleR * 2.0f, circleR * 2.0f, 1.25f);
+    }
+
+    // Source text: "In 3" (mono) or "In 3+4" (stereo)
+    const juce::String text = stereo_
+        ? ("In " + juce::String(inputChannel_ + 1) + "+" + juce::String(inputChannel_ + 2))
+        : ("In " + juce::String(inputChannel_ + 1));
+    g.setColour(armed_ ? juce::Colours::white : juce::Colour(0xffdcdce4));
+    g.setFont(Typography::bold(9.5f));
+    g.drawText(text, juce::Rectangle<int>(21, 0, std::max(10, getWidth() - 21 - 12), getHeight()),
+               juce::Justification::centredLeft, false);
+
+    // Dropdown chevron
+    const float chevX = static_cast<float>(getWidth()) - 6.0f;
+    juce::Path chev;
+    chev.startNewSubPath(chevX - 2.2f, cy - 1.0f);
+    chev.lineTo(chevX + 2.2f, cy - 1.0f);
+    chev.lineTo(chevX, cy + 1.8f);
+    chev.closeSubPath();
+    g.setColour(juce::Colours::white.withAlpha(0.65f));
+    g.fillPath(chev);
+}
+
+void DAWInputButton::mouseEnter(const juce::MouseEvent&)
+{
+    hover_ = true;
+    repaint();
+}
+
+void DAWInputButton::mouseExit(const juce::MouseEvent&)
+{
+    hover_ = false;
+    repaint();
+}
+
+void DAWInputButton::mouseDown(const juce::MouseEvent&)
+{
+    if (onSelectInputChannel)
+        onSelectInputChannel();
+}
+
+// ==============================================================================
+// DAWInputSources
+// ==============================================================================
+namespace DAWInputSources
+{
+namespace
+{
+juce::String deviceName(const juce::StringArray& names, int ch)
+{
+    if (ch >= 0 && ch < names.size() && names[ch].isNotEmpty())
+        return names[ch];
+    return {};
+}
+} // namespace
+
+juce::String sourceLabel(int channel, bool stereo, const juce::StringArray& deviceNames)
+{
+    if (!stereo)
+    {
+        const auto n = deviceName(deviceNames, channel);
+        return "Input " + juce::String(channel + 1) + " (Mono)" + (n.isNotEmpty() ? ("  -  " + n) : juce::String());
+    }
+    const auto n1 = deviceName(deviceNames, channel);
+    const auto n2 = deviceName(deviceNames, channel + 1);
+    return "Inputs " + juce::String(channel + 1) + "+" + juce::String(channel + 2) + " (Stereo)" +
+           ((n1.isNotEmpty() && n2.isNotEmpty()) ? ("  -  " + n1 + " & " + n2) : juce::String());
+}
+
+int channelCount(const juce::StringArray& deviceNames, int currentChannel, bool currentStereo)
+{
+    const int minNeeded = currentChannel + (currentStereo ? 2 : 1);
+    return std::max({2, deviceNames.size(), minNeeded});
+}
+
+void populateMenu(juce::PopupMenu& menu, const juce::StringArray& deviceNames, int currentChannel, bool currentStereo)
+{
+    const int n = channelCount(deviceNames, currentChannel, currentStereo);
+    for (int ch = 0; ch < n; ++ch)
+        menu.addItem(kMonoBase + ch, sourceLabel(ch, false, deviceNames), true,
+                     !currentStereo && currentChannel == ch);
+    menu.addSeparator();
+    for (int ch = 0; ch + 1 < n; ch += 2)
+        menu.addItem(kStereoBase + ch, sourceLabel(ch, true, deviceNames), true,
+                     currentStereo && currentChannel == ch);
+}
+
+bool decode(int id, int& channel, bool& stereo)
+{
+    if (id >= kMonoBase && id < kStereoBase)
+    {
+        channel = id - kMonoBase;
+        stereo = false;
+        return true;
+    }
+    if (id >= kStereoBase && id < kStereoBase + 100)
+    {
+        channel = id - kStereoBase;
+        stereo = true;
+        return true;
+    }
+    return false;
+}
+} // namespace DAWInputSources
+
+
+// ==============================================================================
 // DAWTrackIcons
 // ==============================================================================
 namespace DAWTrackIcons

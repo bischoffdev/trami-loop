@@ -460,6 +460,137 @@ void IconButton::drawIcon(juce::Graphics& g, juce::Rectangle<float> area, juce::
         g.strokePath(arrow, juce::PathStrokeType(1.6f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
         break;
     }
+    case Icon::SelectTool:
+    {
+        // Classic cursor arrow pointer
+        juce::Path p;
+        p.startNewSubPath(cx - 4.5f, cy - 6.5f);
+        p.lineTo(cx - 4.5f, cy + 4.5f);
+        p.lineTo(cx - 1.5f, cy + 1.8f);
+        p.lineTo(cx + 1.2f, cy + 6.5f);
+        p.lineTo(cx + 3.0f, cy + 5.5f);
+        p.lineTo(cx + 0.3f, cy + 0.9f);
+        p.lineTo(cx + 4.5f, cy + 0.9f);
+        p.closeSubPath();
+        g.fillPath(p);
+        break;
+    }
+    case Icon::PaintTool:
+    {
+        // Angled pencil / brush drawing on a baseline
+        juce::Path p;
+        p.startNewSubPath(cx + 3.2f, cy - 6.0f);
+        p.lineTo(cx + 5.8f, cy - 3.4f);
+        p.lineTo(cx - 1.5f, cy + 3.9f);
+        p.lineTo(cx - 5.2f, cy + 4.8f);
+        p.lineTo(cx - 4.3f, cy + 1.1f);
+        p.closeSubPath();
+        g.strokePath(p, juce::PathStrokeType(1.4f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+        g.drawLine(cx + 1.4f, cy - 4.2f, cx + 4.0f, cy - 1.6f, 1.2f);
+        g.drawLine(cx - 5.5f, cy + 6.2f, cx + 5.5f, cy + 6.2f, 1.3f);
+        break;
+    }
+    case Icon::EraseTool:
+    {
+        // Angled two-tone eraser block + baseline
+        juce::Path outer;
+        outer.startNewSubPath(cx - 5.5f, cy + 1.5f);
+        outer.lineTo(cx + 0.5f, cy - 4.5f);
+        outer.lineTo(cx + 5.5f, cy + 0.5f);
+        outer.lineTo(cx + 0.5f, cy + 5.0f);
+        outer.lineTo(cx - 3.5f, cy + 5.0f);
+        outer.closeSubPath();
+        g.strokePath(outer, juce::PathStrokeType(1.4f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+
+        juce::Path topHalf;
+        topHalf.startNewSubPath(cx - 2.5f, cy - 1.5f);
+        topHalf.lineTo(cx + 0.5f, cy - 4.5f);
+        topHalf.lineTo(cx + 5.5f, cy + 0.5f);
+        topHalf.lineTo(cx + 2.5f, cy + 3.2f);
+        topHalf.closeSubPath();
+        g.fillPath(topHalf);
+        g.drawLine(cx - 5.5f, cy + 5.5f, cx + 5.5f, cy + 5.5f, 1.3f);
+        break;
+    }
+    case Icon::SplitTool:
+    {
+        // Two clip halves separated by a vertical cut line with top/bottom slice ticks
+        g.drawRoundedRectangle(cx - 6.5f, cy - 3.2f, 4.8f, 6.4f, 1.0f, 1.3f);
+        g.drawRoundedRectangle(cx + 1.7f, cy - 3.2f, 4.8f, 6.4f, 1.0f, 1.3f);
+        g.drawLine(cx, cy - 6.2f, cx, cy + 6.2f, 1.5f);
+        juce::Path topTick;
+        topTick.addTriangle(cx - 2.2f, cy - 6.2f, cx + 2.2f, cy - 6.2f, cx, cy - 3.6f);
+        g.fillPath(topTick);
+        break;
+    }
+    case Icon::JoinClips:
+    {
+        // Two clip blocks merging together with a bridge connector
+        g.fillRoundedRectangle(cx - 6.5f, cy - 3.5f, 5.2f, 7.0f, 1.2f);
+        g.fillRoundedRectangle(cx + 1.3f, cy - 3.5f, 5.2f, 7.0f, 1.2f);
+        g.drawLine(cx - 2.5f, cy, cx + 2.5f, cy, 2.0f);
+        g.drawLine(cx, cy - 5.5f, cx, cy + 5.5f, 1.3f);
+        break;
+    }
+    case Icon::Marker:
+    {
+        // Timeline marker flagpole with pennant flag
+        g.drawLine(cx - 3.8f, cy - 6.0f, cx - 3.8f, cy + 6.2f, 1.6f);
+        juce::Path flag;
+        flag.startNewSubPath(cx - 3.2f, cy - 5.8f);
+        flag.lineTo(cx + 5.5f, cy - 2.5f);
+        flag.lineTo(cx - 3.2f, cy + 1.0f);
+        flag.closeSubPath();
+        g.fillPath(flag);
+        break;
+    }
+    case Icon::Crossfade:
+    {
+        // Crossing X-fade curves inside top/bottom rails
+        juce::Path fadeOut;
+        fadeOut.startNewSubPath(cx - 6.2f, cy - 4.5f);
+        fadeOut.cubicTo(cx - 1.5f, cy - 4.5f, cx + 1.5f, cy + 4.5f, cx + 6.2f, cy + 4.5f);
+        g.strokePath(fadeOut, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        juce::Path fadeIn;
+        fadeIn.startNewSubPath(cx - 6.2f, cy + 4.5f);
+        fadeIn.cubicTo(cx - 1.5f, cy + 4.5f, cx + 1.5f, cy - 4.5f, cx + 6.2f, cy - 4.5f);
+        g.strokePath(fadeIn, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        break;
+    }
+    case Icon::EnvelopeLock:
+    {
+        // Envelope breakpoint line on left + compact padlock on right
+        g.drawLine(cx - 6.5f, cy + 3.5f, cx - 2.8f, cy - 3.5f, 1.5f);
+        g.drawLine(cx - 2.8f, cy - 3.5f, cx + 0.5f, cy + 0.5f, 1.5f);
+        g.fillEllipse(cx - 7.5f, cy + 2.3f, 2.4f, 2.4f);
+        g.fillEllipse(cx - 4.0f, cy - 4.7f, 2.4f, 2.4f);
+
+        // Padlock body & shackle
+        g.fillRoundedRectangle(cx + 0.8f, cy - 0.2f, 5.8f, 5.2f, 1.0f);
+        juce::Path shackle;
+        shackle.addCentredArc(cx + 3.7f, cy - 0.5f, 1.8f, 2.2f, 0.0f,
+                              -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true);
+        g.strokePath(shackle,
+                     juce::PathStrokeType(1.3f),
+                     juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi, cx + 3.7f, cy - 0.5f));
+        break;
+    }
+    case Icon::RippleEdit:
+    {
+        // Left-pointing shift arrow + trailing clip blocks
+        juce::Path arr;
+        arr.startNewSubPath(cx - 1.0f, cy);
+        arr.lineTo(cx - 6.2f, cy);
+        arr.lineTo(cx - 3.4f, cy - 2.8f);
+        arr.startNewSubPath(cx - 6.2f, cy);
+        arr.lineTo(cx - 3.4f, cy + 2.8f);
+        g.strokePath(arr, juce::PathStrokeType(1.6f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+
+        g.fillRoundedRectangle(cx + 0.2f, cy - 4.2f, 2.8f, 8.4f, 0.8f);
+        g.fillRoundedRectangle(cx + 4.0f, cy - 4.2f, 2.8f, 8.4f, 0.8f);
+        break;
+    }
     }
 }
 

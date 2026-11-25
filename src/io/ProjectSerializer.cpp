@@ -6,6 +6,47 @@ namespace trami
 {
 namespace
 {
+double inferAudioSampleRate(const AudioData& raw, double durationSeconds) noexcept
+{
+    double rawRate = (durationSeconds > 0.0 && raw.numFrames() > 0)
+        ? std::round(static_cast<double>(raw.numFrames()) / durationSeconds)
+        : 44100.0;
+    for (double stdRate : {44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0, 32000.0, 22050.0})
+    {
+        if (std::abs(rawRate - stdRate) < stdRate * 0.006)
+        {
+            rawRate = stdRate;
+            break;
+        }
+    }
+    if (rawRate < 8000.0 || rawRate > 384000.0)
+        rawRate = 44100.0;
+    return rawRate;
+}
+
+bool writeWavFile(const std::filesystem::path& dest, const AudioData& raw, double sampleRate)
+{
+    if (raw.numChannels() <= 0 || raw.numFrames() <= 0)
+        return false;
+    juce::File jDest(juce::String::fromUTF8(dest.string().c_str()));
+    jDest.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(jDest);
+    auto writer = wav.createWriterFor(
+        stream, juce::AudioFormatWriterOptions{}
+                    .withSampleRate(sampleRate)
+                    .withNumChannels(raw.numChannels())
+                    .withBitsPerSample(24));
+    if (writer == nullptr)
+        return false;
+
+    juce::AudioBuffer<float> temp(raw.numChannels(), static_cast<int>(raw.numFrames()));
+    for (int ch = 0; ch < raw.numChannels(); ++ch)
+        temp.copyFrom(ch, 0, raw.channels[static_cast<std::size_t>(ch)].data(),
+                      static_cast<int>(raw.numFrames()));
+    return writer->writeFromAudioSampleBuffer(temp, 0, static_cast<int>(raw.numFrames()));
+}
+
 const char* kindToString(SampleKind kind) noexcept
 {
     if (kind == SampleKind::Loop)
@@ -74,6 +115,8 @@ juce::Array<juce::var> serializeFxChain(const std::vector<PluginSlot>& chain)
         obj->setProperty("identifierString", juce::String(s.identifierString));
         if (s.bypassed)
             obj->setProperty("bypassed", true);
+        if (s.latencySamples > 0)
+            obj->setProperty("latencySamples", s.latencySamples);
         if (!s.stateBase64.empty())
             obj->setProperty("stateBase64", juce::String(s.stateBase64));
         arr.add(obj.get());
@@ -94,6 +137,7 @@ std::vector<PluginSlot> deserializeFxChain(const juce::var& v)
             s.fileOrIdentifier = item.getProperty("fileOrIdentifier", "").toString().toStdString();
             s.identifierString = item.getProperty("identifierString", "").toString().toStdString();
             s.bypassed = static_cast<bool>(item.getProperty("bypassed", false));
+            s.latencySamples = std::max(0, static_cast<int>(item.getProperty("latencySamples", 0)));
             s.stateBase64 = item.getProperty("stateBase64", "").toString().toStdString();
             if (!s.identifierString.empty() || !s.fileOrIdentifier.empty())
                 chain.push_back(std::move(s));
@@ -117,6 +161,9 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
     root->setProperty("autoCrossfade", song.autoCrossfadeEnabled());
     root->setProperty("envelopeLock", song.envelopeLockEnabled());
     root->setProperty("rippleEdit", song.rippleEditEnabled());
+    root->setProperty("pdcEnabled", song.pdcEnabled());
+    if (song.projectLatencySamples() > 0)
+        root->setProperty("projectLatencySamples", song.projectLatencySamples());
     root->setProperty("masterVolume", song.masterVolume());
     if (song.projectRootNote() >= 0)
         root->setProperty("projectRootNote", song.projectRootNote());
@@ -159,31 +206,31 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
             obj->setProperty("copyright", juce::String(s.copyright));
         if (!s.comments.empty())
             obj->setProperty("comments", juce::String(s.comments));
+
+        auto raw = stretchCache.getRawAudio(s.id);
+        const double rawRate = (raw != nullptr) ? inferAudioSampleRate(*raw, s.durationSeconds) : 44100.0;
+        obj->setProperty("sampleRate", rawRate);
         sampleList.add(obj.get());
 
-        // Save raw audio to samples/ folder if not already there
+        // Save raw audio to samples/ folder at its actual in-memory sample rate (and overwrite if an existing file has a mismatched header/duration)
         const auto dest = projectDir / "samples" / s.fileName;
-        if (!std::filesystem::exists(dest))
+        if (raw != nullptr && raw->numFrames() > 0)
         {
-            if (auto raw = stretchCache.getRawAudio(s.id))
+            bool needsWrite = !std::filesystem::exists(dest);
+            if (!needsWrite)
             {
-                juce::File jDest(juce::String::fromUTF8(dest.string().c_str()));
-                juce::WavAudioFormat wav;
-                std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(jDest);
-                auto writer = wav.createWriterFor(
-                    stream, juce::AudioFormatWriterOptions{}
-                                .withSampleRate(44100.0)
-                                .withNumChannels(raw->numChannels())
-                                .withBitsPerSample(16));
-                if (writer != nullptr)
+                juce::File jExisting(juce::String::fromUTF8(dest.string().c_str()));
+                juce::WavAudioFormat wavFmt;
+                std::unique_ptr<juce::AudioFormatReader> reader(wavFmt.createReaderFor(jExisting.createInputStream().release(), true));
+                if (reader == nullptr ||
+                    std::abs(reader->sampleRate - rawRate) > 1.0 ||
+                    std::abs(static_cast<std::int64_t>(reader->lengthInSamples) - static_cast<std::int64_t>(raw->numFrames())) > 8)
                 {
-                    juce::AudioBuffer<float> temp(raw->numChannels(), static_cast<int>(raw->numFrames()));
-                    for (int ch = 0; ch < raw->numChannels(); ++ch)
-                        temp.copyFrom(ch, 0, raw->channels[static_cast<std::size_t>(ch)].data(),
-                                      static_cast<int>(raw->numFrames()));
-                    writer->writeFromAudioSampleBuffer(temp, 0, static_cast<int>(raw->numFrames()));
+                    needsWrite = true;
                 }
             }
+            if (needsWrite)
+                writeWavFile(dest, *raw, rawRate);
         }
     }
     root->setProperty("samples", sampleList);
@@ -209,6 +256,10 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
             trackObj->setProperty("solo", t.solo);
             if (t.armed)
                 trackObj->setProperty("armed", true);
+            if (t.inputChannel != 0)
+                trackObj->setProperty("inputChannel", t.inputChannel);
+            if (!t.inputStereo)
+                trackObj->setProperty("inputStereo", false);
             if (t.fxSend > 0.0f)
                 trackObj->setProperty("fxSend", t.fxSend);
             if (t.visibleEnvelope != TrackEnvelopeType::None)
@@ -219,6 +270,8 @@ bool ProjectSerializer::saveProject(const Song& song, const StretchCache& stretc
                 trackObj->setProperty("kindOverride", kindToString(*t.kindOverride));
             if (t.colorArgb != 0)
                 trackObj->setProperty("colorArgb", static_cast<juce::int64>(t.colorArgb));
+            if (t.latencySamples > 0)
+                trackObj->setProperty("latencySamples", t.latencySamples);
             if (!t.volumeAutomation.empty())
                 trackObj->setProperty("volumeAutomation", serializeEnvelope(t.volumeAutomation));
             if (!t.panAutomation.empty())
@@ -351,6 +404,10 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
         song.setEnvelopeLockEnabled(static_cast<bool>(json.getProperty("envelopeLock", true)));
     if (json.hasProperty("rippleEdit"))
         song.setRippleEditEnabled(static_cast<bool>(json.getProperty("rippleEdit", false)));
+    if (json.hasProperty("pdcEnabled"))
+        song.setPdcEnabled(static_cast<bool>(json.getProperty("pdcEnabled", true)));
+    if (json.hasProperty("projectLatencySamples"))
+        song.setProjectLatencySamples(static_cast<int>(json.getProperty("projectLatencySamples", 0)));
     song.setMasterVolume(static_cast<float>(json.getProperty("masterVolume", 1.0f)));
     if (json.hasProperty("projectRootNote"))
         song.setProjectRootNote(static_cast<int>(json.getProperty("projectRootNote", -1)));
@@ -411,7 +468,88 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                     sampleFilePath = altPath;
             }
 
-            auto audioOpt = importer.loadAudioData(sampleFilePath, sampleRate);
+            std::optional<AudioData> audioOpt;
+
+            // Detect and auto-repair legacy .trami projects where 48kHz (or device-rate) samples were saved with a 44.1kHz WAV header
+            if (s.durationSeconds > 0.05 && std::filesystem::exists(sampleFilePath, ec))
+            {
+                juce::File jSampleFile(juce::String::fromUTF8(sampleFilePath.string().c_str()));
+                juce::WavAudioFormat wavFmt;
+                std::unique_ptr<juce::AudioFormatReader> reader(
+                    wavFmt.createReaderFor(jSampleFile.createInputStream().release(), true));
+                if (reader != nullptr && reader->lengthInSamples > 0 && reader->sampleRate > 0.0)
+                {
+                    const double headerDur = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
+                    const double impliedRate = static_cast<double>(reader->lengthInSamples) / s.durationSeconds;
+                    double snappedImpliedRate = impliedRate;
+                    for (double stdRate : {44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0})
+                    {
+                        if (std::abs(impliedRate - stdRate) < stdRate * 0.01)
+                        {
+                            snappedImpliedRate = stdRate;
+                            break;
+                        }
+                    }
+
+                    if (std::abs(headerDur - s.durationSeconds) > s.durationSeconds * 0.03 &&
+                        std::abs(snappedImpliedRate - reader->sampleRate) > 1000.0 &&
+                        std::abs(static_cast<double>(reader->lengthInSamples) / snappedImpliedRate - s.durationSeconds) <
+                            s.durationSeconds * 0.015)
+                    {
+                        // Check if an untouched original WAV exists in baseDir / s.fileName
+                        const auto origInParent = baseDir / s.fileName;
+                        if (origInParent != sampleFilePath && std::filesystem::exists(origInParent, ec))
+                        {
+                            audioOpt = importer.loadAudioData(origInParent, sampleRate);
+                        }
+
+                        if (!audioOpt.has_value())
+                        {
+                            // Read the raw frames at their true implied sample rate (snappedImpliedRate) without double-resampling
+                            const int numCh = std::min(2, static_cast<int>(reader->numChannels));
+                            const int srcLen = static_cast<int>(reader->lengthInSamples);
+                            juce::AudioBuffer<float> tempBuf(numCh, srcLen);
+                            reader->read(&tempBuf, 0, srcLen, 0, true, numCh > 1);
+                            reader.reset();
+
+                            AudioData recovered;
+                            recovered.channels.resize(static_cast<std::size_t>(numCh));
+                            if (std::abs(snappedImpliedRate - sampleRate) < 1.0)
+                            {
+                                for (int ch = 0; ch < numCh; ++ch)
+                                {
+                                    const float* src = tempBuf.getReadPointer(ch);
+                                    recovered.channels[static_cast<std::size_t>(ch)].assign(src, src + srcLen);
+                                }
+                            }
+                            else
+                            {
+                                const double ratio = snappedImpliedRate / sampleRate;
+                                const int destLen = static_cast<int>(std::round(static_cast<double>(srcLen) / ratio));
+                                for (int ch = 0; ch < numCh; ++ch)
+                                {
+                                    auto& dest = recovered.channels[static_cast<std::size_t>(ch)];
+                                    dest.resize(static_cast<std::size_t>(destLen));
+                                    juce::LagrangeInterpolator interp;
+                                    interp.process(ratio, tempBuf.getReadPointer(ch), dest.data(), destLen);
+                                }
+                            }
+                            audioOpt = std::move(recovered);
+                        }
+                        else
+                        {
+                            reader.reset();
+                        }
+
+                        // Permanently repair the WAV header on disk in samples/
+                        if (audioOpt.has_value())
+                            writeWavFile(sampleFilePath, *audioOpt, sampleRate);
+                    }
+                }
+            }
+
+            if (!audioOpt.has_value())
+                audioOpt = importer.loadAudioData(sampleFilePath, sampleRate);
             s.missing = !audioOpt.has_value();
 
             const auto newId = song.addSample(s);
@@ -454,6 +592,10 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                         trk.muted = tVar.getProperty("muted", false);
                         trk.solo = tVar.getProperty("solo", false);
                         trk.armed = tVar.getProperty("armed", false);
+                        if (tVar.hasProperty("inputChannel"))
+                            trk.inputChannel = std::clamp(static_cast<int>(tVar.getProperty("inputChannel", 0)), 0, 31);
+                        if (tVar.hasProperty("inputStereo"))
+                            trk.inputStereo = static_cast<bool>(tVar.getProperty("inputStereo", true));
                         trk.fxSend = static_cast<float>(tVar.getProperty("fxSend", 0.0f));
                         if (tVar.hasProperty("visibleEnvelope"))
                         {
@@ -472,6 +614,8 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                             trk.kindOverride = kindFromString(tVar["kindOverride"].toString());
                         if (tVar.hasProperty("colorArgb"))
                             trk.colorArgb = static_cast<std::uint32_t>(static_cast<juce::int64>(tVar["colorArgb"]));
+                        if (tVar.hasProperty("latencySamples"))
+                            trk.latencySamples = std::max(0, static_cast<int>(tVar["latencySamples"]));
                         if (tVar.hasProperty("volumeAutomation"))
                             trk.volumeAutomation = deserializeEnvelope(tVar["volumeAutomation"]);
                         if (tVar.hasProperty("panAutomation"))
@@ -496,13 +640,14 @@ std::optional<Song> ProjectSerializer::loadProject(const std::filesystem::path& 
                             {
                                 if (auto placedClipId = song.placeClip(newPatId, trackIdx, sampleIdMap[oldSampleId], startStep, lengthSteps, offsetSteps))
                                 {
+                                    // Set reversed flag BEFORE envelopes/fades so loading does not re-flip serialized curves
+                                    if (static_cast<bool>(cVar.getProperty("reversed", false)))
+                                        song.setClipReversed(newPatId, *placedClipId, true);
                                     const float gain = static_cast<float>(cVar.getProperty("gain", 1.0f));
                                     const float fadeIn = static_cast<float>(cVar.getProperty("fadeInSteps", 0.0f));
                                     const float fadeOut = static_cast<float>(cVar.getProperty("fadeOutSteps", 0.0f));
                                     if (gain != 1.0f || fadeIn > 0.0f || fadeOut > 0.0f)
                                         song.setClipEnvelope(newPatId, *placedClipId, gain, fadeIn, fadeOut);
-                                    if (static_cast<bool>(cVar.getProperty("reversed", false)))
-                                        song.setClipReversed(newPatId, *placedClipId, true);
                                     const int transpose = static_cast<int>(cVar.getProperty("transposeSemitones", 0));
                                     if (transpose != 0)
                                         song.setClipTranspose(newPatId, *placedClipId, transpose);

@@ -79,10 +79,16 @@ public:
     }
 };
 
-void drawVerticalStereoMeter(juce::Graphics& g, juce::Rectangle<float> area, float peakL, float peakR)
+void drawVerticalStereoMeter(juce::Graphics& g, juce::Rectangle<float> area, float peakL, float peakR,
+                             bool armed = false, bool monoInput = false)
 {
     g.setColour(juce::Colour(0xff111115));
     g.fillRoundedRectangle(area, 2.0f);
+    if (armed)
+    {
+        g.setColour(Palette::danger.withAlpha(0.45f));
+        g.drawRoundedRectangle(area, 2.0f, 1.0f);
+    }
 
     const float pad = 1.5f;
     const float gap = 1.5f;
@@ -90,7 +96,7 @@ void drawVerticalStereoMeter(juce::Graphics& g, juce::Rectangle<float> area, flo
     const float innerH = std::max(1.0f, area.getHeight() - pad * 2.0f);
     const float bottomY = area.getBottom() - pad;
 
-    auto drawChan = [&](float cx, float level)
+    auto drawChan = [&](float cx, float w, float level)
     {
         if (level <= 0.001f)
             return;
@@ -105,11 +111,18 @@ void drawVerticalStereoMeter(juce::Graphics& g, juce::Rectangle<float> area, flo
         grad.addColour(0.68, juce::Colour(0xff84cc16));
         grad.addColour(0.84, juce::Colour(0xfff59e0b));
         g.setGradientFill(grad);
-        g.fillRect(cx, bottomY - fillH, chW, fillH);
+        g.fillRect(cx, bottomY - fillH, w, fillH);
     };
 
-    drawChan(area.getX() + pad, peakL);
-    drawChan(area.getX() + pad + chW + gap, peakR);
+    if (armed && monoInput)
+    {
+        drawChan(area.getX() + pad, std::max(4.0f, area.getWidth() - pad * 2.0f), std::max(peakL, peakR));
+    }
+    else
+    {
+        drawChan(area.getX() + pad, chW, peakL);
+        drawChan(area.getX() + pad + chW + gap, chW, peakR);
+    }
 }
 
 } // namespace
@@ -136,49 +149,110 @@ public:
         };
         addAndMakeVisible(fxButton_);
 
-        muteButton_.setTooltip("Mute Track");
+        muteButton_.setTooltip("Mute Track (applies to all selected tracks)");
         muteButton_.onClick = [this]()
         {
             if (auto* pat = owner_.song_.findPattern(owner_.patternId_))
             {
-                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
-                    pat->tracks[static_cast<std::size_t>(trackIndex_)].muted = muteButton_.getToggleState();
+                const bool muted = muteButton_.getToggleState();
+                for (int idx : owner_.targetTracksFor(trackIndex_))
+                {
+                    pat->tracks[static_cast<std::size_t>(idx)].muted = muted;
+                    if (owner_.onTrackMixChanged)
+                        owner_.onTrackMixChanged(idx);
+                }
+                owner_.refreshFromModel();
             }
-            if (owner_.onTrackMixChanged)
-                owner_.onTrackMixChanged(trackIndex_);
         };
         addAndMakeVisible(muteButton_);
 
-        soloButton_.setTooltip("Solo Track");
+        soloButton_.setTooltip("Solo Track (applies to all selected tracks)");
         soloButton_.onClick = [this]()
         {
             if (auto* pat = owner_.song_.findPattern(owner_.patternId_))
             {
-                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
-                    pat->tracks[static_cast<std::size_t>(trackIndex_)].solo = soloButton_.getToggleState();
+                const bool solo = soloButton_.getToggleState();
+                for (int idx : owner_.targetTracksFor(trackIndex_))
+                {
+                    pat->tracks[static_cast<std::size_t>(idx)].solo = solo;
+                    if (owner_.onTrackMixChanged)
+                        owner_.onTrackMixChanged(idx);
+                }
+                owner_.refreshFromModel();
             }
-            if (owner_.onTrackMixChanged)
-                owner_.onTrackMixChanged(trackIndex_);
         };
         addAndMakeVisible(soloButton_);
+
+        armButton_.setTooltip("Arm Track for Recording (applies to all selected tracks)");
+        armButton_.onClick = [this]()
+        {
+            if (auto* pat = owner_.song_.findPattern(owner_.patternId_))
+            {
+                const bool armed = armButton_.getToggleState();
+                for (int idx : owner_.targetTracksFor(trackIndex_))
+                {
+                    pat->tracks[static_cast<std::size_t>(idx)].armed = armed;
+                    if (owner_.onTrackMixChanged)
+                        owner_.onTrackMixChanged(idx);
+                }
+                owner_.refreshFromModel();
+            }
+        };
+        addAndMakeVisible(armButton_);
+
+        inputButton_.onSelectInputChannel = [this]() { showInputMenu(); };
+        addAndMakeVisible(inputButton_);
 
         panSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
         panSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
         panSlider_.setRange(-1.0, 1.0, 0.01);
         panSlider_.setDoubleClickReturnValue(true, 0.0);
         panSlider_.setScrollWheelEnabled(false);
-        panSlider_.setTooltip("Track Pan (Double-click to center)");
+        panSlider_.setTooltip("Track Pan (Double-click to center; adjusts selected tracks relatively)");
+        panSlider_.onDragStart = [this]()
+        {
+            dragStartPans_.clear();
+            if (const auto* pat = owner_.song_.findPattern(owner_.patternId_))
+            {
+                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
+                {
+                    dragAnchorPan_ = pat->tracks[static_cast<std::size_t>(trackIndex_)].mix.pan;
+                    for (int idx : owner_.targetTracksFor(trackIndex_))
+                        dragStartPans_[idx] = pat->tracks[static_cast<std::size_t>(idx)].mix.pan;
+                }
+            }
+        };
+        panSlider_.onDragEnd = [this]() { dragStartPans_.clear(); };
         panSlider_.onValueChange = [this]()
         {
             const float pan = static_cast<float>(panSlider_.getValue());
             if (auto* pat = owner_.song_.findPattern(owner_.patternId_))
             {
-                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
-                    pat->tracks[static_cast<std::size_t>(trackIndex_)].mix.pan = pan;
+                const auto targets = owner_.targetTracksFor(trackIndex_);
+                if (targets.size() > 1 && !dragStartPans_.empty())
+                {
+                    const float delta = pan - dragAnchorPan_;
+                    for (int idx : targets)
+                    {
+                        const float base = dragStartPans_.count(idx)
+                            ? dragStartPans_[idx]
+                            : pat->tracks[static_cast<std::size_t>(idx)].mix.pan;
+                        pat->tracks[static_cast<std::size_t>(idx)].mix.pan = std::clamp(base + delta, -1.0f, 1.0f);
+                        if (owner_.onTrackMixChanged)
+                            owner_.onTrackMixChanged(idx);
+                    }
+                    owner_.refreshFromModel();
+                    return;
+                }
+                for (int idx : targets)
+                {
+                    pat->tracks[static_cast<std::size_t>(idx)].mix.pan = pan;
+                    if (owner_.onTrackMixChanged)
+                        owner_.onTrackMixChanged(idx);
+                }
             }
             panLabel_.setText(formatPan(pan), juce::dontSendNotification);
-            if (owner_.onTrackMixChanged)
-                owner_.onTrackMixChanged(trackIndex_);
+            owner_.refreshFromModel();
         };
         addAndMakeVisible(panSlider_);
 
@@ -192,18 +266,51 @@ public:
         fader_.setRange(0.0, 2.0, 0.01);
         fader_.setDoubleClickReturnValue(true, 1.0);
         fader_.setScrollWheelEnabled(false);
-        fader_.setTooltip("Track Volume (Double-click to reset to 0.0 dB)");
+        fader_.setTooltip("Track Volume (Double-click to reset to 0.0 dB; adjusts selected tracks relatively)");
+        fader_.onDragStart = [this]()
+        {
+            dragStartVols_.clear();
+            if (const auto* pat = owner_.song_.findPattern(owner_.patternId_))
+            {
+                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
+                {
+                    dragAnchorVol_ = pat->tracks[static_cast<std::size_t>(trackIndex_)].mix.volume;
+                    for (int idx : owner_.targetTracksFor(trackIndex_))
+                        dragStartVols_[idx] = pat->tracks[static_cast<std::size_t>(idx)].mix.volume;
+                }
+            }
+        };
+        fader_.onDragEnd = [this]() { dragStartVols_.clear(); };
         fader_.onValueChange = [this]()
         {
             const float vol = static_cast<float>(fader_.getValue());
             if (auto* pat = owner_.song_.findPattern(owner_.patternId_))
             {
-                if (trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
-                    pat->tracks[static_cast<std::size_t>(trackIndex_)].mix.volume = vol;
+                const auto targets = owner_.targetTracksFor(trackIndex_);
+                if (targets.size() > 1 && !dragStartVols_.empty())
+                {
+                    const float delta = vol - dragAnchorVol_;
+                    for (int idx : targets)
+                    {
+                        const float base = dragStartVols_.count(idx)
+                            ? dragStartVols_[idx]
+                            : pat->tracks[static_cast<std::size_t>(idx)].mix.volume;
+                        pat->tracks[static_cast<std::size_t>(idx)].mix.volume = std::clamp(base + delta, 0.0f, 2.0f);
+                        if (owner_.onTrackMixChanged)
+                            owner_.onTrackMixChanged(idx);
+                    }
+                    owner_.refreshFromModel();
+                    return;
+                }
+                for (int idx : targets)
+                {
+                    pat->tracks[static_cast<std::size_t>(idx)].mix.volume = vol;
+                    if (owner_.onTrackMixChanged)
+                        owner_.onTrackMixChanged(idx);
+                }
             }
             volLabel_.setText(formatDb(vol), juce::dontSendNotification);
-            if (owner_.onTrackMixChanged)
-                owner_.onTrackMixChanged(trackIndex_);
+            owner_.refreshFromModel();
         };
         addAndMakeVisible(fader_);
 
@@ -285,6 +392,17 @@ public:
 
         muteButton_.setToggleState(trk.muted, juce::dontSendNotification);
         soloButton_.setToggleState(trk.solo, juce::dontSendNotification);
+        armButton_.setToggleState(trk.armed, juce::dontSendNotification);
+        armed_ = trk.armed;
+        monoInput_ = !trk.inputStereo;
+
+        inputButton_.setInputState(trk.inputChannel, trk.inputStereo, trk.armed);
+        inputButton_.setTooltip(
+            "Track " + juce::String(trackIndex_ + 1) + " Recording Source: " +
+            (trk.inputStereo
+                 ? ("Inputs " + juce::String(trk.inputChannel + 1) + "+" + juce::String(trk.inputChannel + 2) + " (Stereo)")
+                 : ("Input " + juce::String(trk.inputChannel + 1) + " (Mono)")) +
+            " - click to choose a different source (does not arm the track)");
 
         if (!panSlider_.isMouseButtonDown())
             panSlider_.setValue(trk.mix.pan, juce::dontSendNotification);
@@ -314,13 +432,59 @@ public:
             fxButton_.setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
             fxButton_.setColour(juce::TextButton::textColourOffId, Palette::textDim);
         }
-        fxButton_.setTooltip("Track " + juce::String(trackIndex_ + 1) + " FX Chain (" +
-                             juce::String(trk.fxChain.size()) + " plugins) - Right-click to bypass");
+        const int chLat = owner_.song_.channelLatencySamples(owner_.patternId_, trackIndex_);
+        const int chComp = owner_.song_.channelCompensationSamples(owner_.patternId_, trackIndex_);
+        juce::String tip = "Track " + juce::String(trackIndex_ + 1) + " FX Chain (" +
+                           juce::String(trk.fxChain.size()) + " plugins";
+        if (chLat > 0 || chComp > 0)
+            tip += ", Latency: " + juce::String(chLat) + " smp, PDC Comp: +" + juce::String(chComp) + " smp";
+        tip += ") - Right-click to bypass";
+        fxButton_.setTooltip(tip);
         repaint();
     }
 
-    void mouseDown(const juce::MouseEvent&) override
+    void mouseDown(const juce::MouseEvent& e) override
     {
+        // The strip listens to its own events as well as nested children, so the same click can be delivered twice
+        // (which would toggle a Cmd/Ctrl+click selection on and straight back off).
+        if (e.eventTime == lastHandledMouseTime_)
+            return;
+        lastHandledMouseTime_ = e.eventTime;
+
+        const bool isChildClick = (e.eventComponent != this);
+        const bool hasMod = e.mods.isCommandDown() || e.mods.isCtrlDown() || e.mods.isShiftDown();
+        if (isChildClick && !hasMod && owner_.selectedTracks_.count(trackIndex_) > 0)
+            return;
+
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        {
+            if (owner_.selectedTracks_.count(trackIndex_) > 0)
+                owner_.selectedTracks_.erase(trackIndex_);
+            else
+                owner_.selectedTracks_.insert(trackIndex_);
+            owner_.lastClickedTrack_ = trackIndex_;
+        }
+        else if (e.mods.isShiftDown() && owner_.lastClickedTrack_ >= 0)
+        {
+            const int lo = std::min(owner_.lastClickedTrack_, trackIndex_);
+            const int hi = std::max(owner_.lastClickedTrack_, trackIndex_);
+            owner_.selectedTracks_.clear();
+            for (int i = lo; i <= hi; ++i)
+                owner_.selectedTracks_.insert(i);
+        }
+        else
+        {
+            owner_.selectedTracks_.clear();
+            owner_.selectedTracks_.insert(trackIndex_);
+            owner_.lastClickedTrack_ = trackIndex_;
+        }
+        owner_.selectedTrack_ = trackIndex_;
+
+        for (auto& s : owner_.strips_)
+            s->setSelected(owner_.selectedTracks_.count(s->trackIndex()) > 0);
+
+        if (owner_.onTracksSelected)
+            owner_.onTracksSelected(owner_.selectedTracks_, trackIndex_);
         if (owner_.onTrackSelected)
             owner_.onTrackSelected(trackIndex_);
     }
@@ -328,8 +492,13 @@ public:
     void paint(juce::Graphics& g) override
     {
         const auto b = getLocalBounds();
-        g.setColour(selected_ ? Palette::surface.brighter(0.06f) : Palette::panelBackground);
+        g.setColour(selected_ ? Palette::surface.brighter(0.10f) : Palette::panelBackground);
         g.fillRect(b);
+        if (selected_)
+        {
+            g.setColour(accent_.withAlpha(0.14f));
+            g.fillRect(b);
+        }
 
         // Top color bar
         g.setColour(accent_);
@@ -341,8 +510,8 @@ public:
 
         if (selected_)
         {
-            g.setColour(accent_.withAlpha(0.55f));
-            g.drawRect(b.reduced(0, 0), 1);
+            g.setColour(accent_.withAlpha(0.85f));
+            g.drawRect(b.reduced(0, 0), 2);
         }
 
         // Track number + name header
@@ -353,7 +522,7 @@ public:
 
         // Meter
         if (!meterRect_.isEmpty())
-            drawVerticalStereoMeter(g, meterRect_, peakL_, peakR_);
+            drawVerticalStereoMeter(g, meterRect_, peakL_, peakR_, armed_, monoInput_);
     }
 
     void resized() override
@@ -363,15 +532,22 @@ public:
 
         // FX button
         fxButton_.setBounds(area.removeFromTop(18));
-        area.removeFromTop(4);
+        area.removeFromTop(3);
 
         // M & S side by side
-        auto msRow = area.removeFromTop(19);
+        auto msRow = area.removeFromTop(18);
         const int halfW = (msRow.getWidth() - 3) / 2;
         muteButton_.setBounds(msRow.removeFromLeft(halfW));
         msRow.removeFromLeft(3);
         soloButton_.setBounds(msRow);
-        area.removeFromTop(4);
+        area.removeFromTop(3);
+
+        // Arm & Input/Mono-Stereo selector row
+        auto inRow = area.removeFromTop(18);
+        armButton_.setBounds(inRow.removeFromLeft(19));
+        inRow.removeFromLeft(3);
+        inputButton_.setBounds(inRow);
+        area.removeFromTop(3);
 
         // Pan slider + readout
         auto panRow = area.removeFromTop(18);
@@ -391,19 +567,62 @@ public:
     }
 
 private:
+    void showInputMenu()
+    {
+        const auto* pat = owner_.song_.findPattern(owner_.patternId_);
+        if (pat == nullptr || trackIndex_ < 0 || trackIndex_ >= static_cast<int>(pat->tracks.size()))
+            return;
+
+        const auto& trk = pat->tracks[static_cast<std::size_t>(trackIndex_)];
+        const juce::StringArray chNames = owner_.engine_.inputChannelNames();
+
+        juce::PopupMenu m;
+        m.addSectionHeader("Recording Source");
+        DAWInputSources::populateMenu(m, chNames, trk.inputChannel, trk.inputStereo);
+
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&inputButton_),
+                        [this](int res)
+                        {
+                            int newCh = 0;
+                            bool newStereo = true;
+                            if (!DAWInputSources::decode(res, newCh, newStereo))
+                                return;
+                            if (owner_.song_.findPattern(owner_.patternId_) == nullptr)
+                                return;
+
+                            // Only change the source; never touch the arm state.
+                            for (int idx : owner_.targetTracksFor(trackIndex_))
+                            {
+                                owner_.song_.setPatternTrackInput(owner_.patternId_, idx, newCh, newStereo);
+                                if (owner_.onTrackMixChanged)
+                                    owner_.onTrackMixChanged(idx);
+                            }
+                            owner_.refreshFromModel();
+                        });
+    }
+
     MixerPanel& owner_;
     int trackIndex_ = 0;
     bool selected_ = false;
+    bool armed_ = false;
+    bool monoInput_ = false;
     juce::Colour accent_{Palette::accent};
     juce::String trackName_;
 
     MixerFxButton fxButton_;
     DAWMuteButton muteButton_;
     DAWSoloButton soloButton_;
+    DAWArmButton armButton_;
+    DAWInputButton inputButton_;
     juce::Slider panSlider_;
     juce::Label panLabel_;
     juce::Slider fader_;
     juce::Label volLabel_;
+    std::unordered_map<int, float> dragStartVols_;
+    float dragAnchorVol_ = 1.0f;
+    std::unordered_map<int, float> dragStartPans_;
+    float dragAnchorPan_ = 0.0f;
+    juce::Time lastHandledMouseTime_;
 
     juce::Rectangle<float> meterRect_;
     float peakL_ = 0.0f;
@@ -523,6 +742,10 @@ public:
             fxButton_.setColour(juce::TextButton::buttonColourId, Palette::surface.brighter(0.08f));
             fxButton_.setColour(juce::TextButton::textColourOffId, Palette::textDim);
         }
+        const int projLat = owner_.song_.totalProjectLatencySamples(owner_.patternId_);
+        fxButton_.setTooltip("Master Bus FX Chain (" +
+                             juce::String(pat != nullptr ? pat->masterFxChain.size() : 0) +
+                             " plugins, Project PDC: " + juce::String(projLat) + " smp) - Right-click to bypass");
 
         bool allMuted = false;
         bool allSoloed = false;
@@ -676,18 +899,61 @@ void MixerPanel::refreshFromModel()
 
     for (auto& s : strips_)
     {
-        s->setSelected(s->trackIndex() == selectedTrack_);
+        s->setSelected(selectedTracks_.count(s->trackIndex()) > 0);
         s->syncFromModel();
     }
     if (masterStrip_ != nullptr)
         masterStrip_->syncFromModel();
 }
 
+std::vector<int> MixerPanel::targetTracksFor(int primaryTrack) const
+{
+    const auto* pat = song_.findPattern(patternId_);
+    const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
+    if (selectedTracks_.size() > 1 && selectedTracks_.count(primaryTrack) > 0)
+    {
+        std::vector<int> result;
+        result.reserve(selectedTracks_.size());
+        for (int idx : selectedTracks_)
+            if (idx >= 0 && idx < numTracks)
+                result.push_back(idx);
+        if (!result.empty())
+            return result;
+    }
+    if (primaryTrack >= 0 && primaryTrack < numTracks)
+        return {primaryTrack};
+    return {};
+}
+
 void MixerPanel::setSelectedTrack(int trackIndex)
 {
-    selectedTrack_ = trackIndex;
+    std::unordered_set<int> sel;
+    if (trackIndex >= 0)
+        sel.insert(trackIndex);
+    setSelectedTracks(sel, trackIndex);
+}
+
+void MixerPanel::setSelectedTracks(const std::unordered_set<int>& tracks, int primaryTrack)
+{
+    selectedTracks_ = tracks;
+    if (primaryTrack >= 0)
+    {
+        selectedTrack_ = primaryTrack;
+        lastClickedTrack_ = primaryTrack;
+    }
+    else if (!selectedTracks_.empty())
+    {
+        selectedTrack_ = *selectedTracks_.begin();
+        lastClickedTrack_ = selectedTrack_;
+    }
+    else
+    {
+        selectedTrack_ = -1;
+        lastClickedTrack_ = -1;
+    }
+
     for (auto& s : strips_)
-        s->setSelected(s->trackIndex() == selectedTrack_);
+        s->setSelected(selectedTracks_.count(s->trackIndex()) > 0);
 
     if (selectedTrack_ >= 0 && selectedTrack_ < static_cast<int>(strips_.size()))
     {
@@ -719,7 +985,7 @@ void MixerPanel::rebuildStrips()
     for (int i = 0; i < numTracks; ++i)
     {
         auto strip = std::make_unique<ChannelStrip>(*this, i);
-        strip->setSelected(i == selectedTrack_);
+        strip->setSelected(selectedTracks_.count(i) > 0 || (selectedTracks_.empty() && i == selectedTrack_));
         stripContainer_.addAndMakeVisible(strip.get());
         strips_.push_back(std::move(strip));
     }
@@ -746,10 +1012,20 @@ void MixerPanel::timerCallback()
     if (!isVisible())
         return;
 
+    const auto* pat = song_.findPattern(patternId_);
     for (auto& s : strips_)
     {
-        const auto [l, r] = engine_.sequencer().trackPeakLevels(s->trackIndex());
-        s->setMeterLevels(l, r);
+        const int idx = s->trackIndex();
+        if (pat != nullptr && idx >= 0 && idx < static_cast<int>(pat->tracks.size()))
+        {
+            const auto [l, r] = engine_.trackMeterLevels(pat->tracks[static_cast<std::size_t>(idx)], idx);
+            s->setMeterLevels(l, r);
+        }
+        else
+        {
+            const auto [l, r] = engine_.sequencer().trackPeakLevels(idx);
+            s->setMeterLevels(l, r);
+        }
     }
 }
 

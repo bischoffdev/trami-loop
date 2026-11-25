@@ -5,6 +5,32 @@ All notable changes to **TramiLoop** (`trami-loop`) will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - Unreleased
+
+### Added
+- **Plugin Delay Compensation (PDC) Per Channel & Per Project**:
+  - Automatic sample-accurate delay compensation across channels with differing VST3/AU plugin latencies using 65,536-sample per-channel circular delay lines in `Sequencer`.
+  - Queries live `AudioPluginInstance::getLatencySamples()` on Clips, Tracks, and the Master Bus and syncs reported latencies into the song model and `.trami` project file (`pdcEnabled`, `projectLatencySamples`, per-track `latencySamples`, and per-slot `latencySamples`).
+  - Offline WAV mixdown export (`WavExporter`) automatically prerolls and strips total project PDC latency so exported audio starts on sample 0.
+  - Added `PDC` toggle and per-slot, per-channel, and project latency readouts in the FX Rack, Mixer, and Track Properties panels.
+- **Per-Track Recording Input & Mono/Stereo Selection with Live Input Metering**:
+  - Added per-track hardware input channel (`inputChannel`) and Mono/Stereo mode (`inputStereo`) selection in Track Headers (`In 1 M` / `In 1-2 S` button and context menu), Mixer channel strips, and Track Properties → General, persisted in `.trami` project files.
+  - Real-time per-channel input peak measurement in `AudioRecorder` (even while stopped/idle) reflects live incoming levels on armed tracks in the track Volume Slider capsule LEDs, the track header bottom peak meter (unified Mono bar vs. dual Stereo bars), and the Mixer channel strip vertical meter.
+- **Transport Bar Performance Indicator**:
+  - Studio One–style `Performance` LCD box in the transport bar displaying dual stacked horizontal load meters (real-time Audio CPU/DSP callback load and Voice/Peak load) with a detailed live tooltip (Audio CPU %, Voice/Peak Load %, Active Voices, and PDC Latency).
+- **Alternating Second-Measure Background Shading**:
+  - Shaded every second measure (Measures 2, 4, 6, …) with a lighter background column overlay and brighter bar boundary lines across the Track View grid, Bar Ruler, Master Bus automation lane, and Arranger grid.
+- **Toolbar Button Vector Icons**:
+  - Added custom vector icons to all Track View toolbar tool and mode buttons (`Select`, `Paint`, `Erase`, `Split`, `Join`, `Marker`, `X-Fade`, `Env Lock`, and `Ripple`) matching the top application toolbar styling.
+- **Project Name in Application Title Bar**:
+  - Displayed the currently open project name in both the native OS window title bar (`TramiLoop v0.5.0 - <Project Name>`) and the top application bar, updating automatically on New, Open, Save, Undo/Redo, and song rename.
+
+### Fixed
+- **Reversed Clip Waveform & Multi-Point Curve Reversal**:
+  - Fixed reversed clip waveform rendering in `PatternGrid` for both Loop and One-Shot/Disk clips (`offsetSteps` and wrap-around sample indexing).
+  - Reversing a clip with **Envelope Lock** (`Env Lock`) enabled now automatically mirrors the clip's multi-point volume and pan envelopes, swaps `fadeInSteps` and `fadeOutSteps` (inverting `Fast` $\leftrightarrow$ `Slow` curve shapes), and reverses track automation points within the clip's span.
+  - Fixed `Song::splitClip` audio offsets when slicing a reversed clip.
+
 ## [0.4.0] - 2026-11-22
 
 ### Added

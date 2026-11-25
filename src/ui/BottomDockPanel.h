@@ -42,6 +42,7 @@ public:
     void refreshFromModel();
 
     void selectTrack(int trackIndex);
+    void selectTracks(const std::unordered_set<int>& tracks, int primaryTrack);
     void selectClip(ClipId clipId, int trackIndex);
 
     void showTrackProperties(int trackIndex);

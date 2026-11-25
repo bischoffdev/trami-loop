@@ -334,12 +334,64 @@ bool Song::setClipPanEnvelope(PatternId patternId, ClipId clipId, std::vector<En
 
 bool Song::setClipReversed(PatternId patternId, ClipId clipId, bool reversed)
 {
-    Clip* clip = findClip(patternId, clipId);
-    if (clip == nullptr)
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr)
         return false;
 
-    clip->reversed = reversed;
-    return true;
+    for (std::size_t t = 0; t < pattern->tracks.size(); ++t)
+    {
+        auto& track = pattern->tracks[t];
+        for (auto& clip : track.clips)
+        {
+            if (clip.id != clipId)
+                continue;
+
+            const bool directionChanged = (clip.reversed != reversed);
+            clip.reversed = reversed;
+
+            if (directionChanged && envelopeLockEnabled_)
+            {
+                if (!clip.volumeEnvelope.empty())
+                    clip.volumeEnvelope = reverseEnvelope(clip.volumeEnvelope, 0.0, 1.0);
+                if (!clip.panEnvelope.empty())
+                    clip.panEnvelope = reverseEnvelope(clip.panEnvelope, 0.0, 1.0);
+                std::swap(clip.fadeInSteps, clip.fadeOutSteps);
+
+                // Also reverse any track-level automation points lying within this clip's step span
+                const double span = defaultClipSpanSteps(clip, static_cast<int>(t), patternId);
+                const double cStart = clip.startStep;
+                const double cEnd = cStart + span;
+                auto reverseTrackPointsInSpan = [&](std::vector<EnvelopePoint>& autoPts)
+                {
+                    if (autoPts.empty() || span <= 1e-6)
+                        return;
+                    std::vector<std::size_t> inSpanIndices;
+                    for (std::size_t i = 0; i < autoPts.size(); ++i)
+                    {
+                        if (autoPts[i].position >= cStart - 1e-4 && autoPts[i].position <= cEnd + 1e-4)
+                            inSpanIndices.push_back(i);
+                    }
+                    if (inSpanIndices.empty())
+                        return;
+                    std::vector<EnvelopePoint> sub;
+                    sub.reserve(inSpanIndices.size());
+                    for (std::size_t idx : inSpanIndices)
+                        sub.push_back(autoPts[idx]);
+                    auto revSub = reverseEnvelope(sub, cStart, cEnd);
+                    for (std::size_t k = 0; k < inSpanIndices.size(); ++k)
+                        autoPts[inSpanIndices[k]] = revSub[k];
+                    std::stable_sort(autoPts.begin(), autoPts.end(), [](const EnvelopePoint& a, const EnvelopePoint& b) {
+                        return a.position < b.position;
+                    });
+                };
+                reverseTrackPointsInSpan(track.volumeAutomation);
+                reverseTrackPointsInSpan(track.panAutomation);
+                reverseTrackPointsInSpan(track.fxAutomation);
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Song::isClipReversed(PatternId patternId, ClipId clipId) const noexcept
@@ -500,10 +552,21 @@ std::optional<std::pair<ClipId, ClipId>> Song::splitClip(PatternId patternId, Cl
             rightClip.id = clipIds_.next();
             rightClip.startStep = splitStep;
             rightClip.lengthSteps = rightLen;
-            if (kind == SampleKind::Loop && sample != nullptr && sample->loopCycleSteps() > 0.0)
-                rightClip.offsetSteps = std::fmod(orig.offsetSteps + leftLen, sample->loopCycleSteps());
+            if (orig.reversed)
+            {
+                if (kind == SampleKind::Loop && sample != nullptr && sample->loopCycleSteps() > 0.0)
+                    leftClip.offsetSteps = std::fmod(orig.offsetSteps + rightLen, sample->loopCycleSteps());
+                else
+                    leftClip.offsetSteps = orig.offsetSteps + rightLen;
+                rightClip.offsetSteps = orig.offsetSteps;
+            }
             else
-                rightClip.offsetSteps = orig.offsetSteps + leftLen;
+            {
+                if (kind == SampleKind::Loop && sample != nullptr && sample->loopCycleSteps() > 0.0)
+                    rightClip.offsetSteps = std::fmod(orig.offsetSteps + leftLen, sample->loopCycleSteps());
+                else
+                    rightClip.offsetSteps = orig.offsetSteps + leftLen;
+            }
             rightClip.fadeInSteps = 0.0f;
             rightClip.fadeOutSteps = std::min(orig.fadeOutSteps, static_cast<float>(rightLen));
             if (!orig.volumeEnvelope.empty())
@@ -671,6 +734,91 @@ bool Song::setMasterFxChain(PatternId patternId, std::vector<PluginSlot> chain)
     return true;
 }
 
+bool Song::setPatternTrackLatency(PatternId patternId, int trackIndex, int latencySamples)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern) ||
+        trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return false;
+    pattern->tracks[static_cast<std::size_t>(trackIndex)].latencySamples = std::max(0, latencySamples);
+    return true;
+}
+
+int Song::patternTrackLatency(PatternId patternId, int trackIndex) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return 0;
+    return std::max(0, pattern->tracks[static_cast<std::size_t>(trackIndex)].latencySamples);
+}
+
+int Song::channelLatencySamples(PatternId patternId, int trackIndex) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return 0;
+
+    const auto& trk = pattern->tracks[static_cast<std::size_t>(trackIndex)];
+    int maxClipLat = 0;
+    for (const auto& c : trk.clips)
+        maxClipLat = std::max(maxClipLat, activeChainLatencySamples(c.fxChain));
+
+    return std::max(0, trk.latencySamples) + activeChainLatencySamples(trk.fxChain) + maxClipLat;
+}
+
+int Song::maxChannelLatencySamples(PatternId patternId) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr)
+        return 0;
+
+    bool anySolo = false;
+    for (const auto& trk : pattern->tracks)
+    {
+        if (trk.solo && !trk.muted)
+        {
+            anySolo = true;
+            break;
+        }
+    }
+
+    int maxLat = 0;
+    for (std::size_t t = 0; t < pattern->tracks.size(); ++t)
+    {
+        const auto& trk = pattern->tracks[t];
+        if (trk.muted || (anySolo && !trk.solo))
+            continue;
+        maxLat = std::max(maxLat, channelLatencySamples(patternId, static_cast<int>(t)));
+    }
+    return maxLat;
+}
+
+int Song::channelCompensationSamples(PatternId patternId, int trackIndex) const noexcept
+{
+    if (!pdcEnabled_)
+        return 0;
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return 0;
+    const int maxLat = maxChannelLatencySamples(patternId);
+    const int chLat = channelLatencySamples(patternId, trackIndex);
+    return std::max(0, maxLat - chLat);
+}
+
+int Song::masterLatencySamples(PatternId patternId) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr)
+        return 0;
+    return activeChainLatencySamples(pattern->masterFxChain);
+}
+
+int Song::totalProjectLatencySamples(PatternId patternId) const noexcept
+{
+    const int pdcLat = pdcEnabled_ ? (maxChannelLatencySamples(patternId) + masterLatencySamples(patternId)) : 0;
+    return pdcLat + std::max(0, projectLatencySamples_);
+}
+
 int Song::addMarker(PatternId patternId, double step, std::string name)
 {
     Pattern* pattern = findPattern(patternId);
@@ -802,6 +950,9 @@ bool Song::removeTrackFromPattern(PatternId patternId, int trackIndex)
         pattern->tracks.front().mix = {};
         pattern->tracks.front().muted = false;
         pattern->tracks.front().solo = false;
+        pattern->tracks.front().armed = false;
+        pattern->tracks.front().inputChannel = 0;
+        pattern->tracks.front().inputStereo = true;
         return true;
     }
 
@@ -915,6 +1066,36 @@ SampleKind Song::patternTrackKind(PatternId patternId, int trackIndex) const
         return s->kind;
 
     return SampleKind::OneShot;
+}
+
+bool Song::setPatternTrackInput(PatternId patternId, int trackIndex, int inputChannel, bool stereo)
+{
+    Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || !isValidTrack(trackIndex, kTracksPerPattern))
+        return false;
+    if (trackIndex >= static_cast<int>(pattern->tracks.size()))
+        pattern->tracks.resize(static_cast<std::size_t>(trackIndex + 1));
+
+    auto& track = pattern->tracks[static_cast<std::size_t>(trackIndex)];
+    track.inputChannel = std::clamp(inputChannel, 0, 31);
+    track.inputStereo = stereo;
+    return true;
+}
+
+int Song::patternTrackInputChannel(PatternId patternId, int trackIndex) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return 0;
+    return pattern->tracks[static_cast<std::size_t>(trackIndex)].inputChannel;
+}
+
+bool Song::patternTrackInputStereo(PatternId patternId, int trackIndex) const noexcept
+{
+    const Pattern* pattern = findPattern(patternId);
+    if (pattern == nullptr || trackIndex < 0 || trackIndex >= static_cast<int>(pattern->tracks.size()))
+        return true;
+    return pattern->tracks[static_cast<std::size_t>(trackIndex)].inputStereo;
 }
 
 // --- Arrangement -------------------------------------------------------------

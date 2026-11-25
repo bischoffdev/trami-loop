@@ -59,7 +59,13 @@ bool WavExporter::exportMixdown(const Song& song, StretchCache& stretchCache, co
     exchange.publish(std::move(snapshot));
     Sequencer sequencer(exchange, options.sampleRate);
     sequencer.setMasterVolume(song.masterVolume());
+    sequencer.setPdcEnabled(song.pdcEnabled());
+    sequencer.setProjectLatencySamples(song.projectLatencySamples());
     sequencer.requestPlaying(true);
+
+    const std::int64_t pdcPrerollFrames = (!song.patterns().empty())
+        ? static_cast<std::int64_t>(std::max(0, song.totalProjectLatencySamples(song.patterns().front().id)))
+        : 0;
 
     constexpr int kBlockSize = 512;
     std::vector<float> left(kBlockSize);
@@ -68,24 +74,34 @@ bool WavExporter::exportMixdown(const Song& song, StretchCache& stretchCache, co
     juce::AudioBuffer<float> tempBuffer(2, kBlockSize);
     float* const channelData[2] = {tempBuffer.getWritePointer(0), tempBuffer.getWritePointer(1)};
 
+    std::int64_t skippedPreroll = 0;
     std::int64_t rendered = 0;
     while (rendered < totalFrames)
     {
-        const int numFrames = static_cast<int>(std::min<std::int64_t>(kBlockSize, totalFrames - rendered));
+        const std::int64_t remainingPreroll = pdcPrerollFrames - skippedPreroll;
+        const int numFrames = static_cast<int>(std::min<std::int64_t>(
+            kBlockSize, (totalFrames - rendered) + remainingPreroll));
 
         std::fill(left.begin(), left.end(), 0.0f);
         std::fill(right.begin(), right.end(), 0.0f);
 
         sequencer.process(left.data(), right.data(), numFrames);
 
-        std::copy_n(left.data(), numFrames, channelData[0]);
-        std::copy_n(right.data(), numFrames, channelData[1]);
+        const int dropInBlock = static_cast<int>(std::min<std::int64_t>(numFrames, remainingPreroll));
+        skippedPreroll += dropInBlock;
+        const int writeFrames = numFrames - dropInBlock;
 
-        writer->writeFromAudioSampleBuffer(tempBuffer, 0, numFrames);
-        rendered += numFrames;
+        if (writeFrames > 0)
+        {
+            std::copy_n(left.data() + dropInBlock, writeFrames, channelData[0]);
+            std::copy_n(right.data() + dropInBlock, writeFrames, channelData[1]);
 
-        if (progress)
-            progress(static_cast<float>(rendered) / static_cast<float>(totalFrames));
+            writer->writeFromAudioSampleBuffer(tempBuffer, 0, writeFrames);
+            rendered += writeFrames;
+
+            if (progress)
+                progress(static_cast<float>(rendered) / static_cast<float>(totalFrames));
+        }
     }
 
     return true;

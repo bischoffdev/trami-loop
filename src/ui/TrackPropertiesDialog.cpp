@@ -1,5 +1,7 @@
 #include "ui/TrackPropertiesDialog.h"
 
+#include "ui/DAWTrackControls.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -38,7 +40,7 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
     addAndMakeVisible(summaryTabBtn_);
 
     // --- General Tab ---
-    for (auto* lbl : {&trackTypeLabel_, &beatsLabel_, &rootNoteLabel_, &origBpmLabel_, &fxSendLabel_})
+    for (auto* lbl : {&trackTypeLabel_, &beatsLabel_, &rootNoteLabel_, &origBpmLabel_, &fxSendLabel_, &recordInputLabel_})
     {
         lbl->setFont(Typography::bold(12.0f));
         lbl->setColour(juce::Label::textColourId, Palette::textDim);
@@ -87,6 +89,30 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
             onChanged_();
     };
     addAndMakeVisible(fxSendSlider_);
+
+    {
+        const juce::StringArray noNames;
+        for (int ch = 0; ch < 16; ++ch)
+            recordInputCombo_.addItem(DAWInputSources::sourceLabel(ch, false, noNames), DAWInputSources::kMonoBase + ch);
+        for (int ch = 0; ch + 1 < 16; ch += 2)
+            recordInputCombo_.addItem(DAWInputSources::sourceLabel(ch, true, noNames), DAWInputSources::kStereoBase + ch);
+    }
+    recordInputCombo_.setTooltip("Select the recording source for this track (each mono input and each stereo pair is a separate source). Changing it does not arm the track.");
+    recordInputCombo_.onChange = [this]()
+    {
+        if (isLoading_ || !hasValidTrack())
+            return;
+        int ch = 0;
+        bool stereo = true;
+        if (!DAWInputSources::decode(recordInputCombo_.getSelectedId(), ch, stereo))
+            return;
+        if (onPushUndo)
+            onPushUndo();
+        song_.setPatternTrackInput(patternId_, trackIndex_, ch, stereo);
+        if (onChanged_)
+            onChanged_();
+    };
+    addAndMakeVisible(recordInputCombo_);
 
     // --- Stretch Tab ---
     autoDetectBtn_.setTooltip("Automatically detect transient onsets in the audio waveform");
@@ -271,6 +297,7 @@ void TrackPropertiesComponent::loadFromModel()
     const bool valid = hasValidTrack();
     for (juce::Component* c : std::initializer_list<juce::Component*>{
              &trackTypeCombo_, &beatsCombo_, &rootNoteCombo_, &origBpmEditor_, &fxSendSlider_,
+             &recordInputCombo_,
              &autoDetectBtn_, &beatGridBtn_, &clearMarkersBtn_,
              &titleEditor_, &authorEditor_, &copyrightEditor_, &commentsEditor_})
     {
@@ -298,7 +325,13 @@ void TrackPropertiesComponent::loadFromModel()
 
     const auto* pat = song_.findPattern(patternId_);
     if (pat != nullptr && trackIndex_ >= 0 && trackIndex_ < static_cast<int>(pat->tracks.size()))
-        fxSendSlider_.setValue(pat->tracks[static_cast<std::size_t>(trackIndex_)].fxSend, juce::dontSendNotification);
+    {
+        const auto& trk = pat->tracks[static_cast<std::size_t>(trackIndex_)];
+        fxSendSlider_.setValue(trk.fxSend, juce::dontSendNotification);
+        recordInputCombo_.setSelectedId((trk.inputStereo ? DAWInputSources::kStereoBase : DAWInputSources::kMonoBase) +
+                                            std::clamp(trk.inputChannel, 0, 15),
+                                        juce::dontSendNotification);
+    }
 
     const Sample* s = song_.findSample(sampleId_);
     if (s != nullptr)
@@ -321,10 +354,15 @@ void TrackPropertiesComponent::loadFromModel()
         const int ch = raw != nullptr ? raw->numChannels() : 2;
         const std::int64_t frames = raw != nullptr ? raw->numFrames() : 0;
 
+        const int chLat = song_.channelLatencySamples(patternId_, trackIndex_);
+        const int chComp = song_.channelCompensationSamples(patternId_, trackIndex_);
+        const int projLat = song_.totalProjectLatencySamples(patternId_);
         juce::String info = "File: " + juce::String(s->fileName.empty() ? s->name : s->fileName) +
                             "   |   Duration: " + juce::String(s->durationSeconds, 2) + " s" +
                             "   |   Frames: " + juce::String(frames) +
                             "   |   Channels: " + juce::String(ch) +
+                            "   |   PDC: " + juce::String(chLat) + " smp (+" + juce::String(chComp) +
+                            " comp, Proj " + juce::String(projLat) + " smp)" +
                             (s->missing ? "   [MISSING ON DISK]" : "");
         fileInfoLabel_.setText(info, juce::dontSendNotification);
 
@@ -432,7 +470,8 @@ void TrackPropertiesComponent::switchTab(ActiveTab tab)
     for (juce::Component* c : std::initializer_list<juce::Component*>{
              &trackTypeLabel_, &trackTypeCombo_, &beatsLabel_, &beatsCombo_,
              &rootNoteLabel_, &rootNoteCombo_, &origBpmLabel_, &origBpmEditor_,
-             &fxSendLabel_, &fxSendSlider_})
+             &fxSendLabel_, &fxSendSlider_,
+             &recordInputLabel_, &recordInputCombo_})
         c->setVisible(isGen);
 
     for (juce::Component* c : std::initializer_list<juce::Component*>{
@@ -504,6 +543,11 @@ void TrackPropertiesComponent::resized()
             auto r5 = rightCol.removeFromTop(rowH);
             fxSendLabel_.setBounds(r5.removeFromLeft(labelW));
             fxSendSlider_.setBounds(r5);
+            rightCol.removeFromTop(gap);
+
+            auto r6 = rightCol.removeFromTop(rowH);
+            recordInputLabel_.setBounds(r6.removeFromLeft(labelW));
+            recordInputCombo_.setBounds(r6);
         }
         else
         {
@@ -531,6 +575,11 @@ void TrackPropertiesComponent::resized()
             auto row5 = area.removeFromTop(rowH);
             fxSendLabel_.setBounds(row5.removeFromLeft(labelW));
             fxSendSlider_.setBounds(row5);
+            area.removeFromTop(gap);
+
+            auto row6 = area.removeFromTop(rowH);
+            recordInputLabel_.setBounds(row6.removeFromLeft(labelW));
+            recordInputCombo_.setBounds(row6);
         }
     }
     else if (activeTab_ == ActiveTab::Stretch)

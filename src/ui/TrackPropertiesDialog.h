@@ -94,6 +94,9 @@ private:
     juce::Label fxSendLabel_{"fx", "Aux FX Send (Delay):"};
     juce::Slider fxSendSlider_{juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight};
 
+    juce::Label recordInputLabel_{"recIn", "Recording Source:"};
+    juce::ComboBox recordInputCombo_;
+
     // Stretch tab controls
     juce::TextButton autoDetectBtn_{"Auto-Detect Transients"};
     juce::TextButton beatGridBtn_{"Even Beat Grid"};

@@ -516,6 +516,103 @@ private:
 };
 
 // ==============================================================================
+// PerformanceIndicator Implementation (Studio One style dual-bar Performance box)
+// ==============================================================================
+class TransportBar::PerformanceIndicator final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    PerformanceIndicator()
+    {
+        setTooltip("System Performance — Audio DSP Load: 0.0% | Active Voices: 0");
+    }
+
+    void setMetrics(const AudioEngine::PerformanceMetrics& m)
+    {
+        const float nextCpu = std::clamp(m.cpuLoad, 0.0f, 1.0f);
+        const float nextSec = std::clamp(m.secondaryLoad, 0.0f, 1.0f);
+        if (std::abs(nextCpu - cpuLoad_) > 0.003f ||
+            std::abs(nextSec - secondaryLoad_) > 0.003f ||
+            m.activeVoices != activeVoices_ ||
+            m.pdcLatencySamples != pdcLatencySamples_)
+        {
+            cpuLoad_ = nextCpu;
+            secondaryLoad_ = nextSec;
+            activeVoices_ = m.activeVoices;
+            pdcLatencySamples_ = m.pdcLatencySamples;
+
+            juce::String tip = juce::String::formatted(
+                "System Performance — Audio CPU: %.1f%% | Voice/Peak Load: %.1f%% | Active Voices: %d",
+                cpuLoad_ * 100.0f, secondaryLoad_ * 100.0f, activeVoices_);
+            if (pdcLatencySamples_ > 0)
+                tip += " | PDC Latency: " + juce::String(pdcLatencySamples_) + " smp";
+            setTooltip(tip);
+            repaint();
+        }
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto box = getLocalBounds();
+        const auto f = box.toFloat();
+
+        // Recessed dark LCD frame (matching TransportBar LCD boxes and reference screenshot)
+        juce::ColourGradient lcdGrad(juce::Colour(0xff141418), f.getX(), f.getY(),
+                                     juce::Colour(0xff1f1f25), f.getX(), f.getBottom(), false);
+        g.setGradientFill(lcdGrad);
+        g.fillRoundedRectangle(f, 5.5f);
+        g.setColour(juce::Colour(0xff0d0d10));
+        g.drawRoundedRectangle(f, 5.5f, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.09f));
+        g.drawHorizontalLine(box.getBottom() - 1, f.getX() + 5.0f, f.getRight() - 5.0f);
+
+        // Two stacked horizontal load bars at the top
+        const float barX = 8.0f;
+        const float barW = std::max(10.0f, f.getWidth() - 16.0f);
+        const float barH = 4.2f;
+        const float topBarY = 5.5f;
+        const float botBarY = 11.8f;
+
+        auto drawMeterBar = [&](float y, float normLoad, bool isPrimary)
+        {
+            const juce::Rectangle<float> track(barX, y, barW, barH);
+            g.setColour(juce::Colour(0xff2a2d35));
+            g.fillRoundedRectangle(track, 1.2f);
+            g.setColour(juce::Colour(0xff101115));
+            g.drawRoundedRectangle(track, 1.2f, 0.7f);
+
+            // Keep a subtle baseline indicator on the primary CPU bar when the audio engine is running
+            const float effectiveNorm = isPrimary ? std::max(0.04f, normLoad) : normLoad;
+            const float fillW = std::clamp(effectiveNorm * barW, 0.0f, barW);
+            if (fillW >= 1.0f)
+            {
+                juce::Colour fillCol = isPrimary ? juce::Colour(0xff4cc2ff) : juce::Colour(0xff38bdf8);
+                if (normLoad > 0.90f)
+                    fillCol = juce::Colour(0xffef4444);
+                else if (normLoad > 0.72f)
+                    fillCol = juce::Colour(0xfff59e0b);
+
+                g.setColour(fillCol);
+                g.fillRoundedRectangle(barX, y, fillW, barH, 1.0f);
+            }
+        };
+
+        drawMeterBar(topBarY, cpuLoad_, true);
+        drawMeterBar(botBarY, secondaryLoad_, false);
+
+        // "Performance" label underneath the dual meter bars
+        g.setFont(Typography::bold(9.5f));
+        g.setColour(juce::Colour(0xffc8c8d4));
+        g.drawText("Performance", 2, 17, box.getWidth() - 4, 15, juce::Justification::centred, false);
+    }
+
+private:
+    float cpuLoad_ = 0.0f;
+    float secondaryLoad_ = 0.0f;
+    int activeVoices_ = 0;
+    int pdcLatencySamples_ = 0;
+};
+
+// ==============================================================================
 // TransportBar Implementation
 // ==============================================================================
 TransportBar::TransportBar(Song& song, AudioEngine& engine,
@@ -765,6 +862,10 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
     };
     addAndMakeVisible(keyCombo_);
 
+    // Studio One style Performance Indicator (CPU & Voice/Disk load bars)
+    performanceIndicator_ = std::make_unique<PerformanceIndicator>();
+    addAndMakeVisible(performanceIndicator_.get());
+
     updateDisplay();
     startTimerHz(30);
 }
@@ -793,7 +894,7 @@ void TransportBar::setLoopRange(int start, int end, bool isBars)
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
 {
-    constexpr int totalW = 882;
+    constexpr int totalW = 972;
     const int startX = (getWidth() >= totalW + 24) ? std::max(12, (getWidth() - totalW) / 2) : 8;
     constexpr int barY = 7;
     constexpr int barH = 34;
@@ -893,7 +994,7 @@ void TransportBar::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.14f));
     g.drawHorizontalLine(1, 0.0f, static_cast<float>(getWidth()));
 
-    constexpr int totalW = 882;
+    constexpr int totalW = 972;
     constexpr int barY = 7;
     constexpr int barH = 34;
 
@@ -1006,7 +1107,7 @@ void TransportBar::paint(juce::Graphics& g)
 
 void TransportBar::resized()
 {
-    constexpr int totalW = 882;
+    constexpr int totalW = 972;
     constexpr int barY = 7;
     constexpr int barH = 34;
 
@@ -1072,6 +1173,11 @@ void TransportBar::resized()
     // Master Key selector
     const int keyBoxX = swingBoxX + 108 + 6;
     keyCombo_.setBounds(keyBoxX, barY, 90, barH);
+
+    // Performance indicator box
+    const int perfBoxX = keyBoxX + 90 + 6;
+    if (performanceIndicator_ != nullptr)
+        performanceIndicator_->setBounds(perfBoxX, barY, 84, barH);
 }
 
 void TransportBar::timerCallback()
@@ -1081,6 +1187,9 @@ void TransportBar::timerCallback()
 
     const auto recState = engine_.recorder().state();
     recordButton_.setToggleState(recState != RecordState::Idle, juce::dontSendNotification);
+
+    if (performanceIndicator_ != nullptr)
+        performanceIndicator_->setMetrics(engine_.performanceMetrics());
 
     const std::int64_t pos = engine_.sequencer().position();
 

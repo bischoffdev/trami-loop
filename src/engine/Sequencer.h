@@ -20,6 +20,11 @@ public:
     virtual void processClip(std::uint32_t clipId, float* left, float* right, int numSamples) noexcept = 0;
     virtual void processTrack(int trackIndex, float* left, float* right, int numSamples) noexcept = 0;
     virtual void processMaster(float* left, float* right, int numSamples) noexcept = 0;
+
+    /// Latency reported by hosted plugin chains (in samples) for Plugin Delay Compensation (PDC).
+    virtual int clipLatencySamples(std::uint32_t /*clipId*/) const noexcept { return 0; }
+    virtual int trackLatencySamples(int /*trackIndex*/) const noexcept { return 0; }
+    virtual int masterLatencySamples() const noexcept { return 0; }
 };
 
 /// Real-time sequencer. Triggers snapshot events at their exact sample
@@ -64,6 +69,7 @@ public:
     bool isMetronomeEnabled() const noexcept { return metronomeEnabled_.load(); }
     bool isLoopingEnabled() const noexcept { return loopingEnabled_.load(); }
     std::int64_t position() const noexcept { return publishedPosition_.load(); }
+    int activeVoiceCount() const noexcept { return activeVoiceCount_.load(std::memory_order_relaxed); }
 
     /// Plays an audio buffer as an audition/preview. Safely replaces any
     /// in-progress preview without locking or allocating on the audio thread.
@@ -89,6 +95,15 @@ public:
     void setTrackPan(int track, float pan) noexcept;
     void setTrackMuted(int track, bool muted) noexcept;
     void setTrackSolo(int track, bool solo) noexcept;
+    void setTrackLatencySamples(int track, int latencySamples) noexcept;
+    int trackLatencySamples(int track) const noexcept;
+    int trackCompensationSamples(int track) const noexcept;
+    int maxTrackLatencySamples() const noexcept;
+    void setPdcEnabled(bool enabled) noexcept { pdcEnabled_.store(enabled, std::memory_order_relaxed); }
+    bool isPdcEnabled() const noexcept { return pdcEnabled_.load(std::memory_order_relaxed); }
+    void setProjectLatencySamples(int samples) noexcept { projectLatencySamples_.store(std::max(0, samples), std::memory_order_relaxed); }
+    int projectLatencySamples() const noexcept { return projectLatencySamples_.load(std::memory_order_relaxed); }
+    int totalLatencySamples() const noexcept;
     void syncTrackMixFromSnapshot() noexcept;
     void resetTrackMix() noexcept;
 
@@ -147,6 +162,7 @@ private:
         std::uint32_t clipId = 0;
         bool reversed = false;
         bool hasClipFx = false;
+        int clipLatencySamples = 0;
         float fxSend = 0.0f;
         std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> volEnv{};
         int volEnvCount = 0;
@@ -160,6 +176,9 @@ private:
         std::atomic<float> pan{0.0f};
         std::atomic<bool> muted{false};
         std::atomic<bool> solo{false};
+        std::atomic<int> manualLatencySamples{0};
+        std::atomic<int> fxLatencySamples{0};
+        std::atomic<int> maxClipLatencySamples{0};
     };
 
     struct PreviewItem
@@ -217,18 +236,28 @@ private:
     // Flat heap-allocated vectors (sizeof(ScratchBuffers) ~= 96 bytes) so MSVC never materializes
     // a 2 MB aggregate temporary on the 1 MB Windows stack inside make_unique<ScratchBuffers>().
     static constexpr int kMaxScratchSamples = 4096;
+    static constexpr int kPdcBufferSize = 65536; ///< Power-of-2 circular delay buffer per track (~1.36s at 48 kHz)
+    static constexpr int kPdcBufferMask = kPdcBufferSize - 1;
     struct ScratchBuffers
     {
         std::vector<float> trackBufL;
         std::vector<float> trackBufR;
         std::vector<float> clipBufL;
         std::vector<float> clipBufR;
+        std::vector<float> pdcRingL;
+        std::vector<float> pdcRingR;
+        std::array<int, kMaxTracks> pdcWritePos{};
+        std::array<int, kMaxTracks> pdcActiveDelay{};
+        std::array<int, kMaxTracks> trackTailRemaining{};
+        std::array<int, kMaxTracks> lastClipLat{};
 
         ScratchBuffers()
             : trackBufL(static_cast<std::size_t>(kMaxTracks) * kMaxScratchSamples, 0.0f)
             , trackBufR(static_cast<std::size_t>(kMaxTracks) * kMaxScratchSamples, 0.0f)
             , clipBufL(static_cast<std::size_t>(kMaxScratchSamples), 0.0f)
             , clipBufR(static_cast<std::size_t>(kMaxScratchSamples), 0.0f)
+            , pdcRingL(static_cast<std::size_t>(kMaxTracks) * kPdcBufferSize, 0.0f)
+            , pdcRingR(static_cast<std::size_t>(kMaxTracks) * kPdcBufferSize, 0.0f)
         {
         }
 
@@ -240,11 +269,47 @@ private:
         {
             return trackBufR.data() + static_cast<std::size_t>(track) * kMaxScratchSamples;
         }
+        float* ringL(int track) noexcept
+        {
+            return pdcRingL.data() + static_cast<std::size_t>(track) * kPdcBufferSize;
+        }
+        float* ringR(int track) noexcept
+        {
+            return pdcRingR.data() + static_cast<std::size_t>(track) * kPdcBufferSize;
+        }
+
+        void clearTrackPdc(int track) noexcept
+        {
+            if (track < 0 || track >= kMaxTracks)
+                return;
+            std::fill_n(ringL(track), kPdcBufferSize, 0.0f);
+            std::fill_n(ringR(track), kPdcBufferSize, 0.0f);
+            pdcWritePos[static_cast<std::size_t>(track)] = 0;
+            pdcActiveDelay[static_cast<std::size_t>(track)] = 0;
+            trackTailRemaining[static_cast<std::size_t>(track)] = 0;
+            lastClipLat[static_cast<std::size_t>(track)] = 0;
+        }
+
+        void clearAllPdc() noexcept
+        {
+            for (int t = 0; t < kMaxTracks; ++t)
+            {
+                if (pdcActiveDelay[static_cast<std::size_t>(t)] > 0 ||
+                    pdcWritePos[static_cast<std::size_t>(t)] != 0 ||
+                    trackTailRemaining[static_cast<std::size_t>(t)] > 0)
+                {
+                    clearTrackPdc(t);
+                }
+            }
+        }
     };
     std::unique_ptr<ScratchBuffers> scratch_;
     std::array<std::atomic<float>, kMaxTracks> trackPeakL_{};
     std::array<std::atomic<float>, kMaxTracks> trackPeakR_{};
     std::atomic<AudioPluginProcessor*> pluginProcessor_{nullptr};
+    std::atomic<bool> pdcEnabled_{true};
+    std::atomic<int> projectLatencySamples_{0};
+    std::atomic<int> modelMasterLatencySamples_{0};
 
     // Lock-free SPSC ring buffer for retired preview items (audio thread -> message thread)
     std::array<PreviewItem*, kRetiredQueueCapacity> retiredPreviews_{};
@@ -260,6 +325,7 @@ private:
     std::atomic<bool> loopingEnabled_{true};
     std::atomic<bool> playing_{false};
     std::atomic<std::int64_t> publishedPosition_{0};
+    std::atomic<int> activeVoiceCount_{0};
 
     // Master volume & loudness metering
     std::atomic<float> masterVolume_{1.0f};

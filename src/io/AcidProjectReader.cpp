@@ -853,15 +853,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
                 return candidateDirect;
         }
 
-        // 2. Direct match in dir / "samples"
-        for (const auto& cand : candidates)
-        {
-            const auto candidateSamples = dir / "samples" / utf8ToPath(cand);
-            if (std::filesystem::exists(candidateSamples, ec) && std::filesystem::is_regular_file(candidateSamples, ec))
-                return candidateSamples;
-        }
-
-        // 3. Case-insensitive & Unicode-normalized filename match in dir (and subdirectories of dir)
+        // 2. Case-insensitive & Unicode-normalized filename match in dir (top-level files first, then subdirectories)
         for (const auto& cand : candidates)
         {
             auto found = findFileCaseInsensitive(dir, cand);
