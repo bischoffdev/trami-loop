@@ -387,12 +387,15 @@ class PatternView::PatternRuler : public juce::Component, public juce::TooltipCl
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        lastDragLocalPos_ = e.getPosition();
         grid_.mouseDown(toGridEvent(e));
         repaint();
     }
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
+        lastDragLocalPos_ = e.getPosition();
+        autoScrollForEdge(e.x);
         grid_.mouseDrag(toGridEvent(e));
         setMouseCursor(grid_.getMouseCursor());
         repaint();
@@ -403,6 +406,22 @@ class PatternView::PatternRuler : public juce::Component, public juce::TooltipCl
         grid_.mouseUp(toGridEvent(e));
         setMouseCursor(grid_.getMouseCursor());
         repaint();
+    }
+
+    void tickAutoScroll()
+    {
+        if (!isMouseButtonDown() || !grid_.isRulerHorizontalDrag())
+            return;
+        if (autoScrollForEdge(lastDragLocalPos_.x))
+        {
+            const auto mods = juce::ModifierKeys::currentModifiers;
+            auto src = juce::Desktop::getInstance().getMainMouseSource();
+            juce::MouseEvent synthetic(src, lastDragLocalPos_.toFloat(), mods, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                       this, this, juce::Time::getCurrentTime(), lastDragLocalPos_.toFloat(),
+                                       juce::Time::getCurrentTime(), 1, false);
+            grid_.mouseDrag(toGridEvent(synthetic));
+            repaint();
+        }
     }
 
     void mouseDoubleClick(const juce::MouseEvent& e) override
@@ -430,6 +449,36 @@ class PatternView::PatternRuler : public juce::Component, public juce::TooltipCl
     }
 
   private:
+    bool autoScrollForEdge(int localX)
+    {
+        if (!grid_.isRulerHorizontalDrag())
+            return false;
+
+        constexpr int kEdgeMargin = 28;
+        const int curX = gridViewport_.getViewPositionX();
+        const int maxScroll = std::max(0, grid_.getWidth() - gridViewport_.getViewWidth());
+        int nextX = curX;
+
+        if (localX < kEdgeMargin && curX > 0)
+        {
+            const int speed = std::clamp(kEdgeMargin - localX, 8, 48);
+            nextX = std::max(0, curX - speed);
+        }
+        else if (localX > getWidth() - kEdgeMargin && curX < maxScroll)
+        {
+            const int speed = std::clamp(localX - (getWidth() - kEdgeMargin), 8, 48);
+            nextX = std::min(maxScroll, curX + speed);
+        }
+
+        if (nextX != curX)
+        {
+            gridViewport_.setViewPosition(nextX, gridViewport_.getViewPositionY());
+            scrollX_ = gridViewport_.getViewPositionX();
+            return true;
+        }
+        return false;
+    }
+
     juce::MouseEvent toGridEvent(const juce::MouseEvent& e) const
     {
         return e.getEventRelativeTo(&grid_).withNewPosition(juce::Point<int>(e.x + scrollX_, e.y));
@@ -438,6 +487,7 @@ class PatternView::PatternRuler : public juce::Component, public juce::TooltipCl
     PatternGrid& grid_;
     juce::Viewport& gridViewport_;
     int scrollX_ = 0;
+    juce::Point<int> lastDragLocalPos_;
 };
 
 class PatternView::MasterBusLane : public juce::Component
@@ -1343,6 +1393,24 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
             onShowToast_(on ? "Ripple Edit: ON" : "Ripple Edit: OFF");
     };
 
+    waveScaleLabel_.setFont(Typography::bold(11.0f));
+    waveScaleLabel_.setColour(juce::Label::textColourId, Palette::textDim);
+    waveScaleLabel_.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(waveScaleLabel_);
+
+    waveScaleSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    waveScaleSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    waveScaleSlider_.setRange(0.5, 4.0, 0.05);
+    waveScaleSlider_.setValue(1.0, juce::dontSendNotification);
+    waveScaleSlider_.setDoubleClickReturnValue(true, 1.0);
+    waveScaleSlider_.setTooltip("Waveform Display Size (0.5x - 4.0x, double-click to reset to 1.0x)");
+    waveScaleSlider_.onValueChange = [this]()
+    {
+        if (grid_ != nullptr)
+            grid_->setWaveformDisplayGain(static_cast<float>(waveScaleSlider_.getValue()));
+    };
+    addAndMakeVisible(waveScaleSlider_);
+
     // Multi-purpose Bottom Dock Panel (Explorer / Properties / Mixer / FX)
     dockPanel_ = std::make_unique<BottomDockPanel>(
         song_, engine_, stretchCache_, currentPattern_,
@@ -1415,6 +1483,31 @@ PatternView::PatternView(Song& song, AudioEngine& engine, StretchCache& stretchC
     {
         if (onPushUndo_)
             onPushUndo_();
+    };
+    dockPanel_->waveEditor().onPushUndo = [this]()
+    {
+        if (onPushUndo_)
+            onPushUndo_();
+    };
+    dockPanel_->waveEditor().onShowToast = [this](const juce::String& msg)
+    {
+        if (onShowToast_)
+            onShowToast_(msg);
+    };
+    dockPanel_->waveEditor().onTrackCreated = [this](int newTrackIdx)
+    {
+        updateSampleSelector();
+        if (trackHeaders_ != nullptr)
+            trackHeaders_->updateFromModel();
+        if (dockPanel_ != nullptr)
+            dockPanel_->refreshFromModel();
+        publishSnapshotQuick();
+        republish();
+        resized();
+        if (grid_ != nullptr)
+            grid_->repaint();
+        if (newTrackIdx >= 0)
+            jumpToTrack(newTrackIdx);
     };
     dockPanel_->mixer().onMasterFxClicked = [this]() { openMasterFxDialog(); };
     dockPanel_->mixer().onMasterFxBypass = [this]() { toggleMasterFxBypass(); };
@@ -2064,7 +2157,7 @@ void PatternView::loopRegionChanged(int startStep, int endStep)
 {
     loopStartStep_ = startStep;
     loopEndStep_ = endStep;
-    republish();
+    publishSnapshotQuick();
     if (ruler_ != nullptr)
         ruler_->repaint();
     if (onLoopRegionChanged_)
@@ -2079,7 +2172,7 @@ void PatternView::setLoopRegion(int startStep, int endStep)
     loopEndStep_ = (endStep <= 0) ? totalSteps : std::clamp(endStep, loopStartStep_ + 1, totalSteps);
     if (grid_ != nullptr)
         grid_->setLoopRegion(loopStartStep_, loopEndStep_);
-    republish();
+    publishSnapshotQuick();
     if (onLoopRegionChanged_)
         onLoopRegionChanged_(loopStartStep_, loopEndStep_);
 }
@@ -2587,6 +2680,33 @@ void PatternView::clipClicked(ClipId clipId)
         }
     }
     dockPanel_->selectClip(clipId, trackIdx);
+}
+
+void PatternView::clipDoubleClicked(ClipId clipId)
+{
+    if (!clipId.isValid())
+        return;
+
+    int trackIdx = -1;
+    if (const auto* pat = song_.findPattern(currentPattern_))
+    {
+        for (int t = 0; t < static_cast<int>(pat->tracks.size()); ++t)
+        {
+            for (const auto& c : pat->tracks[static_cast<std::size_t>(t)].clips)
+            {
+                if (c.id == clipId)
+                {
+                    trackIdx = t;
+                    break;
+                }
+            }
+            if (trackIdx >= 0)
+                break;
+        }
+    }
+    ensureDockVisible();
+    if (dockPanel_ != nullptr)
+        dockPanel_->showWaveEditorForClip(clipId, trackIdx);
 }
 
 void PatternView::clipMoved(ClipId clipId, int newTrack, double newStep)
@@ -3495,7 +3615,11 @@ void PatternView::clipCutRequested(ClipId clipId)
 void PatternView::clipCopyRequested(ClipId clipId)
 {
     if (grid_ != nullptr)
-        grid_->setSelectedClip(clipId);
+    {
+        const auto& sel = grid_->selectedClips();
+        if (std::find(sel.begin(), sel.end(), clipId) == sel.end())
+            grid_->setSelectedClip(clipId);
+    }
     copySelectedClip();
 }
 
@@ -3507,7 +3631,11 @@ void PatternView::clipPasteRequested(int track, int step)
 void PatternView::clipDuplicateRequested(ClipId clipId)
 {
     if (grid_ != nullptr)
-        grid_->setSelectedClip(clipId);
+    {
+        const auto& sel = grid_->selectedClips();
+        if (std::find(sel.begin(), sel.end(), clipId) == sel.end())
+            grid_->setSelectedClip(clipId);
+    }
     duplicateSelectedClip();
 }
 
@@ -3792,7 +3920,36 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
 
     std::vector<ClipId> newClipIds;
     int maxPastedEndStep = 0;
-    int lastPastedTrack = 0;
+    int firstPastedTrack = -1;
+
+    // Pre-compute destination step for each item and ensure the pattern is long enough
+    // so multi-clip groups never wrap or get truncated at the pattern boundary.
+    auto computeDestStep = [&](const ClipboardClipItem& item) -> double
+    {
+        if (baseStep >= 0)
+            return static_cast<double>(baseStep) + (item.originalStartStep - cb.minStartStep);
+        if (isCrossPattern)
+            return item.originalStartStep;
+        return cb.maxEndStep + (item.originalStartStep - cb.minStartStep);
+    };
+
+    double maxNeededEndStep = static_cast<double>(patLength);
+    for (const auto& item : cb.items)
+    {
+        const double destStep = computeDestStep(item);
+        const double span = item.span > 0.0 ? item.span : (item.lengthSteps > 0.0 ? item.lengthSteps : 4.0);
+        maxNeededEndStep = std::max(maxNeededEndStep, destStep + span);
+    }
+    if (maxNeededEndStep > static_cast<double>(patLength))
+    {
+        const int spb = std::max(1, song_.stepsPerBar());
+        const int neededBars = std::max(pat->lengthBars, static_cast<int>(std::ceil(maxNeededEndStep / static_cast<double>(spb))));
+        song_.setPatternLength(currentPattern_, neededBars);
+    }
+
+    const int updatedPatLength = song_.findPattern(currentPattern_) != nullptr
+                                     ? song_.findPattern(currentPattern_)->lengthSteps()
+                                     : patLength;
 
     for (const auto& item : cb.items)
     {
@@ -3800,26 +3957,7 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
         if (destTrack < 0)
             continue;
 
-        double destStep = 0.0;
-        if (baseStep >= 0)
-        {
-            destStep = static_cast<double>(baseStep) + (item.originalStartStep - cb.minStartStep);
-        }
-        else
-        {
-            if (isCrossPattern)
-            {
-                destStep = item.originalStartStep;
-            }
-            else
-            {
-                const double span = item.span > 0.0 ? item.span : (item.lengthSteps > 0.0 ? item.lengthSteps : 4.0);
-                destStep = item.originalStartStep + span;
-            }
-        }
-
-        if (destStep >= static_cast<double>(patLength))
-            destStep = std::fmod(destStep, static_cast<double>(patLength));
+        const double destStep = std::max(0.0, computeDestStep(item));
 
         auto newClipId =
             song_.placeClip(currentPattern_, destTrack, item.sampleId, destStep, item.lengthSteps, item.offsetSteps);
@@ -3837,7 +3975,8 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
             if (!item.fxChain.empty())
                 song_.setClipFxChain(currentPattern_, *newClipId, item.fxChain);
             newClipIds.push_back(*newClipId);
-            lastPastedTrack = destTrack;
+            if (firstPastedTrack < 0 || item.sourceTrackIndex == cb.primaryTrackIndex)
+                firstPastedTrack = destTrack;
             const double span = item.span > 0.0 ? item.span : (item.lengthSteps > 0.0 ? item.lengthSteps : 4.0);
             maxPastedEndStep = std::max(maxPastedEndStep, juce::roundToInt(destStep + span));
         }
@@ -3845,13 +3984,13 @@ void PatternView::pasteClip(int targetTrack, int targetStep)
 
     if (!newClipIds.empty())
     {
-        pasteTargetTrack_ = lastPastedTrack;
-        pasteTargetStep_ = maxPastedEndStep < patLength ? maxPastedEndStep : 0;
+        pasteTargetTrack_ = (firstPastedTrack >= 0) ? firstPastedTrack : 0;
+        pasteTargetStep_ = maxPastedEndStep < updatedPatLength ? maxPastedEndStep : updatedPatLength;
 
         if (grid_ != nullptr)
         {
             grid_->setSelectedClips(newClipIds);
-            grid_->setCursorPosition(lastPastedTrack, pasteTargetStep_);
+            grid_->setCursorPosition(pasteTargetTrack_, pasteTargetStep_);
         }
 
         trackHeaders_->updateFromModel();
@@ -4466,7 +4605,10 @@ void PatternView::timerCallback()
                 grid_->clearLiveRecordingPreview();
             }
             if (ruler_ != nullptr)
+            {
+                ruler_->tickAutoScroll();
                 ruler_->repaint();
+            }
             const auto lv = engine_.sequencer().outputLevels();
             if (masterBusLane_ != nullptr)
             {
@@ -4487,6 +4629,13 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
 {
     if (key.getKeyCode() == juce::KeyPress::spaceKey)
     {
+        if (dockPanel_ != nullptr && dockPanel_->isVisible() &&
+            dockPanel_->activeTab() == BottomDockPanel::Tab::Wave &&
+            dockPanel_->waveEditor().hasKeyboardFocus(true))
+        {
+            dockPanel_->waveEditor().togglePreview();
+            return true;
+        }
         auto& seq = engine_.sequencer();
         seq.requestPlaying(!seq.isPlaying());
         return true;
@@ -4705,6 +4854,21 @@ void PatternView::resized()
     envLockToggle_.setBounds(toolbar.removeFromLeft(80));
     toolbar.removeFromLeft(4);
     rippleEditToggle_.setBounds(toolbar.removeFromLeft(68));
+
+    // Waveform Display Size slider on the right of the toolbar
+    if (toolbar.getWidth() >= 110)
+    {
+        waveScaleSlider_.setVisible(true);
+        waveScaleLabel_.setVisible(true);
+        waveScaleSlider_.setBounds(toolbar.removeFromRight(std::min(96, toolbar.getWidth() - 42)));
+        toolbar.removeFromRight(2);
+        waveScaleLabel_.setBounds(toolbar.removeFromRight(40));
+    }
+    else
+    {
+        waveScaleSlider_.setVisible(false);
+        waveScaleLabel_.setVisible(false);
+    }
 
     // Content area below toolbar
     const int contentY = kToolbarHeight;

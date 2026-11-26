@@ -1377,3 +1377,78 @@ TEST_CASE("AudioRecorder pre-count fires exact time-signature beats independentl
     REQUIRE(rec.recordedFrames() == 0);
     REQUIRE(rec.copyLiveWaveformPeaks().empty());
 }
+
+TEST_CASE("StretchCache restoreRawBank supports full undo/redo of raw sample audio edits")
+{
+    StretchCache cache;
+    const SampleId sid{42};
+
+    AudioData orig;
+    orig.channels = {{0.1f, 0.2f, 0.3f, 0.4f}};
+    cache.setRawAudio(sid, std::make_shared<const AudioData>(orig));
+
+    const SampleBank snapshotBefore = cache.getRawBank();
+
+    // Simulate a destructive wave edit (e.g. removing middle frames)
+    AudioData edited;
+    edited.channels = {{0.1f, 0.4f}};
+    cache.setRawAudio(sid, std::make_shared<const AudioData>(edited));
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 2);
+
+    const SampleBank snapshotAfter = cache.getRawBank();
+
+    // Undo restores original 4 frames
+    cache.restoreRawBank(snapshotBefore);
+    REQUIRE(cache.getRawAudio(sid) != nullptr);
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 4);
+    REQUIRE(cache.getRawAudio(sid)->left()[1] == Catch::Approx(0.2f));
+
+    // Redo restores edited 2 frames
+    cache.restoreRawBank(snapshotAfter);
+    REQUIRE(cache.getRawAudio(sid) != nullptr);
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 2);
+    REQUIRE(cache.getRawAudio(sid)->left()[1] == Catch::Approx(0.4f));
+}
+
+TEST_CASE("Sequencer plays from playhead outside loop region and loops once it enters")
+{
+    SnapshotExchange exchange;
+    auto snap = std::make_unique<PlaybackSnapshot>();
+    snap->lengthSamples = 4000;
+    snap->looping = true;
+    snap->loopStartSample = 1000;
+    snap->loopEndSample = 2000;
+    exchange.publish(std::move(snap));
+
+    Sequencer seq(exchange, 48000.0);
+    seq.setLoopingEnabled(true);
+
+    std::vector<float> outL(500, 0.0f), outR(500, 0.0f);
+
+    // 1. Playhead BEFORE loop region (at 200): plays through 700 -> enters loop -> wraps at 2000 back to 1000
+    seq.requestSeek(200);
+    seq.requestPlaying(true);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 700); // Did NOT jump to loopStart (1000)
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1200); // Entered loop region
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1700);
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1200); // Wrapped at 2000 -> 1000 + 200
+
+    // 2. Playhead AFTER loop region (at 2500): plays from 2500 -> 3000 without jumping back to 1000
+    seq.requestSeek(2500);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 3000);
+    REQUIRE(seq.isPlaying());
+
+    // Continues to end of song (4000) and stops cleanly
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 3500);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(!seq.isPlaying());
+}

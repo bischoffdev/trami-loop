@@ -8,6 +8,7 @@
 #include "ui/MixerPanel.h"
 #include "ui/SampleBrowserPanel.h"
 #include "ui/TrackPropertiesDialog.h"
+#include "ui/WaveEditorPanel.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -26,8 +27,9 @@ public:
     {
         Explorer = 0,
         Properties = 1,
-        Mixer = 2,
-        Fx = 3
+        Wave = 2,
+        Mixer = 3,
+        Fx = 4
     };
 
     BottomDockPanel(Song& song, AudioEngine& engine, StretchCache& stretchCache, PatternId patternId,
@@ -46,6 +48,7 @@ public:
     void selectClip(ClipId clipId, int trackIndex);
 
     void showTrackProperties(int trackIndex);
+    void showWaveEditorForClip(ClipId clipId, int trackIndex);
     void showTrackFx(int trackIndex);
     void showClipFx(ClipId clipId);
     void showMasterFx();
@@ -54,6 +57,7 @@ public:
 
     SampleBrowserPanel& explorer() noexcept { return *explorer_; }
     TrackPropertiesComponent& properties() noexcept { return *properties_; }
+    WaveEditorPanel& waveEditor() noexcept { return *waveEditor_; }
     MixerPanel& mixer() noexcept { return *mixer_; }
     FxRackPanel& fxRack() noexcept { return *fxRack_; }
 
@@ -77,6 +81,7 @@ private:
 
     std::unique_ptr<DockTabButton> explorerTab_;
     std::unique_ptr<DockTabButton> propertiesTab_;
+    std::unique_ptr<DockTabButton> waveTab_;
     std::unique_ptr<DockTabButton> mixerTab_;
     std::unique_ptr<DockTabButton> fxTab_;
     juce::Label contextLabel_;
@@ -84,6 +89,7 @@ private:
 
     std::unique_ptr<SampleBrowserPanel> explorer_;
     std::unique_ptr<TrackPropertiesComponent> properties_;
+    std::unique_ptr<WaveEditorPanel> waveEditor_;
     std::unique_ptr<MixerPanel> mixer_;
     std::unique_ptr<FxRackPanel> fxRack_;
 };

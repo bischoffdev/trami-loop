@@ -42,7 +42,7 @@ public:
         if (plugins_.empty())
         {
             g.setColour(Palette::textDim.withAlpha(0.7f));
-            g.setFont(Typography::regular(11.0f));
+            g.setFont(Typography::regular(13.0f));
             g.drawText("No matching plugins.\nClick \"Scan...\" to scan VST3/AU.",
                        getLocalBounds().reduced(10), juce::Justification::centred, true);
             return;
@@ -78,28 +78,28 @@ public:
             g.setColour((isHov || isSel) ? Palette::accent.withAlpha(0.32f) : Palette::panelHeader);
             g.fillRoundedRectangle(addBtn.toFloat(), 3.0f);
             g.setColour((isHov || isSel) ? Palette::accent : Palette::textDim);
-            g.setFont(Typography::bold(12.0f));
+            g.setFont(Typography::bold(14.0f));
             g.drawText("+", addBtn, juce::Justification::centred, false);
 
             // Format badge (VST3 / AU)
-            const auto fmtRect = juce::Rectangle<int>(addBtn.getX() - 36, row.getY() + 6, 32, 14);
+            const auto fmtRect = juce::Rectangle<int>(addBtn.getX() - 42, row.getY() + 10, 38, 17);
             g.setColour(Palette::panelHeader);
-            g.fillRoundedRectangle(fmtRect.toFloat(), 2.5f);
+            g.fillRoundedRectangle(fmtRect.toFloat(), 3.0f);
             g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(8.5f));
+            g.setFont(Typography::bold(10.0f));
             const juce::String shortFmt = d.pluginFormatName.containsIgnoreCase("AudioUnit") ? "AU" : d.pluginFormatName;
             g.drawText(shortFmt, fmtRect, juce::Justification::centred, false);
 
             // Name + manufacturer
-            auto textArea = row.withTrimmedLeft(8).withRight(fmtRect.getX() - 4);
+            auto textArea = row.withTrimmedLeft(8).withRight(fmtRect.getX() - 4).reduced(0, 2);
             g.setColour(Palette::text);
-            g.setFont(Typography::bold(11.0f));
-            g.drawText(d.name, textArea.removeFromTop(15), juce::Justification::centredLeft, true);
+            g.setFont(Typography::bold(13.5f));
+            g.drawText(d.name, textArea.removeFromTop(19), juce::Justification::centredLeft, true);
 
             if (d.manufacturerName.isNotEmpty())
             {
                 g.setColour(Palette::textDim);
-                g.setFont(Typography::regular(9.5f));
+                g.setFont(Typography::regular(11.5f));
                 g.drawText(d.manufacturerName, textArea, juce::Justification::centredLeft, true);
             }
         }
@@ -151,11 +151,11 @@ public:
     }
 
 private:
-    static constexpr int kRowH = 30;
+    static constexpr int kRowH = 38;
 
     static juce::Rectangle<int> addButtonRectForRow(const juce::Rectangle<int>& row)
     {
-        return {row.getRight() - 26, row.getY() + 5, 20, 20};
+        return {row.getRight() - 28, row.getY() + 8, 22, 22};
     }
 
     int hitRow(int y) const
@@ -261,8 +261,8 @@ public:
 
         // Slot number badge
         g.setColour(Palette::textDim);
-        g.setFont(Typography::bold(10.0f));
-        g.drawText("#" + juce::String(index_ + 1), 8, 9, 24, 18, juce::Justification::centredLeft, false);
+        g.setFont(Typography::bold(11.5f));
+        g.drawText("#" + juce::String(index_ + 1), 8, 9, 26, 18, juce::Justification::centredLeft, false);
 
         // Header divider
         g.setColour(Palette::gridLine.withAlpha(0.8f));
@@ -271,8 +271,8 @@ public:
         // Plugin name (centered in module body)
         auto body = getLocalBounds().reduced(10, 0).withTop(36).withBottom(getHeight() - 36);
         g.setColour(slot_.bypassed ? Palette::textDim : Palette::text);
-        g.setFont(Typography::bold(12.5f));
-        g.drawFittedText(juce::String(slot_.name), body.withTrimmedBottom(18), juce::Justification::centred, 2, 0.85f);
+        g.setFont(Typography::bold(14.0f));
+        g.drawFittedText(juce::String(slot_.name), body.withTrimmedBottom(20), juce::Justification::centred, 2, 0.85f);
 
         // Format + Latency pill badge
         if (!slot_.format.empty() || slot_.latencySamples > 0)
@@ -284,13 +284,13 @@ public:
                     fmt += " · ";
                 fmt += juce::String(slot_.latencySamples) + " smp";
             }
-            const float pillW = (slot_.latencySamples > 0) ? 94.0f : 44.0f;
+            const float pillW = (slot_.latencySamples > 0) ? 104.0f : 50.0f;
             const auto pill = juce::Rectangle<float>(static_cast<float>(getWidth()) * 0.5f - pillW * 0.5f,
-                                                     static_cast<float>(body.getBottom() - 16), pillW, 14.0f);
+                                                     static_cast<float>(body.getBottom() - 18), pillW, 16.0f);
             g.setColour(Palette::background.withAlpha(0.85f));
             g.fillRoundedRectangle(pill, 3.0f);
             g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(8.5f));
+            g.setFont(Typography::bold(10.0f));
             g.drawText(fmt, pill.toNearestInt(), juce::Justification::centred, false);
         }
     }
@@ -504,7 +504,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
 
     // Left pane: Plugin Browser
     browserTitleLabel_.setText("PLUGINS", juce::dontSendNotification);
-    browserTitleLabel_.setFont(Typography::bold(10.5f));
+    browserTitleLabel_.setFont(Typography::bold(12.0f));
     browserTitleLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     addAndMakeVisible(browserTitleLabel_);
 
@@ -512,6 +512,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
     scanButton_.onClick = [this]() { toggleScanPlugins(); };
     addAndMakeVisible(scanButton_);
 
+    searchBox_.setFont(Typography::regular(13.0f));
     searchBox_.setTextToShowWhenEmpty("Search VST3 / AU...", Palette::textDim.withAlpha(0.6f));
     searchBox_.setColour(juce::TextEditor::backgroundColourId, Palette::background);
     searchBox_.setColour(juce::TextEditor::textColourId, Palette::text);
@@ -525,7 +526,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
     browserViewport_.setScrollBarsShown(true, false);
     addAndMakeVisible(browserViewport_);
 
-    statusLabel_.setFont(Typography::regular(10.0f));
+    statusLabel_.setFont(Typography::regular(11.5f));
     statusLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(statusLabel_);
@@ -1205,10 +1206,10 @@ void FxRackPanel::resized()
     browserTitleLabel_.setBounds(leftHeader);
     leftPane.removeFromTop(4);
 
-    searchBox_.setBounds(leftPane.removeFromTop(22));
+    searchBox_.setBounds(leftPane.removeFromTop(26));
     leftPane.removeFromTop(4);
 
-    statusLabel_.setBounds(leftPane.removeFromBottom(16));
+    statusLabel_.setBounds(leftPane.removeFromBottom(18));
     leftPane.removeFromBottom(2);
 
     browserViewport_.setBounds(leftPane);

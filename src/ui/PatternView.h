@@ -34,6 +34,7 @@ public:
 
     // PatternGrid::Listener
     void clipClicked(ClipId clipId) override;
+    void clipDoubleClicked(ClipId clipId) override;
     void clipMoved(ClipId clipId, int newTrack, double newStep) override;
     void clipsMoved(const std::vector<PatternGrid::ClipMoveInfo>& moves) override;
     void clipResized(ClipId clipId, double newStartStep, double newLengthSteps, double newOffsetSteps) override;
@@ -231,6 +232,10 @@ private:
     IconButton autoCrossfadeToggle_{"X-Fade", IconButton::Icon::Crossfade, "X-Fade"};
     IconButton envLockToggle_{"Env Lock", IconButton::Icon::EnvelopeLock, "Env Lock"};
     IconButton rippleEditToggle_{"Ripple", IconButton::Icon::RippleEdit, "Ripple"};
+
+    // Waveform display vertical scale slider (applies to all clips)
+    juce::Label waveScaleLabel_{"WaveScale", "Wave:"};
+    juce::Slider waveScaleSlider_;
 
     double recordStartStep_ = 0.0;
     int recordTargetTrack_ = -1;

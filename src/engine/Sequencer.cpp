@@ -285,13 +285,15 @@ void Sequencer::updateAllVoiceGains() noexcept
         updateVoiceGainsForTrack(t);
 }
 
-void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples, bool loopPreview)
+void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples,
+                               bool loopPreview, std::int64_t initialReadPosition)
 {
     collectPreviewGarbage();
     if (audio == nullptr || audio->numFrames() == 0)
         return;
 
-    auto* item = new PreviewItem{std::move(audio), std::max(0, startDelaySamples), loopPreview};
+    const std::int64_t clampedStart = std::clamp<std::int64_t>(initialReadPosition, 0, audio->numFrames() - 1);
+    auto* item = new PreviewItem{std::move(audio), std::max(0, startDelaySamples), loopPreview, clampedStart};
     if (PreviewItem* prev = pendingPreview_.exchange(item, std::memory_order_acq_rel))
         delete prev;
 }
@@ -346,10 +348,14 @@ void Sequencer::handlePreviewRequests() noexcept
 
         currentPreview_ = next;
         previewLooping_ = currentPreview_->loopPreview;
-        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, currentPreview_->audio->numFrames(),
+        const std::int64_t totalFrames = currentPreview_->audio->numFrames();
+        const std::int64_t startPos = std::clamp<std::int64_t>(currentPreview_->initialReadPosition, 0,
+                                                               std::max<std::int64_t>(0, totalFrames - 1));
+        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, startPos, 0, totalFrames,
                               currentPreview_->startDelaySamples, 0.85f, 0.85f, 0.85f, 0.85f, true, -1, 0, 0, 0};
         previewPlaying_.store(true, std::memory_order_release);
-        previewProgress_.store(0.0, std::memory_order_relaxed);
+        previewProgress_.store(totalFrames > 0 ? static_cast<double>(startPos) / static_cast<double>(totalFrames) : 0.0,
+                               std::memory_order_relaxed);
     }
 }
 
@@ -419,10 +425,11 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
         int offset = 0;
         while (offset < numSamples)
         {
-            const std::int64_t segEnd = (isLooping && loopEnd > loopStart) ? loopEnd : current_->lengthSamples;
+            const bool canHitLoopEnd = isLooping && loopEnd > loopStart && position_ < loopEnd;
+            const std::int64_t segEnd = canHitLoopEnd ? loopEnd : current_->lengthSamples;
             if (position_ >= segEnd)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -440,7 +447,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
             const auto chunk = std::min<std::int64_t>(numSamples - offset, segEnd - position_);
             if (chunk <= 0)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -463,7 +470,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
             if (position_ >= segEnd)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -472,12 +479,9 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
                 else
                 {
                     position_ = 0;
-                    if (!isLooping)
-                    {
-                        playing_.store(false);
-                        playRequested_.store(false);
-                        break;
-                    }
+                    playing_.store(false);
+                    playRequested_.store(false);
+                    break;
                 }
             }
         }

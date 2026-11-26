@@ -143,6 +143,10 @@ void MainContainer::updateWindowTitle()
 void MainContainer::pushUndoState()
 {
     history_.pushState(song_);
+    undoAudioStack_.push_back(stretchCache_.getRawBank());
+    if (undoAudioStack_.size() > SongHistory::kMaxHistory)
+        undoAudioStack_.erase(undoAudioStack_.begin());
+    redoAudioStack_.clear();
 }
 
 void MainContainer::newProjectDialog()
@@ -250,6 +254,8 @@ void MainContainer::createNewProjectAt(const std::filesystem::path& dir)
     currentProjectName_ = juce::String::fromUTF8(dir.filename().string().c_str());
     currentProjectIsAcidImport_ = false;
     history_.clear();
+    undoAudioStack_.clear();
+    redoAudioStack_.clear();
 
     engine_.sequencer().setMasterVolume(song_.masterVolume());
 
@@ -395,6 +401,8 @@ void MainContainer::openProjectDialog()
                         currentProjectName_ = juce::String::fromUTF8(chosen.stem().string().c_str());
                         currentProjectIsAcidImport_ = true;
                         history_.clear();
+    undoAudioStack_.clear();
+    redoAudioStack_.clear();
                         engine_.pluginHost().clearAllChains();
                         engine_.sequencer().resetTrackMix();
                         engine_.sequencer().setMasterVolume(song_.masterVolume());
@@ -460,6 +468,8 @@ void MainContainer::openProjectDialog()
                     currentProjectName_ = juce::String::fromUTF8(projStem.c_str());
                     currentProjectIsAcidImport_ = false;
                     history_.clear();
+    undoAudioStack_.clear();
+    redoAudioStack_.clear();
                     engine_.pluginHost().clearAllChains();
                     engine_.sequencer().resetTrackMix();
                     engine_.sequencer().setMasterVolume(song_.masterVolume());
@@ -536,6 +546,12 @@ void MainContainer::performUndo()
 
     if (history_.undo(song_))
     {
+        if (!undoAudioStack_.empty())
+        {
+            redoAudioStack_.push_back(stretchCache_.getRawBank());
+            stretchCache_.restoreRawBank(std::move(undoAudioStack_.back()));
+            undoAudioStack_.pop_back();
+        }
         // Keep the user's current zoom level and tool mode intact across undo
         song_.setPatternZoom(curPatZoomX, curPatZoomY);
         song_.setArrangerZoom(curArrZoomX, curArrZoomY);
@@ -554,6 +570,12 @@ void MainContainer::performRedo()
 
     if (history_.redo(song_))
     {
+        if (!redoAudioStack_.empty())
+        {
+            undoAudioStack_.push_back(stretchCache_.getRawBank());
+            stretchCache_.restoreRawBank(std::move(redoAudioStack_.back()));
+            redoAudioStack_.pop_back();
+        }
         // Keep the user's current zoom level and tool mode intact across redo
         song_.setPatternZoom(curPatZoomX, curPatZoomY);
         song_.setArrangerZoom(curArrZoomX, curArrZoomY);

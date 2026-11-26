@@ -709,6 +709,9 @@ bool PluginHost::openPluginEditor(TargetKind kind, std::uint32_t targetId, int s
         }
     }
 
+    // Only keep one effect UI open at a time
+    closeAllEditors();
+
     juce::AudioProcessorEditor* editor = instance->createEditorIfNeeded();
     if (editor == nullptr)
         editor = new juce::GenericAudioProcessorEditor(*instance);

@@ -55,6 +55,8 @@ private:
     AudioEngine& engine_;
     StretchCache& stretchCache_;
     SongHistory history_;
+    std::vector<SampleBank> undoAudioStack_;
+    std::vector<SampleBank> redoAudioStack_;
     SampleImporter importer_;
 
     std::optional<std::filesystem::path> currentProjectDir_;

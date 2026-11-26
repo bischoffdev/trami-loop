@@ -75,7 +75,8 @@ public:
 
     /// Plays an audio buffer as an audition/preview. Safely replaces any
     /// in-progress preview without locking or allocating on the audio thread.
-    void triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples = 0, bool loopPreview = false);
+    void triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples = 0,
+                        bool loopPreview = false, std::int64_t initialReadPosition = 0);
 
     /// Stops any currently playing audition preview.
     void stopPreview() noexcept { stopPreviewRequested_.store(true); }
@@ -188,6 +189,7 @@ private:
         std::shared_ptr<const AudioData> audio;
         int startDelaySamples = 0;
         bool loopPreview = false;
+        std::int64_t initialReadPosition = 0;
     };
 
     void adoptPendingSnapshot() noexcept;

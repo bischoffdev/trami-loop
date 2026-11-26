@@ -1095,7 +1095,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
 
     const auto* pat = song_.findPattern(patternId_);
     const int numTracks = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
-    constexpr int kStripWidth = 6;
+    constexpr int kStripWidth = 14;
 
     // Matching modern luminous clip palette for the subtle left track accent bar
     static constexpr std::uint32_t kModernPalette[] = {
@@ -1237,7 +1237,7 @@ void TrackHeaderList::paint(juce::Graphics& g)
 void TrackHeaderList::resized()
 {
     const int numTracks = static_cast<int>(controls_.size());
-    constexpr int kStripWidth = 6;
+    constexpr int kStripWidth = 14;
 
     for (int t = 0; t < numTracks; ++t)
     {
@@ -1318,7 +1318,7 @@ void TrackHeaderList::resized()
 void TrackHeaderList::mouseMove(const juce::MouseEvent& e)
 {
     const int t = pointToTrack(e.getPosition());
-    if (t >= 0 && e.x <= 10)
+    if (t >= 0 && e.x <= 18)
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
     else
         setMouseCursor(juce::MouseCursor::NormalCursor);
@@ -1359,6 +1359,7 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
         m.addItem(6, "Track Type: Disk-Based (Stream Long Audio)", true, kind == SampleKind::DiskStream);
         m.addSeparator();
         m.addItem(40, "Recording Source...");
+        m.addItem(41, "Track Color...");
         m.addSeparator();
         juce::PopupMenu envMenu;
         envMenu.addItem(30, "Off (Hide Track Automation)", true, visEnv == TrackEnvelopeType::None);
@@ -1404,6 +1405,11 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
                                 showInputMenuForTrack(t, (t < static_cast<int>(controls_.size()))
                                                              ? controls_[static_cast<std::size_t>(t)].inputButton.get()
                                                              : nullptr);
+                            }
+                            else if (result == 41)
+                            {
+                                const int rowY = PatternGrid::kRulerHeight + t * trackHeight_;
+                                showColorPickerForTrack(t, juce::Rectangle<int>(0, rowY, 16, trackHeight_));
                             }
                             else if (result >= 30 && result <= 33)
                             {
@@ -1454,8 +1460,8 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
     }
 
     const int y = PatternGrid::kRulerHeight + t * trackHeight_;
-    // Clicking the left track color bar (x <= 10) opens the 32-color picker
-    if (e.x <= 10)
+    // Clicking the left track color bar (x <= 18) opens the 32-color picker
+    if (e.x <= 18)
     {
         if (selectedTracks_.count(t) == 0)
         {
@@ -1464,7 +1470,7 @@ void TrackHeaderList::mouseDown(const juce::MouseEvent& e)
             lastClickedTrack_ = t;
             repaint();
         }
-        showColorPickerForTrack(t, juce::Rectangle<int>(0, y, 10, trackHeight_));
+        showColorPickerForTrack(t, juce::Rectangle<int>(0, y, 16, trackHeight_));
         return;
     }
 

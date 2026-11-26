@@ -39,6 +39,14 @@ SampleBank StretchCache::getRawBank() const
     return rawBank_;
 }
 
+void StretchCache::restoreRawBank(SampleBank bank)
+{
+    cancelPending();
+    std::lock_guard<std::mutex> lock(mutex_);
+    rawBank_ = std::move(bank);
+    cache_.clear();
+}
+
 void StretchCache::removeSample(SampleId id)
 {
     std::lock_guard<std::mutex> lock(mutex_);

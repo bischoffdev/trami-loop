@@ -14,9 +14,9 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
     : song_(song), stretchCache_(stretchCache), patternId_(patternId),
       trackIndex_(trackIndex), onChanged_(std::move(onChanged))
 {
-    setSize(560, 240);
+    setSize(760, 260);
 
-    // Header: Track Selector + Sub-tabs
+    // Header: Track Selector + File info summary
     trackSelectLabel_.setFont(Typography::bold(11.5f));
     trackSelectLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     addAndMakeVisible(trackSelectLabel_);
@@ -32,17 +32,15 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
     };
     addAndMakeVisible(trackSelectorCombo_);
 
-    generalTabBtn_.onClick = [this]() { switchTab(ActiveTab::General); };
-    stretchTabBtn_.onClick = [this]() { switchTab(ActiveTab::Stretch); };
-    summaryTabBtn_.onClick = [this]() { switchTab(ActiveTab::Summary); };
-    addAndMakeVisible(generalTabBtn_);
-    addAndMakeVisible(stretchTabBtn_);
-    addAndMakeVisible(summaryTabBtn_);
+    fileInfoLabel_.setFont(Typography::regular(11.5f));
+    fileInfoLabel_.setColour(juce::Label::textColourId, Palette::textDim);
+    fileInfoLabel_.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(fileInfoLabel_);
 
-    // --- General Tab ---
+    // --- General Controls ---
     for (auto* lbl : {&trackTypeLabel_, &beatsLabel_, &rootNoteLabel_, &origBpmLabel_, &fxSendLabel_, &recordInputLabel_})
     {
-        lbl->setFont(Typography::bold(12.0f));
+        lbl->setFont(Typography::bold(11.5f));
         lbl->setColour(juce::Label::textColourId, Palette::textDim);
         addAndMakeVisible(lbl);
     }
@@ -114,84 +112,7 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
     };
     addAndMakeVisible(recordInputCombo_);
 
-    // --- Stretch Tab ---
-    autoDetectBtn_.setTooltip("Automatically detect transient onsets in the audio waveform");
-    autoDetectBtn_.onClick = [this]()
-    {
-        if (Sample* s = song_.findSample(sampleId_))
-        {
-            if (auto raw = stretchCache_.getRawAudio(sampleId_))
-            {
-                if (onPushUndo)
-                    onPushUndo();
-                s->stretchMarkers = Sample::detectTransients(raw->left(), raw->right(), raw->numFrames(), 44100.0, 32);
-                if (onChanged_)
-                    onChanged_();
-                repaint();
-            }
-        }
-    };
-    addAndMakeVisible(autoDetectBtn_);
-
-    beatGridBtn_.setTooltip("Place stretch markers evenly at each 1/8th beat subdivision");
-    beatGridBtn_.onClick = [this]()
-    {
-        if (Sample* s = song_.findSample(sampleId_))
-        {
-            if (onPushUndo)
-                onPushUndo();
-            s->stretchMarkers.clear();
-            const int divs = std::clamp(static_cast<int>(std::round(s->loopCycleBeats() * 2.0)), 2, 64);
-            for (int i = 1; i < divs; ++i)
-                s->stretchMarkers.push_back(static_cast<double>(i) / static_cast<double>(divs));
-            if (onChanged_)
-                onChanged_();
-            repaint();
-        }
-    };
-    addAndMakeVisible(beatGridBtn_);
-
-    clearMarkersBtn_.setTooltip("Remove all stretch markers");
-    clearMarkersBtn_.onClick = [this]()
-    {
-        if (Sample* s = song_.findSample(sampleId_))
-        {
-            if (!s->stretchMarkers.empty())
-            {
-                if (onPushUndo)
-                    onPushUndo();
-                s->stretchMarkers.clear();
-                if (onChanged_)
-                    onChanged_();
-                repaint();
-            }
-        }
-    };
-    addAndMakeVisible(clearMarkersBtn_);
-
-    stretchZoomOutBtn_.setTooltip("Zoom Out Stretch Waveform");
-    stretchZoomOutBtn_.onClick = [this]() { setStretchZoom(stretchZoom_ / 1.5); };
-    addAndMakeVisible(stretchZoomOutBtn_);
-
-    stretchZoomLabel_.setFont(Typography::bold(11.0f));
-    stretchZoomLabel_.setColour(juce::Label::textColourId, Palette::textDim);
-    stretchZoomLabel_.setJustificationType(juce::Justification::centred);
-    stretchZoomLabel_.setText("1.0x", juce::dontSendNotification);
-    addAndMakeVisible(stretchZoomLabel_);
-
-    stretchZoomInBtn_.setTooltip("Zoom In Stretch Waveform (or scroll/pinch on waveform)");
-    stretchZoomInBtn_.onClick = [this]() { setStretchZoom(stretchZoom_ * 1.5); };
-    addAndMakeVisible(stretchZoomInBtn_);
-
-    stretchZoomResetBtn_.setTooltip("Reset Stretch Waveform Zoom to 1:1");
-    stretchZoomResetBtn_.onClick = [this]() { setStretchZoom(1.0); };
-    addAndMakeVisible(stretchZoomResetBtn_);
-
-    // --- Summary Tab ---
-    fileInfoLabel_.setFont(Typography::regular(11.5f));
-    fileInfoLabel_.setColour(juce::Label::textColourId, Palette::text);
-    addAndMakeVisible(fileInfoLabel_);
-
+    // --- Summary Controls ---
     for (auto* lbl : {&titleLabel_, &authorLabel_, &copyrightLabel_, &commentsLabel_})
     {
         lbl->setFont(Typography::bold(11.5f));
@@ -211,7 +132,6 @@ TrackPropertiesComponent::TrackPropertiesComponent(Song& song, StretchCache& str
     commentsEditor_.setReturnKeyStartsNewLine(true);
 
     refreshFromModel();
-    switchTab(ActiveTab::General);
 }
 
 bool TrackPropertiesComponent::hasValidTrack() const
@@ -222,15 +142,8 @@ bool TrackPropertiesComponent::hasValidTrack() const
 
 void TrackPropertiesComponent::setTrack(PatternId patternId, int trackIndex)
 {
-    const bool changed = (patternId_ != patternId || trackIndex_ != trackIndex);
     patternId_ = patternId;
     trackIndex_ = trackIndex;
-    if (changed)
-    {
-        stretchZoom_ = 1.0;
-        stretchScrollNorm_ = 0.0;
-        stretchZoomLabel_.setText("1.0x", juce::dontSendNotification);
-    }
     refreshFromModel();
 }
 
@@ -252,7 +165,7 @@ void TrackPropertiesComponent::refreshFromModel()
 
     rebuildTrackSelector();
     loadFromModel();
-    switchTab(activeTab_);
+    repaint();
 }
 
 void TrackPropertiesComponent::rebuildTrackSelector()
@@ -298,7 +211,6 @@ void TrackPropertiesComponent::loadFromModel()
     for (juce::Component* c : std::initializer_list<juce::Component*>{
              &trackTypeCombo_, &beatsCombo_, &rootNoteCombo_, &origBpmEditor_, &fxSendSlider_,
              &recordInputCombo_,
-             &autoDetectBtn_, &beatGridBtn_, &clearMarkersBtn_,
              &titleEditor_, &authorEditor_, &copyrightEditor_, &commentsEditor_})
     {
         c->setEnabled(valid);
@@ -358,12 +270,12 @@ void TrackPropertiesComponent::loadFromModel()
         const int chComp = song_.channelCompensationSamples(patternId_, trackIndex_);
         const int projLat = song_.totalProjectLatencySamples(patternId_);
         juce::String info = "File: " + juce::String(s->fileName.empty() ? s->name : s->fileName) +
-                            "   |   Duration: " + juce::String(s->durationSeconds, 2) + " s" +
-                            "   |   Frames: " + juce::String(frames) +
-                            "   |   Channels: " + juce::String(ch) +
-                            "   |   PDC: " + juce::String(chLat) + " smp (+" + juce::String(chComp) +
-                            " comp, Proj " + juce::String(projLat) + " smp)" +
-                            (s->missing ? "   [MISSING ON DISK]" : "");
+                            "  |  " + juce::String(s->durationSeconds, 2) + " s" +
+                            "  |  " + juce::String(frames) + " f" +
+                            "  |  " + juce::String(ch) + " ch" +
+                            "  |  PDC: " + juce::String(chLat) + " smp (+" + juce::String(chComp) +
+                            ", Proj " + juce::String(projLat) + ")" +
+                            (s->missing ? "  [MISSING]" : "");
         fileInfoLabel_.setText(info, juce::dontSendNotification);
 
         const std::string trkName = song_.patternTrackName(patternId_, trackIndex_);
@@ -455,569 +367,136 @@ void TrackPropertiesComponent::applySummaryChanges()
         onChanged_();
 }
 
-void TrackPropertiesComponent::switchTab(ActiveTab tab)
+void TrackPropertiesComponent::paint(juce::Graphics& g)
 {
-    activeTab_ = tab;
-
-    const bool isGen = (tab == ActiveTab::General);
-    const bool isStr = (tab == ActiveTab::Stretch);
-    const bool isSum = (tab == ActiveTab::Summary);
-
-    generalTabBtn_.setColour(juce::TextButton::buttonColourId, isGen ? Palette::accent.withAlpha(0.28f) : Palette::surface);
-    stretchTabBtn_.setColour(juce::TextButton::buttonColourId, isStr ? Palette::accent.withAlpha(0.28f) : Palette::surface);
-    summaryTabBtn_.setColour(juce::TextButton::buttonColourId, isSum ? Palette::accent.withAlpha(0.28f) : Palette::surface);
-
-    for (juce::Component* c : std::initializer_list<juce::Component*>{
-             &trackTypeLabel_, &trackTypeCombo_, &beatsLabel_, &beatsCombo_,
-             &rootNoteLabel_, &rootNoteCombo_, &origBpmLabel_, &origBpmEditor_,
-             &fxSendLabel_, &fxSendSlider_,
-             &recordInputLabel_, &recordInputCombo_})
-        c->setVisible(isGen);
-
-    for (juce::Component* c : std::initializer_list<juce::Component*>{
-             &autoDetectBtn_, &beatGridBtn_, &clearMarkersBtn_,
-             &stretchZoomOutBtn_, &stretchZoomLabel_, &stretchZoomInBtn_, &stretchZoomResetBtn_})
-        c->setVisible(isStr);
-
-    for (juce::Component* c : std::initializer_list<juce::Component*>{
-             &fileInfoLabel_, &titleLabel_, &titleEditor_, &authorLabel_, &authorEditor_,
-             &copyrightLabel_, &copyrightEditor_, &commentsLabel_, &commentsEditor_})
-        c->setVisible(isSum);
-
-    resized();
-    repaint();
+    g.fillAll(Palette::surface);
+    g.setColour(Palette::gridLine);
+    g.drawHorizontalLine(36, 0.0f, static_cast<float>(getWidth()));
 }
 
 void TrackPropertiesComponent::resized()
 {
-    auto area = getLocalBounds().reduced(10, 8);
-    auto topBar = area.removeFromTop(26);
+    auto area = getLocalBounds().reduced(10, 6);
+    auto topBar = area.removeFromTop(24);
 
     trackSelectLabel_.setBounds(topBar.removeFromLeft(44));
-    trackSelectorCombo_.setBounds(topBar.removeFromLeft(std::min(220, std::max(120, topBar.getWidth() / 3))));
+    trackSelectorCombo_.setBounds(topBar.removeFromLeft(std::clamp(topBar.getWidth() / 4, 130, 220)));
     topBar.removeFromLeft(14);
-
-    generalTabBtn_.setBounds(topBar.removeFromLeft(88));
-    topBar.removeFromLeft(4);
-    stretchTabBtn_.setBounds(topBar.removeFromLeft(88));
-    topBar.removeFromLeft(4);
-    summaryTabBtn_.setBounds(topBar.removeFromLeft(88));
+    fileInfoLabel_.setBounds(topBar);
 
     area.removeFromTop(10);
 
-    if (activeTab_ == ActiveTab::General)
+    const bool twoCol = (area.getWidth() >= 660);
+    constexpr int rowH = 24;
+    constexpr int gap = 5;
+
+    if (twoCol)
     {
-        const bool twoCol = (area.getWidth() >= 680);
-        constexpr int rowH = 26;
-        constexpr int gap = 8;
-
-        if (twoCol)
-        {
-            const int colGap = 24;
-            const int colW = (area.getWidth() - colGap) / 2;
-            auto leftCol = area.removeFromLeft(colW);
-            area.removeFromLeft(colGap);
-            auto rightCol = area;
-
-            constexpr int labelW = 148;
-
-            auto r1 = leftCol.removeFromTop(rowH);
-            trackTypeLabel_.setBounds(r1.removeFromLeft(labelW));
-            trackTypeCombo_.setBounds(r1);
-            leftCol.removeFromTop(gap);
-
-            auto r2 = leftCol.removeFromTop(rowH);
-            beatsLabel_.setBounds(r2.removeFromLeft(labelW));
-            beatsCombo_.setBounds(r2);
-            leftCol.removeFromTop(gap);
-
-            auto r3 = leftCol.removeFromTop(rowH);
-            rootNoteLabel_.setBounds(r3.removeFromLeft(labelW));
-            rootNoteCombo_.setBounds(r3);
-
-            auto r4 = rightCol.removeFromTop(rowH);
-            origBpmLabel_.setBounds(r4.removeFromLeft(labelW));
-            origBpmEditor_.setBounds(r4.removeFromLeft(120));
-            rightCol.removeFromTop(gap);
-
-            auto r5 = rightCol.removeFromTop(rowH);
-            fxSendLabel_.setBounds(r5.removeFromLeft(labelW));
-            fxSendSlider_.setBounds(r5);
-            rightCol.removeFromTop(gap);
-
-            auto r6 = rightCol.removeFromTop(rowH);
-            recordInputLabel_.setBounds(r6.removeFromLeft(labelW));
-            recordInputCombo_.setBounds(r6);
-        }
-        else
-        {
-            constexpr int labelW = 160;
-            auto row1 = area.removeFromTop(rowH);
-            trackTypeLabel_.setBounds(row1.removeFromLeft(labelW));
-            trackTypeCombo_.setBounds(row1);
-            area.removeFromTop(gap);
-
-            auto row2 = area.removeFromTop(rowH);
-            beatsLabel_.setBounds(row2.removeFromLeft(labelW));
-            beatsCombo_.setBounds(row2);
-            area.removeFromTop(gap);
-
-            auto row3 = area.removeFromTop(rowH);
-            rootNoteLabel_.setBounds(row3.removeFromLeft(labelW));
-            rootNoteCombo_.setBounds(row3);
-            area.removeFromTop(gap);
-
-            auto row4 = area.removeFromTop(rowH);
-            origBpmLabel_.setBounds(row4.removeFromLeft(labelW));
-            origBpmEditor_.setBounds(row4.removeFromLeft(130));
-            area.removeFromTop(gap);
-
-            auto row5 = area.removeFromTop(rowH);
-            fxSendLabel_.setBounds(row5.removeFromLeft(labelW));
-            fxSendSlider_.setBounds(row5);
-            area.removeFromTop(gap);
-
-            auto row6 = area.removeFromTop(rowH);
-            recordInputLabel_.setBounds(row6.removeFromLeft(labelW));
-            recordInputCombo_.setBounds(row6);
-        }
-    }
-    else if (activeTab_ == ActiveTab::Stretch)
-    {
-        auto btnRow = area.removeFromBottom(26);
-        autoDetectBtn_.setBounds(btnRow.removeFromLeft(165));
-        btnRow.removeFromLeft(6);
-        beatGridBtn_.setBounds(btnRow.removeFromLeft(124));
-        btnRow.removeFromLeft(6);
-        clearMarkersBtn_.setBounds(btnRow.removeFromLeft(114));
-
-        stretchZoomResetBtn_.setBounds(btnRow.removeFromRight(36));
-        btnRow.removeFromRight(4);
-        stretchZoomInBtn_.setBounds(btnRow.removeFromRight(26));
-        btnRow.removeFromRight(2);
-        stretchZoomLabel_.setBounds(btnRow.removeFromRight(42));
-        btnRow.removeFromRight(2);
-        stretchZoomOutBtn_.setBounds(btnRow.removeFromRight(26));
-
-        area.removeFromBottom(4);
-        stretchScrollRect_ = area.removeFromBottom(10);
-        area.removeFromBottom(4);
-        stretchWaveformRect_ = area;
-    }
-    else if (activeTab_ == ActiveTab::Summary)
-    {
-        fileInfoLabel_.setBounds(area.removeFromTop(20));
-        area.removeFromTop(6);
-
-        const bool twoCol = (area.getWidth() >= 680);
-        constexpr int labelW = 136;
-        constexpr int rowH = 24;
-
-        if (twoCol)
-        {
-            const int colGap = 20;
-            const int colW = (area.getWidth() - colGap) / 2;
-            auto leftCol = area.removeFromLeft(colW);
-            area.removeFromLeft(colGap);
-            auto rightCol = area;
-
-            auto r1 = leftCol.removeFromTop(rowH);
-            titleLabel_.setBounds(r1.removeFromLeft(labelW));
-            titleEditor_.setBounds(r1);
-            leftCol.removeFromTop(6);
-
-            auto r2 = leftCol.removeFromTop(rowH);
-            authorLabel_.setBounds(r2.removeFromLeft(labelW));
-            authorEditor_.setBounds(r2);
-            leftCol.removeFromTop(6);
-
-            auto r3 = leftCol.removeFromTop(rowH);
-            copyrightLabel_.setBounds(r3.removeFromLeft(labelW));
-            copyrightEditor_.setBounds(r3);
-
-            commentsLabel_.setBounds(rightCol.removeFromTop(18));
-            commentsEditor_.setBounds(rightCol);
-        }
-        else
-        {
-            auto r1 = area.removeFromTop(rowH);
-            titleLabel_.setBounds(r1.removeFromLeft(labelW));
-            titleEditor_.setBounds(r1);
-            area.removeFromTop(6);
-
-            auto r2 = area.removeFromTop(rowH);
-            authorLabel_.setBounds(r2.removeFromLeft(labelW));
-            authorEditor_.setBounds(r2);
-            area.removeFromTop(6);
-
-            auto r3 = area.removeFromTop(rowH);
-            copyrightLabel_.setBounds(r3.removeFromLeft(labelW));
-            copyrightEditor_.setBounds(r3);
-            area.removeFromTop(6);
-
-            commentsLabel_.setBounds(area.removeFromLeft(labelW).removeFromTop(rowH));
-            commentsEditor_.setBounds(area);
-        }
-    }
-}
-
-void TrackPropertiesComponent::setStretchZoom(double newZoom, double anchorNorm)
-{
-    const double clampedZoom = std::clamp(newZoom, 1.0, 16.0);
-    const double oldVis = 1.0 / stretchZoom_;
-    const double newVis = 1.0 / clampedZoom;
-
-    if (anchorNorm < 0.0)
-        anchorNorm = stretchScrollNorm_ + oldVis * 0.5;
-
-    const double fracInView = (oldVis > 1e-6) ? std::clamp((anchorNorm - stretchScrollNorm_) / oldVis, 0.0, 1.0) : 0.5;
-    stretchZoom_ = clampedZoom;
-    stretchScrollNorm_ = std::clamp(anchorNorm - fracInView * newVis, 0.0, std::max(0.0, 1.0 - newVis));
-    stretchZoomLabel_.setText(juce::String(stretchZoom_, 1) + "x", juce::dontSendNotification);
-    repaint();
-}
-
-double TrackPropertiesComponent::stretchNormToX(double norm) const
-{
-    const double x0 = static_cast<double>(stretchWaveformRect_.getX() + 4);
-    const double w = static_cast<double>(std::max(1, stretchWaveformRect_.getWidth() - 8));
-    const double vis = 1.0 / std::max(1.0, stretchZoom_);
-    return x0 + ((norm - stretchScrollNorm_) / vis) * w;
-}
-
-double TrackPropertiesComponent::stretchXToNorm(int x) const
-{
-    const double x0 = static_cast<double>(stretchWaveformRect_.getX() + 4);
-    const double w = static_cast<double>(std::max(1, stretchWaveformRect_.getWidth() - 8));
-    const double vis = 1.0 / std::max(1.0, stretchZoom_);
-    const double frac = (static_cast<double>(x) - x0) / w;
-    return std::clamp(stretchScrollNorm_ + frac * vis, 0.001, 0.999);
-}
-
-juce::Rectangle<int> TrackPropertiesComponent::stretchScrollThumbRect() const
-{
-    if (stretchScrollRect_.isEmpty())
-        return {};
-    const double vis = 1.0 / std::max(1.0, stretchZoom_);
-    const int w = stretchScrollRect_.getWidth();
-    const int thumbW = std::max(24, juce::roundToInt(vis * static_cast<double>(w)));
-    const int maxX = std::max(0, w - thumbW);
-    const double maxScroll = std::max(1e-6, 1.0 - vis);
-    const int thumbX = (stretchZoom_ <= 1.001)
-                           ? 0
-                           : std::clamp(juce::roundToInt((stretchScrollNorm_ / maxScroll) * static_cast<double>(maxX)), 0, maxX);
-    return {stretchScrollRect_.getX() + thumbX, stretchScrollRect_.getY() + 1, thumbW, std::max(4, stretchScrollRect_.getHeight() - 2)};
-}
-
-int TrackPropertiesComponent::hitTestMarker(juce::Point<int> pt) const
-{
-    if (activeTab_ != ActiveTab::Stretch || !stretchWaveformRect_.contains(pt))
-        return -1;
-    const Sample* s = song_.findSample(sampleId_);
-    if (s == nullptr)
-        return -1;
-
-    int bestIdx = -1;
-    int bestDist = 8;
-    for (std::size_t i = 0; i < s->stretchMarkers.size(); ++i)
-    {
-        const int mx = juce::roundToInt(stretchNormToX(s->stretchMarkers[i]));
-        if (mx < stretchWaveformRect_.getX() || mx > stretchWaveformRect_.getRight())
-            continue;
-        const int d = std::abs(pt.x - mx);
-        if (d <= bestDist)
-        {
-            bestDist = d;
-            bestIdx = static_cast<int>(i);
-        }
-    }
-    return bestIdx;
-}
-
-void TrackPropertiesComponent::mouseMove(const juce::MouseEvent& e)
-{
-    if (activeTab_ != ActiveTab::Stretch)
-        return;
-    const int idx = hitTestMarker(e.getPosition());
-    if (idx != hoveredMarkerIdx_)
-    {
-        hoveredMarkerIdx_ = idx;
-        setMouseCursor(idx >= 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
-        repaint();
-    }
-}
-
-void TrackPropertiesComponent::mouseDown(const juce::MouseEvent& e)
-{
-    if (activeTab_ != ActiveTab::Stretch)
-        return;
-
-    if (stretchScrollRect_.expanded(0, 2).contains(e.getPosition()) && stretchZoom_ > 1.001)
-    {
-        draggingStretchScroll_ = true;
-        scrollDragStartX_ = e.x;
-        scrollDragStartNorm_ = stretchScrollNorm_;
-        return;
-    }
-
-    if (!stretchWaveformRect_.contains(e.getPosition()))
-        return;
-
-    const int idx = hitTestMarker(e.getPosition());
-    if (e.mods.isRightButtonDown())
-    {
-        if (idx >= 0)
-        {
-            if (Sample* s = song_.findSample(sampleId_))
-            {
-                if (onPushUndo)
-                    onPushUndo();
-                s->stretchMarkers.erase(s->stretchMarkers.begin() + idx);
-                hoveredMarkerIdx_ = -1;
-                if (onChanged_)
-                    onChanged_();
-                repaint();
-            }
-        }
-        return;
-    }
-
-    draggingMarkerIdx_ = idx;
-    pushedUndoForMarkerDrag_ = false;
-}
-
-void TrackPropertiesComponent::mouseDrag(const juce::MouseEvent& e)
-{
-    if (activeTab_ != ActiveTab::Stretch)
-        return;
-
-    if (draggingStretchScroll_)
-    {
-        const double vis = 1.0 / std::max(1.0, stretchZoom_);
-        const int w = std::max(1, stretchScrollRect_.getWidth());
-        const double deltaNorm = static_cast<double>(e.x - scrollDragStartX_) / static_cast<double>(w);
-        stretchScrollNorm_ = std::clamp(scrollDragStartNorm_ + deltaNorm, 0.0, std::max(0.0, 1.0 - vis));
-        repaint();
-        return;
-    }
-
-    if (draggingMarkerIdx_ < 0)
-        return;
-
-    Sample* s = song_.findSample(sampleId_);
-    if (s == nullptr || draggingMarkerIdx_ >= static_cast<int>(s->stretchMarkers.size()))
-        return;
-
-    if (!pushedUndoForMarkerDrag_)
-    {
-        if (onPushUndo)
-            onPushUndo();
-        pushedUndoForMarkerDrag_ = true;
-    }
-
-    const double norm = std::clamp(stretchXToNorm(e.getPosition().x), 0.005, 0.995);
-    s->stretchMarkers[static_cast<std::size_t>(draggingMarkerIdx_)] = norm;
-    repaint();
-}
-
-void TrackPropertiesComponent::mouseUp(const juce::MouseEvent&)
-{
-    draggingStretchScroll_ = false;
-    if (draggingMarkerIdx_ >= 0)
-    {
-        if (pushedUndoForMarkerDrag_)
-        {
-            if (Sample* s = song_.findSample(sampleId_))
-                std::sort(s->stretchMarkers.begin(), s->stretchMarkers.end());
-            if (onChanged_)
-                onChanged_();
-        }
-        draggingMarkerIdx_ = -1;
-        pushedUndoForMarkerDrag_ = false;
-        repaint();
-    }
-}
-
-void TrackPropertiesComponent::mouseDoubleClick(const juce::MouseEvent& e)
-{
-    if (activeTab_ != ActiveTab::Stretch || !stretchWaveformRect_.contains(e.getPosition()))
-        return;
-
-    Sample* s = song_.findSample(sampleId_);
-    if (s == nullptr)
-        return;
-
-    if (onPushUndo)
-        onPushUndo();
-    const double norm = std::clamp(stretchXToNorm(e.getPosition().x), 0.005, 0.995);
-    s->stretchMarkers.push_back(norm);
-    std::sort(s->stretchMarkers.begin(), s->stretchMarkers.end());
-    if (onChanged_)
-        onChanged_();
-    repaint();
-}
-
-void TrackPropertiesComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
-{
-    if (activeTab_ != ActiveTab::Stretch || !stretchWaveformRect_.contains(e.getPosition()))
-    {
-        juce::Component::mouseWheelMove(e, wheel);
-        return;
-    }
-
-    if (e.mods.isShiftDown() || (std::abs(wheel.deltaX) > std::abs(wheel.deltaY) && stretchZoom_ > 1.001))
-    {
-        const double vis = 1.0 / std::max(1.0, stretchZoom_);
-        const double delta = (std::abs(wheel.deltaX) > 1e-4f ? -wheel.deltaX : -wheel.deltaY) * vis * 0.45;
-        stretchScrollNorm_ = std::clamp(stretchScrollNorm_ + delta, 0.0, std::max(0.0, 1.0 - vis));
-        repaint();
-        return;
-    }
-
-    if (std::abs(wheel.deltaY) > 1e-4f)
-    {
-        const double factor = std::pow(1.28, static_cast<double>(wheel.deltaY) * 3.0);
-        setStretchZoom(stretchZoom_ * factor, stretchXToNorm(e.getPosition().x));
-    }
-}
-
-void TrackPropertiesComponent::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
-{
-    if (activeTab_ == ActiveTab::Stretch && stretchWaveformRect_.contains(e.getPosition()) && scaleFactor > 0.01f)
-        setStretchZoom(stretchZoom_ * static_cast<double>(scaleFactor), stretchXToNorm(e.getPosition().x));
-}
-
-void TrackPropertiesComponent::paint(juce::Graphics& g)
-{
-    g.fillAll(Palette::surface);
-
-    // Subtle divider below header row
-    g.setColour(Palette::gridLine);
-    g.drawHorizontalLine(39, 0.0f, static_cast<float>(getWidth()));
-
-    if (activeTab_ != ActiveTab::Stretch || stretchWaveformRect_.isEmpty())
-        return;
-
-    g.setColour(Palette::background);
-    g.fillRoundedRectangle(stretchWaveformRect_.toFloat(), 4.0f);
-    g.setColour(Palette::gridBeatLine);
-    g.drawRoundedRectangle(stretchWaveformRect_.toFloat(), 4.0f, 1.0f);
-
-    const Sample* s = song_.findSample(sampleId_);
-    auto raw = stretchCache_.getRawAudio(sampleId_);
-    const int x0 = stretchWaveformRect_.getX() + 4;
-    const int w = std::max(1, stretchWaveformRect_.getWidth() - 8);
-    const int y0 = stretchWaveformRect_.getY() + 18;
-    const int h = std::max(10, stretchWaveformRect_.getHeight() - 24);
-    const float cy = static_cast<float>(y0) + static_cast<float>(h) * 0.5f;
-
-    const double viewStart = stretchScrollNorm_;
-    const double viewSpan = 1.0 / std::max(1.0, stretchZoom_);
-    const double viewEnd = std::min(1.0, viewStart + viewSpan);
-
-    g.setColour(juce::Colour(0xff1c2128));
-    g.fillRect(stretchWaveformRect_.getX() + 1, stretchWaveformRect_.getY() + 1, stretchWaveformRect_.getWidth() - 2, 16);
-
-    g.saveState();
-    g.reduceClipRegion(stretchWaveformRect_.reduced(2, 1));
-
-    const int beats = (s != nullptr) ? std::max(1, static_cast<int>(std::round(s->loopCycleBeats()))) : 4;
-    const int subdivsPerBeat = (stretchZoom_ >= 4.0) ? 4 : 2;
-    const int totalSubdivs = beats * subdivsPerBeat;
-    for (int b = 0; b <= totalSubdivs; ++b)
-    {
-        const double norm = static_cast<double>(b) / static_cast<double>(totalSubdivs);
-        if (norm < viewStart - 0.02 || norm > viewEnd + 0.02)
-            continue;
-        const int bx = juce::roundToInt(stretchNormToX(norm));
-        const bool isBeat = (b % subdivsPerBeat == 0);
-        g.setColour(isBeat ? Palette::gridBeatLine.withAlpha(0.75f) : Palette::gridLine.withAlpha(0.5f));
-        g.drawVerticalLine(bx, static_cast<float>(y0), static_cast<float>(stretchWaveformRect_.getBottom() - 2));
-        if (isBeat && b < totalSubdivs)
-        {
-            g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(9.5f));
-            g.drawText(juce::String(b / subdivsPerBeat + 1) + ".1", bx + 3, stretchWaveformRect_.getY() + 1, 30, 14,
-                       juce::Justification::centredLeft);
-        }
-    }
-
-    if (raw != nullptr && raw->numFrames() > 0)
-    {
-        const float* audioL = raw->left();
-        const float* audioR = raw->right();
-        const std::int64_t totalFrames = raw->numFrames();
-        const float maxAmp = static_cast<float>(h) * 0.46f;
-
-        g.setColour(Palette::accent.withAlpha(0.25f));
-        g.drawHorizontalLine(static_cast<int>(cy), static_cast<float>(x0), static_cast<float>(x0 + w));
-
-        g.setColour(Palette::accent.brighter(0.2f));
-        for (int px = 0; px < w; ++px)
-        {
-            const double n0 = viewStart + (static_cast<double>(px) / static_cast<double>(w)) * viewSpan;
-            const double n1 = viewStart + (static_cast<double>(px + 1) / static_cast<double>(w)) * viewSpan;
-            const std::int64_t f0 = std::clamp<std::int64_t>(static_cast<std::int64_t>(n0 * static_cast<double>(totalFrames)), 0, totalFrames);
-            const std::int64_t f1 = std::clamp<std::int64_t>(static_cast<std::int64_t>(n1 * static_cast<double>(totalFrames)), f0, totalFrames);
-
-            float minV = 0.0f;
-            float maxV = 0.0f;
-            if (f1 > f0)
-            {
-                const std::int64_t step = std::max<std::int64_t>(1, (f1 - f0) / 16);
-                for (std::int64_t f = f0; f < f1; f += step)
-                {
-                    const float v = 0.5f * (audioL[f] + audioR[f]);
-                    minV = std::min(minV, v);
-                    maxV = std::max(maxV, v);
-                }
-            }
-            const float y1 = cy - maxV * maxAmp;
-            const float y2 = cy - minV * maxAmp;
-            g.drawVerticalLine(x0 + px, std::min(y1, y2), std::max(y1, y2) + 1.0f);
-        }
+        const int colGap = 24;
+        const int colW = (area.getWidth() - colGap) / 2;
+        auto leftCol = area.removeFromLeft(colW);
+        area.removeFromLeft(colGap);
+        auto rightCol = area;
+
+        constexpr int leftLabelW = 148;
+        auto r1 = leftCol.removeFromTop(rowH);
+        trackTypeLabel_.setBounds(r1.removeFromLeft(leftLabelW));
+        trackTypeCombo_.setBounds(r1);
+        leftCol.removeFromTop(gap);
+
+        auto r2 = leftCol.removeFromTop(rowH);
+        beatsLabel_.setBounds(r2.removeFromLeft(leftLabelW));
+        beatsCombo_.setBounds(r2);
+        leftCol.removeFromTop(gap);
+
+        auto r3 = leftCol.removeFromTop(rowH);
+        rootNoteLabel_.setBounds(r3.removeFromLeft(leftLabelW));
+        rootNoteCombo_.setBounds(r3);
+        leftCol.removeFromTop(gap);
+
+        auto r4 = leftCol.removeFromTop(rowH);
+        origBpmLabel_.setBounds(r4.removeFromLeft(leftLabelW));
+        origBpmEditor_.setBounds(r4.removeFromLeft(110));
+        leftCol.removeFromTop(gap);
+
+        auto r5 = leftCol.removeFromTop(rowH);
+        fxSendLabel_.setBounds(r5.removeFromLeft(leftLabelW));
+        fxSendSlider_.setBounds(r5);
+        leftCol.removeFromTop(gap);
+
+        auto r6 = leftCol.removeFromTop(rowH);
+        recordInputLabel_.setBounds(r6.removeFromLeft(leftLabelW));
+        recordInputCombo_.setBounds(r6);
+
+        constexpr int rightLabelW = 136;
+        auto s1 = rightCol.removeFromTop(rowH);
+        titleLabel_.setBounds(s1.removeFromLeft(rightLabelW));
+        titleEditor_.setBounds(s1);
+        rightCol.removeFromTop(gap);
+
+        auto s2 = rightCol.removeFromTop(rowH);
+        authorLabel_.setBounds(s2.removeFromLeft(rightLabelW));
+        authorEditor_.setBounds(s2);
+        rightCol.removeFromTop(gap);
+
+        auto s3 = rightCol.removeFromTop(rowH);
+        copyrightLabel_.setBounds(s3.removeFromLeft(rightLabelW));
+        copyrightEditor_.setBounds(s3);
+        rightCol.removeFromTop(gap);
+
+        commentsLabel_.setBounds(rightCol.removeFromTop(18));
+        commentsEditor_.setBounds(rightCol);
     }
     else
     {
-        g.setColour(Palette::textDim);
-        g.setFont(Typography::regular(12.0f));
-        g.drawText("No audio waveform available (double-click to add markers, right-click to delete)",
-                   stretchWaveformRect_, juce::Justification::centred);
-    }
+        constexpr int labelW = 150;
+        auto row1 = area.removeFromTop(rowH);
+        trackTypeLabel_.setBounds(row1.removeFromLeft(labelW));
+        trackTypeCombo_.setBounds(row1);
+        area.removeFromTop(gap);
 
-    if (s != nullptr)
-    {
-        for (std::size_t i = 0; i < s->stretchMarkers.size(); ++i)
-        {
-            const double norm = s->stretchMarkers[i];
-            if (norm < viewStart - 0.02 || norm > viewEnd + 0.02)
-                continue;
-            const int mx = juce::roundToInt(stretchNormToX(norm));
-            const bool isHovered = (static_cast<int>(i) == hoveredMarkerIdx_ || static_cast<int>(i) == draggingMarkerIdx_);
-            const juce::Colour mCol = isHovered ? juce::Colours::white : juce::Colour(0xfff59e0b);
+        auto row2 = area.removeFromTop(rowH);
+        beatsLabel_.setBounds(row2.removeFromLeft(labelW));
+        beatsCombo_.setBounds(row2);
+        area.removeFromTop(gap);
 
-            g.setColour(mCol.withAlpha(0.88f));
-            g.drawVerticalLine(mx, static_cast<float>(stretchWaveformRect_.getY() + 14),
-                               static_cast<float>(stretchWaveformRect_.getBottom() - 2));
+        auto row3 = area.removeFromTop(rowH);
+        rootNoteLabel_.setBounds(row3.removeFromLeft(labelW));
+        rootNoteCombo_.setBounds(row3);
+        area.removeFromTop(gap);
 
-            juce::Path flag;
-            flag.startNewSubPath(static_cast<float>(mx - 5), static_cast<float>(stretchWaveformRect_.getY() + 14));
-            flag.lineTo(static_cast<float>(mx + 5), static_cast<float>(stretchWaveformRect_.getY() + 14));
-            flag.lineTo(static_cast<float>(mx), static_cast<float>(stretchWaveformRect_.getY() + 22));
-            flag.closeSubPath();
-            g.fillPath(flag);
-        }
-    }
-    g.restoreState();
+        auto row4 = area.removeFromTop(rowH);
+        origBpmLabel_.setBounds(row4.removeFromLeft(labelW));
+        origBpmEditor_.setBounds(row4.removeFromLeft(120));
+        area.removeFromTop(gap);
 
-    // Horizontal zoom scrollbar below waveform
-    if (!stretchScrollRect_.isEmpty())
-    {
-        g.setColour(Palette::background);
-        g.fillRoundedRectangle(stretchScrollRect_.toFloat(), 3.0f);
-        const auto thumb = stretchScrollThumbRect();
-        g.setColour(stretchZoom_ > 1.001 ? Palette::accent.withAlpha(0.55f) : Palette::gridBeatLine);
-        g.fillRoundedRectangle(thumb.toFloat(), 3.0f);
+        auto row5 = area.removeFromTop(rowH);
+        fxSendLabel_.setBounds(row5.removeFromLeft(labelW));
+        fxSendSlider_.setBounds(row5);
+        area.removeFromTop(gap);
+
+        auto row6 = area.removeFromTop(rowH);
+        recordInputLabel_.setBounds(row6.removeFromLeft(labelW));
+        recordInputCombo_.setBounds(row6);
+        area.removeFromTop(gap);
+
+        auto s1 = area.removeFromTop(rowH);
+        titleLabel_.setBounds(s1.removeFromLeft(labelW));
+        titleEditor_.setBounds(s1);
+        area.removeFromTop(gap);
+
+        auto s2 = area.removeFromTop(rowH);
+        authorLabel_.setBounds(s2.removeFromLeft(labelW));
+        authorEditor_.setBounds(s2);
+        area.removeFromTop(gap);
+
+        auto s3 = area.removeFromTop(rowH);
+        copyrightLabel_.setBounds(s3.removeFromLeft(labelW));
+        copyrightEditor_.setBounds(s3);
+        area.removeFromTop(gap);
+
+        commentsLabel_.setBounds(area.removeFromLeft(labelW).removeFromTop(rowH));
+        commentsEditor_.setBounds(area);
     }
 }
 

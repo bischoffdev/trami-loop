@@ -1222,8 +1222,10 @@ void PatternGrid::paint(juce::Graphics& g)
                                 }
                             }
 
-                            const float y1 = cy - maxVal * maxAmp;
-                            const float y2 = cy - minVal * maxAmp;
+                            const float scaledMax = std::clamp(maxVal * waveformDisplayGain_, -1.0f, 1.0f);
+                            const float scaledMin = std::clamp(minVal * waveformDisplayGain_, -1.0f, 1.0f);
+                            const float y1 = cy - scaledMax * maxAmp;
+                            const float y2 = cy - scaledMin * maxAmp;
                             const float topY = std::min(y1, y2);
                             const float botY = std::max(y1, y2);
                             const float lineH = std::max(1.2f, botY - topY);
@@ -1819,7 +1821,7 @@ void PatternGrid::paint(juce::Graphics& g)
                     float pk = 0.0f;
                     for (std::size_t k = idx0; k < std::min(idx1, numPeaks); ++k)
                         pk = std::max(pk, peaks[k]);
-                    const float h = std::max(1.0f, std::min(1.0f, pk) * maxAmp);
+                    const float h = std::max(1.0f, std::min(1.0f, pk * waveformDisplayGain_) * maxAmp);
                     g.drawVerticalLine(waveBounds.getX() + px, midY - h, midY + h);
                 }
             }
@@ -3062,6 +3064,9 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
             return;
         }
 
+        const int prevLoopStart = loopStartStep_;
+        const int prevLoopEnd = loopEndStep_;
+
         if (rulerDragMode_ == RulerDragMode::SetRegion)
         {
             loopStartStep_ = std::min(rulerDragRegionAnchorStep_, snapStep);
@@ -3093,10 +3098,17 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         }
         else if (rulerDragMode_ == RulerDragMode::MoveMarker)
         {
-            draggingMarkerStep_ = e.mods.isShiftDown()
-                ? std::clamp(xToStep(e.getPosition().x), 0.0, static_cast<double>(totalSteps))
-                : static_cast<double>(snapStep);
+            if (e.getScreenPosition().getDistanceFrom(rulerDragStartScreenPos_) >= 4)
+            {
+                draggingMarkerStep_ = e.mods.isShiftDown()
+                    ? std::clamp(xToStep(e.getPosition().x), 0.0, static_cast<double>(totalSteps))
+                    : static_cast<double>(snapStep);
+            }
         }
+
+        if (loopStartStep_ != prevLoopStart || loopEndStep_ != prevLoopEnd)
+            listener_.loopRegionChanged(loopStartStep_, loopEndStep_);
+
         repaint();
         return;
     }
@@ -3506,7 +3518,6 @@ void PatternGrid::mouseUp(const juce::MouseEvent& e)
             {
                 listener_.playheadSeekRequested(juce::roundToInt(movedStep));
                 setPlayheadStep(movedStep);
-                listener_.markerRenameRequested(movedMarkerId);
             }
             else if (movedMarkerId >= 0)
             {
@@ -3755,6 +3766,7 @@ void PatternGrid::mouseDoubleClick(const juce::MouseEvent& e)
             repaint();
             return;
         }
+        listener_.clipDoubleClicked(clip->id);
         return;
     }
 
@@ -4222,8 +4234,7 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key)
             }
             if (key.isKeyCode('D'))
             {
-                for (auto cid : selectedClips_)
-                    listener_.clipDuplicateRequested(cid);
+                listener_.clipDuplicateRequested(selectedClips_.back());
                 return true;
             }
         }

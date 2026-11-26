@@ -58,6 +58,7 @@ target_sources(TramiLoop PRIVATE
     ui/TrackPropertiesDialog.cpp
     ui/PluginRackDialog.cpp
     ui/SampleBrowserPanel.cpp
+    ui/WaveEditorPanel.cpp
     ui/MixerPanel.cpp
     ui/FxRackPanel.cpp
     ui/BottomDockPanel.cpp
