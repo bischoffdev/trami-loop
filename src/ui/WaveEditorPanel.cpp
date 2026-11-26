@@ -32,7 +32,7 @@ public:
         if (kind_ == Kind::PlayStop)
             bg = on ? juce::Colour(0xffb91c1c).withAlpha(0.78f) : juce::Colour(0xff15803d).withAlpha(0.55f);
         else if (on)
-            bg = Palette::accent.withAlpha(0.38f);
+            bg = Palette::accent.withAlpha(0.85f);
 
         if (shouldDrawButtonAsDown)
             bg = bg.darker(0.18f);
@@ -44,7 +44,8 @@ public:
 
         g.setColour(bg);
         g.fillRoundedRectangle(bounds, 4.0f);
-        g.setColour((on && kind_ == Kind::Loop ? Palette::accent : Palette::gridLine).withMultipliedAlpha(enabled ? 1.0f : 0.45f));
+        g.setColour((on && kind_ == Kind::Loop ? Palette::accent.brighter(0.25f) : Palette::gridLine)
+                        .withMultipliedAlpha(enabled ? 1.0f : 0.45f));
         g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
 
         const float cx = bounds.getCentreX();
@@ -52,7 +53,7 @@ public:
         const juce::Colour iconCol =
             (kind_ == Kind::PlayStop)
                 ? (on ? juce::Colours::white : juce::Colour(0xffdcfce7))
-                : (on ? Palette::accent.brighter(0.35f) : Palette::text.withAlpha(0.85f));
+                : (on ? juce::Colour(0xff0b1120) : Palette::text.withAlpha(0.85f));
         g.setColour(iconCol.withMultipliedAlpha(enabled ? 1.0f : 0.4f));
 
         if (kind_ == Kind::PlayStop)
@@ -401,7 +402,7 @@ void WaveEditorPanel::startPreviewFrom(double startPosNorm)
                                          clampedStart >= selStartNorm_ - 0.002 &&
                                          clampedStart <= selEndNorm_ + 0.002;
 
-    if (playheadInsideSelection)
+    if (hasSelection() && (loopEnabled_ || playheadInsideSelection))
     {
         startNorm = selStartNorm_;
         endNorm = selEndNorm_;
@@ -1483,6 +1484,13 @@ void WaveEditorPanel::mouseUp(const juce::MouseEvent&)
             selStartNorm_ = 0.0;
             selEndNorm_ = 0.0;
         }
+        else
+        {
+            if (playheadNorm_ < selStartNorm_ || playheadNorm_ > selEndNorm_)
+                playheadNorm_ = selStartNorm_;
+            if (isPreviewing_)
+                startPreviewFrom(playheadNorm_);
+        }
         syncControlsFromModel();
         repaint();
     }
@@ -1511,6 +1519,8 @@ void WaveEditorPanel::mouseUp(const juce::MouseEvent&)
         else
         {
             playheadNorm_ = selStartNorm_;
+            if (isPreviewing_)
+                startPreviewFrom(playheadNorm_);
         }
         syncControlsFromModel();
         repaint();

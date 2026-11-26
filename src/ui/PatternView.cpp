@@ -4643,9 +4643,22 @@ bool PatternView::keyPressed(const juce::KeyPress& key)
 
     if (key.getKeyCode() == '0' || key.getKeyCode() == juce::KeyPress::numberPad0)
     {
-        if (engine_.recorder().state() != RecordState::Idle)
+        const bool wasRecording = (engine_.recorder().state() != RecordState::Idle);
+        const bool wasPlaying = engine_.sequencer().isPlaying();
+        if (wasRecording)
             engine_.recorder().stop();
-        engine_.sequencer().requestPlaying(false);
+        if (wasPlaying || wasRecording)
+        {
+            engine_.sequencer().requestPlaying(false);
+        }
+        else if (engine_.sequencer().isLoopingEnabled() && loopEndStep_ > loopStartStep_ && loopStartStep_ > 0)
+        {
+            playheadSeekRequested(loopStartStep_);
+        }
+        else
+        {
+            engine_.sequencer().requestRewind();
+        }
         return true;
     }
 

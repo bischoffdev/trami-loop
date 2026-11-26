@@ -644,9 +644,24 @@ TransportBar::TransportBar(Song& song, AudioEngine& engine,
 
     // Stop
     stopButton_.onClick = [this]() {
-        if (engine_.recorder().state() != RecordState::Idle)
+        const bool wasRecording = (engine_.recorder().state() != RecordState::Idle);
+        const bool wasPlaying = engine_.sequencer().isPlaying();
+        if (wasRecording)
             engine_.recorder().stop();
-        engine_.sequencer().requestPlaying(false);
+        if (wasPlaying || wasRecording)
+        {
+            engine_.sequencer().requestPlaying(false);
+        }
+        else if (isLooping_ && loopEnd_ > loopStart_ && loopStart_ > 0)
+        {
+            const Timing timing(song_.bpm(), engine_.sampleRate(), song_.swing());
+            const int targetStep = loopIsBars_ ? (loopStart_ * song_.stepsPerBar()) : loopStart_;
+            engine_.sequencer().requestSeek(timing.stepToSample(targetStep));
+        }
+        else
+        {
+            engine_.sequencer().requestRewind();
+        }
     };
     addAndMakeVisible(stopButton_);
 

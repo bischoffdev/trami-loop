@@ -1452,3 +1452,39 @@ TEST_CASE("Sequencer plays from playhead outside loop region and loops once it e
     seq.process(outL.data(), outR.data(), 500);
     REQUIRE(!seq.isPlaying());
 }
+
+TEST_CASE("Sequencer preview supports initialReadPosition and continuous loopPreview")
+{
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, 48000.0);
+
+    // 1000-frame ramp sample so we can verify exact sample positions
+    auto audio = std::make_shared<AudioData>();
+    audio->channels.resize(2);
+    audio->channels[0].resize(1000);
+    audio->channels[1].resize(1000);
+    for (int i = 0; i < 1000; ++i)
+    {
+        const float v = static_cast<float>(i + 1) / 1000.0f;
+        audio->channels[0][static_cast<std::size_t>(i)] = v;
+        audio->channels[1][static_cast<std::size_t>(i)] = v;
+    }
+
+    // Start looping preview at frame 600
+    seq.triggerPreview(audio, 0, true, 600);
+    REQUIRE(seq.isPreviewActive());
+
+    std::vector<float> outL(500, 0.0f), outR(500, 0.0f);
+    // Process 500 samples: plays 600..999 (400 samples), wraps to 0..99 (100 samples)
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.isPreviewActive());
+    REQUIRE(outL[0] == Catch::Approx((601.0f / 1000.0f) * 0.85f).margin(0.01f));
+    REQUIRE(outL[400] == Catch::Approx((1.0f / 1000.0f) * 0.85f).margin(0.01f));
+    REQUIRE(seq.previewProgress() == Catch::Approx(100.0 / 1000.0).margin(0.01));
+
+    // Process another 1500 samples (1.5 full loops): must remain active and looping
+    std::vector<float> outL2(1500, 0.0f), outR2(1500, 0.0f);
+    seq.process(outL2.data(), outR2.data(), 1500);
+    REQUIRE(seq.isPreviewActive());
+    REQUIRE(seq.previewProgress() == Catch::Approx(600.0 / 1000.0).margin(0.01));
+}
