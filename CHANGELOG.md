@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Starting playback outside a loop region now plays from the playhead's current position (entering and looping once it reaches the loop region, or playing to song end if past it).
   - Adjusting the loop region while playing updates the audio engine in real time.
   - Dragging the playhead or loop region past the left/right viewport edge smoothly auto-scrolls the main timeline.
+  - Clicking **Stop** (or pressing `0` / Numpad `0`) when playback is already stopped resets the playhead to the start of the active loop region if looping is enabled, or to the beginning of the track if looping is off.
 - **Timeline Marker Interactions**: Single-clicking a marker now jumps the playhead to the marker position without opening the dialog; dragging moves the marker, and double-clicking opens the marker properties/rename window.
 - **UI Readability & Ergonomics**:
   - Enlarged font sizes in the Explorer right-hand file browser and the FX Rack / VST plugin list.
@@ -53,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clearing a clip selection or clicking another clip automatically clears the Wave Editor's marked region.
 
 ### Fixed
+- **Wave Editor Loop Playback**: Fixed Wave Editor looping so enabling **Loop** always loops the marked selection (even if the playhead was parked outside it), live-updates loop bounds when resizing or re-selecting a region during playback, and highlights the Loop symbol button clearly when active.
 - **Multi-Clip Copy, Cut, Duplicate & Paste**:
   - Fixed `Cmd+C`, `Cmd+X`, `Cmd+D`, and right-click Copy collapsing multi-clip selections down to a single clip.
   - Preserved exact relative timing, clip count, and track alignment when pasting multiple clips (growing pattern length automatically instead of wrapping clips via `fmod`).
