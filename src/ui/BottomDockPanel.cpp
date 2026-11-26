@@ -63,9 +63,13 @@ BottomDockPanel::BottomDockPanel(Song& song, AudioEngine& engine, StretchCache& 
     explorerTab_->onClick = [this]() { setActiveTab(Tab::Explorer); };
     addAndMakeVisible(explorerTab_.get());
 
-    propertiesTab_ = std::make_unique<DockTabButton>("Properties", "Edit selected track properties, stretch markers & metadata");
+    propertiesTab_ = std::make_unique<DockTabButton>("Properties", "Edit selected track general settings & metadata");
     propertiesTab_->onClick = [this]() { setActiveTab(Tab::Properties); };
     addAndMakeVisible(propertiesTab_.get());
+
+    waveTab_ = std::make_unique<DockTabButton>("Wave", "Edit waveform (trim, volume, fades) & stretch transient markers");
+    waveTab_->onClick = [this]() { setActiveTab(Tab::Wave); };
+    addAndMakeVisible(waveTab_.get());
 
     mixerTab_ = std::make_unique<DockTabButton>("Mixer", "Side-by-side track channel strips & Master mixer");
     mixerTab_->onClick = [this]() { setActiveTab(Tab::Mixer); };
@@ -93,14 +97,19 @@ BottomDockPanel::BottomDockPanel(Song& song, AudioEngine& engine, StretchCache& 
     addChildComponent(explorer_.get());
 
     // 2. Properties
-    properties_ = std::make_unique<TrackPropertiesComponent>(song_, stretchCache, patternId_, 0, std::move(onPropertiesChanged));
+    auto onProps = std::move(onPropertiesChanged);
+    properties_ = std::make_unique<TrackPropertiesComponent>(song_, stretchCache, patternId_, 0, onProps);
     addChildComponent(properties_.get());
 
-    // 3. Mixer
+    // 3. Wave Editor (with Stretch markers)
+    waveEditor_ = std::make_unique<WaveEditorPanel>(song_, engine, stretchCache, patternId_, onProps);
+    addChildComponent(waveEditor_.get());
+
+    // 4. Mixer
     mixer_ = std::make_unique<MixerPanel>(song_, engine, patternId_);
     addChildComponent(mixer_.get());
 
-    // 4. FX Rack
+    // 5. FX Rack
     fxRack_ = std::make_unique<FxRackPanel>(song_, engine, patternId_);
     addChildComponent(fxRack_.get());
 
@@ -114,11 +123,17 @@ void BottomDockPanel::setActiveTab(Tab tab)
     activeTab_ = tab;
     explorer_->setVisible(tab == Tab::Explorer);
     properties_->setVisible(tab == Tab::Properties);
+    waveEditor_->setVisible(tab == Tab::Wave);
     mixer_->setVisible(tab == Tab::Mixer);
     fxRack_->setVisible(tab == Tab::Fx);
 
     if (tab == Tab::Properties)
         properties_->refreshFromModel();
+    else if (tab == Tab::Wave)
+    {
+        waveEditor_->refreshFromModel();
+        waveEditor_->grabKeyboardFocus();
+    }
     else if (tab == Tab::Mixer)
         mixer_->refreshFromModel();
     else if (tab == Tab::Fx)
@@ -135,6 +150,7 @@ void BottomDockPanel::setPattern(PatternId patternId)
     patternId_ = patternId;
     selectedTrack_ = 0;
     properties_->setTrack(patternId_, 0);
+    waveEditor_->setPattern(patternId_);
     mixer_->setPattern(patternId_);
     fxRack_->setPattern(patternId_);
     updateContextLabel();
@@ -143,6 +159,7 @@ void BottomDockPanel::setPattern(PatternId patternId)
 void BottomDockPanel::refreshFromModel()
 {
     properties_->refreshFromModel();
+    waveEditor_->refreshFromModel();
     mixer_->refreshFromModel();
     fxRack_->refreshFromModel();
     updateContextLabel();
@@ -150,10 +167,22 @@ void BottomDockPanel::refreshFromModel()
 
 void BottomDockPanel::selectTrack(int trackIndex)
 {
-    selectedTrack_ = trackIndex;
-    properties_->setTrack(patternId_, trackIndex);
-    mixer_->setSelectedTrack(trackIndex);
-    fxRack_->notifyTrackSelected(trackIndex);
+    std::unordered_set<int> sel;
+    if (trackIndex >= 0)
+        sel.insert(trackIndex);
+    selectTracks(sel, trackIndex);
+}
+
+void BottomDockPanel::selectTracks(const std::unordered_set<int>& tracks, int primaryTrack)
+{
+    selectedTrack_ = primaryTrack;
+    if (primaryTrack >= 0)
+    {
+        properties_->setTrack(patternId_, primaryTrack);
+        waveEditor_->setTrack(patternId_, primaryTrack);
+        fxRack_->notifyTrackSelected(primaryTrack);
+    }
+    mixer_->setSelectedTracks(tracks, primaryTrack);
     updateContextLabel();
 }
 
@@ -165,6 +194,7 @@ void BottomDockPanel::selectClip(ClipId clipId, int trackIndex)
         properties_->setTrack(patternId_, trackIndex);
         mixer_->setSelectedTrack(trackIndex);
     }
+    waveEditor_->setSelectedClip(clipId, trackIndex);
     fxRack_->notifyClipSelected(clipId, trackIndex);
     updateContextLabel();
 }
@@ -175,6 +205,18 @@ void BottomDockPanel::showTrackProperties(int trackIndex)
     properties_->setTrack(patternId_, trackIndex);
     mixer_->setSelectedTrack(trackIndex);
     setActiveTab(Tab::Properties);
+}
+
+void BottomDockPanel::showWaveEditorForClip(ClipId clipId, int trackIndex)
+{
+    if (trackIndex >= 0)
+    {
+        selectedTrack_ = trackIndex;
+        properties_->setTrack(patternId_, trackIndex);
+        mixer_->setSelectedTrack(trackIndex);
+    }
+    waveEditor_->setSelectedClip(clipId, trackIndex);
+    setActiveTab(Tab::Wave);
 }
 
 void BottomDockPanel::showTrackFx(int trackIndex)
@@ -207,6 +249,7 @@ void BottomDockPanel::updateTabStyles()
 {
     explorerTab_->setActive(activeTab_ == Tab::Explorer);
     propertiesTab_->setActive(activeTab_ == Tab::Properties);
+    waveTab_->setActive(activeTab_ == Tab::Wave);
     mixerTab_->setActive(activeTab_ == Tab::Mixer);
     fxTab_->setActive(activeTab_ == Tab::Fx);
 }
@@ -231,11 +274,19 @@ void BottomDockPanel::updateContextLabel()
             contextLabel_.setText("No track selected", juce::dontSendNotification);
         }
     }
+    else if (activeTab_ == Tab::Wave)
+    {
+        contextLabel_.setText(waveEditor_->currentSummaryText(), juce::dontSendNotification);
+    }
     else if (activeTab_ == Tab::Mixer)
     {
         const auto* pat = song_.findPattern(patternId_);
         const int n = pat != nullptr ? static_cast<int>(pat->tracks.size()) : 0;
-        contextLabel_.setText(juce::String(n) + (n == 1 ? " Track + Master" : " Tracks + Master"),
+        const int selCount = static_cast<int>(mixer_->selectedTracks().size());
+        const juce::String selPrefix = (selCount > 1)
+            ? (juce::String(selCount) + " Tracks Selected · ")
+            : "";
+        contextLabel_.setText(selPrefix + juce::String(n) + (n == 1 ? " Track + Master" : " Tracks + Master"),
                               juce::dontSendNotification);
     }
     else if (activeTab_ == Tab::Fx)
@@ -261,9 +312,10 @@ void BottomDockPanel::resized()
 {
     auto topBar = juce::Rectangle<int>(0, 0, getWidth(), kTabBarHeight);
 
-    constexpr int kTabW = 94;
+    constexpr int kTabW = 88;
     explorerTab_->setBounds(topBar.removeFromLeft(kTabW));
     propertiesTab_->setBounds(topBar.removeFromLeft(kTabW));
+    waveTab_->setBounds(topBar.removeFromLeft(kTabW));
     mixerTab_->setBounds(topBar.removeFromLeft(kTabW));
     fxTab_->setBounds(topBar.removeFromLeft(kTabW));
 
@@ -274,6 +326,7 @@ void BottomDockPanel::resized()
     auto content = getLocalBounds().withTrimmedTop(kTabBarHeight);
     explorer_->setBounds(content);
     properties_->setBounds(content);
+    waveEditor_->setBounds(content);
     mixer_->setBounds(content);
     fxRack_->setBounds(content);
 }

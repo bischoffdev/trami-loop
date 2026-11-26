@@ -142,7 +142,7 @@ public:
                 drawAudioFileIcon(g, cell.getX() + 4, cell.getCentreY(), isSelected);
 
             g.setColour(isSelected ? juce::Colours::white : (isDir ? juce::Colour(0xfffde68a) : Palette::text));
-            g.setFont((isSelected || isDir) ? Typography::bold(11.5f) : Typography::regular(11.5f));
+            g.setFont((isSelected || isDir) ? Typography::bold(14.0f) : Typography::regular(14.0f));
             g.drawText(entry.getFileName(),
                        cell.withTrimmedLeft(22).withTrimmedRight(4),
                        juce::Justification::centredLeft, true);
@@ -244,8 +244,8 @@ public:
     }
 
 private:
-    static constexpr int kRowHeight = 21;
-    static constexpr int kColWidth = 210;
+    static constexpr int kRowHeight = 24;
+    static constexpr int kColWidth = 240;
     static constexpr int kPadX = 6;
     static constexpr int kPadY = 4;
 
@@ -647,7 +647,7 @@ void SampleBrowserPanel::onAudioFileSelected(juce::File file)
         previewProgress_ = 0.0;
         pathLabel_.setText(file.getFullPathName(), juce::dontSendNotification);
         fileNameLabel_.setText(file.getFileName(), juce::dontSendNotification);
-        fileDetailsLabel_.setText("Folder — double-click or press Enter to open", juce::dontSendNotification);
+        fileDetailsLabel_.setText("Folder - double-click or press Enter to open", juce::dontSendNotification);
         repaint();
         return;
     }

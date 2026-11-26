@@ -93,6 +93,7 @@ private:
     juce::Label masterTargetLabel_;
     juce::TextButton jumpButton_{"Show in Timeline"};
     juce::TextButton switchPartnerButton_;
+    juce::TextButton pdcToggleButton_{"PDC"};
     juce::TextButton bypassAllButton_{"Bypass All"};
 
     // Left pane: Searchable VST3/AU Plugin Browser

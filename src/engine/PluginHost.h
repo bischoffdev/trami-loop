@@ -36,6 +36,7 @@ public:
     /// Known scanned VST3 / AU effect plugins.
     const juce::KnownPluginList& knownPlugins() const noexcept { return knownPlugins_; }
     juce::Array<juce::PluginDescription> availableEffectPlugins() const;
+    static bool isAudioEffectPlugin(const juce::PluginDescription& desc) noexcept;
 
     /// Scans system VST3 / AU directories for audio effect plugins and caches the list.
     int scanDefaultPluginPaths(std::function<void(const juce::String&)> onStatus = nullptr);
@@ -49,11 +50,15 @@ public:
     /// Synchronizes live plugin instances with the Song's current Pattern model.
     void syncFromPattern(const Pattern& pattern);
 
-    /// Captures current Base64 state from live plugin instances back into the model's PluginSlot structs.
+    /// Updates `PluginSlot::latencySamples` in `pattern` from live hosted plugin instances.
+    void syncLatenciesIntoPattern(Pattern& pattern) const;
+
+    /// Captures current Base64 state (and latencySamples) from live plugin instances back into the model's PluginSlot structs.
     void captureStatesIntoPattern(Pattern& pattern);
 
     /// Opens (or brings to front) the native VST3/AU GUI editor window for a hosted plugin slot.
-    bool openPluginEditor(TargetKind kind, std::uint32_t targetId, int slotIndex);
+    /// Opens the native plugin editor window. If `toggleIfOpen` is true and the editor is already open, it is closed instead.
+    bool openPluginEditor(TargetKind kind, std::uint32_t targetId, int slotIndex, bool toggleIfOpen = false);
 
     /// Closes all open plugin editor windows.
     void closeAllEditors();
@@ -66,11 +71,16 @@ public:
     void processTrack(int trackIndex, float* left, float* right, int numSamples) noexcept override;
     void processMaster(float* left, float* right, int numSamples) noexcept override;
 
+    int clipLatencySamples(std::uint32_t clipId) const noexcept override;
+    int trackLatencySamples(int trackIndex) const noexcept override;
+    int masterLatencySamples() const noexcept override;
+
 private:
     struct HostedSlot
     {
         std::string identifierString;
         bool bypassed = false;
+        int latencySamples = 0;
         std::unique_ptr<juce::AudioPluginInstance> instance;
     };
 
@@ -89,6 +99,8 @@ private:
     void syncTrackChain(int trackIndex, const std::vector<PluginSlot>& modelChain);
     void syncClipChain(std::uint32_t clipId, const std::vector<PluginSlot>& modelChain);
     void captureChainStates(const std::vector<HostedSlot>& liveChain, std::vector<PluginSlot>& modelChain);
+    static void syncChainLatencies(const std::vector<HostedSlot>& liveChain, std::vector<PluginSlot>& modelChain);
+    static int computeChainLatency(const std::vector<HostedSlot>& chain) noexcept;
     void processChain(std::vector<HostedSlot>& chain, float* left, float* right, int numSamples) noexcept;
 
     juce::AudioPluginFormatManager formatManager_;
@@ -97,7 +109,7 @@ private:
     double sampleRate_ = 44100.0;
     int maxBlockSize_ = 512;
 
-    juce::SpinLock audioLock_;
+    mutable juce::SpinLock audioLock_;
     std::unordered_map<std::uint32_t, std::vector<HostedSlot>> clipChains_;
     std::unordered_map<int, std::vector<HostedSlot>> trackChains_;
     std::vector<HostedSlot> masterChain_;

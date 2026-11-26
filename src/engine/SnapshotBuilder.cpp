@@ -128,6 +128,9 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * maxBars);
     snapshot->looping = true;
     snapshot->hasTrackMixes = true;
+    snapshot->pdcEnabled = song.pdcEnabled();
+    snapshot->masterLatencySamples = activeChainLatencySamples(p->masterFxChain);
+    snapshot->projectLatencySamples = song.projectLatencySamples();
 
     if (!p->masterVolumeAutomation.empty())
     {
@@ -161,7 +164,13 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
     for (std::size_t t = 0; t < p->tracks.size() && t < PlaybackSnapshot::kMaxTrackMixes; ++t)
     {
         const auto& trk = p->tracks[t];
-        snapshot->trackMixes[t] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo};
+        int maxClipLat = 0;
+        for (const auto& c : trk.clips)
+            maxClipLat = std::max(maxClipLat, activeChainLatencySamples(c.fxChain));
+        snapshot->trackMixes[t] = {trk.mix.volume, trk.mix.pan, trk.muted, trk.solo,
+                                   std::max(0, trk.latencySamples),
+                                   activeChainLatencySamples(trk.fxChain),
+                                   maxClipLat};
 
         if (anySolo ? (!trk.solo || trk.muted) : trk.muted)
             continue;
@@ -185,6 +194,7 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             std::vector<EnvelopePoint> volumeEnvelope;
             std::vector<EnvelopePoint> panEnvelope;
             bool hasClipFx = false;
+            int clipLatencySamples = 0;
         };
 
         std::vector<EffectiveClip> trackClips;
@@ -195,7 +205,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
             {
                 trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
                                       clip.gain, clip.fadeInSteps, clip.fadeOutSteps, clip.reversed, clip.transposeSemitones,
-                                      clip.volumeEnvelope, clip.panEnvelope, !clip.fxChain.empty()});
+                                      clip.volumeEnvelope, clip.panEnvelope, !clip.fxChain.empty(),
+                                      activeChainLatencySamples(clip.fxChain)});
             }
         }
         else
@@ -217,13 +228,15 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                 {
                     trackClips.push_back({clip.id, clip.sampleId, clip.startStep, clip.lengthSteps, clip.offsetSteps,
                                           clip.gain, clip.fadeInSteps, clip.fadeOutSteps, clip.reversed, clip.transposeSemitones,
-                                          clip.volumeEnvelope, clip.panEnvelope});
+                                          clip.volumeEnvelope, clip.panEnvelope, !clip.fxChain.empty(),
+                                          activeChainLatencySamples(clip.fxChain)});
                 }
                 else if (ov->currentTrack == static_cast<int>(t))
                 {
                     trackClips.push_back({clip.id, clip.sampleId, ov->currentStartStep, ov->currentLengthSteps, ov->currentOffsetSteps,
                                           ov->currentGain, ov->currentFadeIn, ov->currentFadeOut, clip.reversed, clip.transposeSemitones,
-                                          clip.volumeEnvelope, clip.panEnvelope});
+                                          clip.volumeEnvelope, clip.panEnvelope, !clip.fxChain.empty(),
+                                          activeChainLatencySamples(clip.fxChain)});
                 }
                 // If ov->currentTrack != t, the clip has been dragged away from track t; skip it here.
             }
@@ -252,7 +265,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
                     {
                         trackClips.push_back({ov.clipId, origClip->sampleId, ov.currentStartStep, ov.currentLengthSteps, ov.currentOffsetSteps,
                                               ov.currentGain, ov.currentFadeIn, ov.currentFadeOut, origClip->reversed, origClip->transposeSemitones,
-                                              origClip->volumeEnvelope, origClip->panEnvelope});
+                                              origClip->volumeEnvelope, origClip->panEnvelope, !origClip->fxChain.empty(),
+                                              activeChainLatencySamples(origClip->fxChain)});
                     }
                 }
             }
@@ -382,7 +396,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
                     PlaybackEvent ev{cycleEventStart, clipAudio.get(), clipGainL,
                                      clipGainR, curAudioOffset, maxFrames, static_cast<int>(t),
-                                     curFadeIn, curFadeOut, clip.id.value, clip.reversed, clip.hasClipFx};
+                                     curFadeIn, curFadeOut, clip.id.value, clip.reversed, clip.hasClipFx,
+                                     clip.clipLatencySamples};
                     ev.fxSend = trk.fxAutomation.empty()
                         ? trk.fxSend
                         : evaluateEnvelope(trk.fxAutomation, cycleStartStep + 0.5 * actualPlayedSteps, trk.fxSend);
@@ -414,7 +429,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildPattern(const Song& song
 
                 PlaybackEvent ev{eventStartSample, clipAudio.get(), clipGainL,
                                  clipGainR, audioOffset, maxFrames, static_cast<int>(t),
-                                 fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed, clip.hasClipFx};
+                                 fadeInSamples, fadeOutSamples, clip.id.value, clip.reversed, clip.hasClipFx,
+                                 clip.clipLatencySamples};
 
                 // Compute exact visible clip span (matching PatternGrid) and actual played frames
                 const double rawClipSpanSteps = (clip.lengthSteps > 0.0)
@@ -463,6 +479,8 @@ std::unique_ptr<PlaybackSnapshot> SnapshotBuilder::buildArrangement(const Song& 
     snapshot->lengthSamples = std::llround(timing.samplesPerBar() * effectiveBars);
     snapshot->looping = (loopEndBar > loopStartBar);
     snapshot->hasTrackMixes = true;
+    snapshot->pdcEnabled = song.pdcEnabled();
+    snapshot->projectLatencySamples = song.projectLatencySamples();
 
     if (loopEndBar > loopStartBar && loopStartBar >= 0)
     {

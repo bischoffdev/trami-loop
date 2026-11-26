@@ -498,7 +498,7 @@ void ArrangerView::toggleRecording()
         const int countInSamples = static_cast<int>(timing.samplesPerBar());
 
         seq.setMetronomeEnabled(true);
-        rec.start(countInSamples, engine_.inputLatencySamples(), [this](AudioData recorded) {
+        rec.start(countInSamples, engine_.recordingLatencySamples(), [this](AudioData recorded) {
             juce::MessageManager::callAsync([this, audio = std::move(recorded)]() mutable {
                 onRecordFinished(std::move(audio));
             });

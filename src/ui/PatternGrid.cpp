@@ -39,6 +39,21 @@ void PatternGrid::setLoopRegion(int startStep, int endStep)
     repaint();
 }
 
+void PatternGrid::setLiveRecordingPreview(LiveRecordingPreview preview)
+{
+    liveRecording_ = std::move(preview);
+    repaint();
+}
+
+void PatternGrid::clearLiveRecordingPreview()
+{
+    if (liveRecording_.active)
+    {
+        liveRecording_ = {};
+        repaint();
+    }
+}
+
 void PatternGrid::setSelectedClip(ClipId clipId)
 {
     selectedClips_.clear();
@@ -669,6 +684,21 @@ void PatternGrid::paintRuler(juce::Graphics& g, int renderWidth)
                                 ? 16
                                 : ((barWidthPx < 25.0) ? 8 : ((barWidthPx < 45.0) ? 4 : ((barWidthPx < 70.0) ? 2 : 1)));
 
+    // Shade every second measure (bar 2, 4, 6, ...) slightly lighter in the ruler to match the track view
+    if (spb > 0 && barWidthPx >= 4.0)
+    {
+        const int maxRulerBars = std::max(totalSteps / spb,
+                                          static_cast<int>(std::ceil(static_cast<double>(renderWidth) / barWidthPx)));
+        g.setColour(juce::Colours::white.withAlpha(0.045f));
+        for (int bar = 1; bar <= maxRulerBars; bar += 2)
+        {
+            const int x0 = stepToX(static_cast<double>(bar * spb));
+            const int x1 = stepToX(static_cast<double>((bar + 1) * spb));
+            if (x1 > x0)
+                g.fillRect(x0, 0, x1 - x0, kRulerHeight - 1);
+        }
+    }
+
     for (int step = 0; step < totalSteps; ++step)
     {
         const int x = stepToX(step);
@@ -786,7 +816,38 @@ void PatternGrid::paint(juce::Graphics& g)
     // 1. Ruler
     paintRuler(g, renderWidth);
 
-    // 2. Loop region highlight (down tracks)
+    // 2. Tracks & Alternating Measure Shading
+    for (int t = 0; t < numTracks; ++t)
+    {
+        const int y = kRulerHeight + t * trackHeight_;
+        g.setColour(t % 2 == 0 ? Palette::gridFloor : Palette::gridLaneAlt);
+        g.fillRect(0, y, renderWidth, trackHeight_);
+    }
+
+    const int spb = song_.stepsPerBar();
+    const int spBeat = song_.stepsPerBeat();
+
+    // Shade every second measure (Measure 2, 4, 6, ...) lighter across the track view so measure boundaries stand out
+    if (spb > 0)
+    {
+        const double barWidthPx = stepWidth_ * static_cast<double>(spb);
+        if (barWidthPx >= 4.0)
+        {
+            const int maxBars = std::max(totalSteps / spb,
+                                         static_cast<int>(std::ceil(static_cast<double>(renderWidth) / barWidthPx)));
+            const int fillH = std::max(totalHeight, getHeight()) - kRulerHeight;
+            g.setColour(juce::Colours::white.withAlpha(0.055f));
+            for (int bar = 1; bar <= maxBars; bar += 2)
+            {
+                const int x0 = stepToX(static_cast<double>(bar * spb));
+                const int x1 = stepToX(static_cast<double>((bar + 1) * spb));
+                if (x1 > x0 && fillH > 0)
+                    g.fillRect(x0, kRulerHeight, x1 - x0, fillH);
+            }
+        }
+    }
+
+    // 3. Loop region highlight (down tracks)
     const int loopStartX = stepToX(loopStartStep_);
     const int loopEndX = stepToX(loopEndStep_);
     const int loopW = std::max(4, loopEndX - loopStartX);
@@ -799,16 +860,6 @@ void PatternGrid::paint(juce::Graphics& g)
     g.drawVerticalLine(loopStartX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     g.drawVerticalLine(loopEndX, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
 
-    // 3. Tracks & Grid lines
-    for (int t = 0; t < numTracks; ++t)
-    {
-        const int y = kRulerHeight + t * trackHeight_;
-        g.setColour(t % 2 == 0 ? Palette::gridFloor : Palette::gridLaneAlt);
-        g.fillRect(0, y, renderWidth, trackHeight_);
-    }
-
-    const int spb = song_.stepsPerBar();
-    const int spBeat = song_.stepsPerBeat();
     for (int step = 0; step <= totalSteps; ++step)
     {
         const int x = stepToX(step);
@@ -821,7 +872,7 @@ void PatternGrid::paint(juce::Graphics& g)
 
         if (isBar)
         {
-            g.setColour(Palette::gridBarLine);
+            g.setColour(Palette::gridBarLine.brighter(0.14f));
             g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
         }
         else if (isBeat && rasterSteps_ <= spBeat && (stepWidth_ * static_cast<double>(spBeat) >= 4.0))
@@ -1060,35 +1111,101 @@ void PatternGrid::paint(juce::Graphics& g)
                         const int w = bounds.getWidth() - 6;
                         const int bx = bounds.getX() + 3;
 
+                        const double initialPhaseSteps = (isLoop && renderOffset > 0.0 && fullSampleSteps > 0.0)
+                                                             ? std::fmod(renderOffset, fullSampleSteps)
+                                                             : 0.0;
+                        const double firstCycleSteps = isLoop
+                                                           ? std::min(std::max(0.0, fullSampleSteps - initialPhaseSteps), span)
+                                                           : 0.0;
+                        const double oneShotStartStep = !isLoop ? std::clamp(renderOffset, 0.0, fullSampleSteps) : 0.0;
+                        const double oneShotEndStep = !isLoop
+                                                          ? std::clamp(renderOffset + span, oneShotStartStep, fullSampleSteps)
+                                                          : 0.0;
+                        const double oneShotPlayedSteps = oneShotEndStep - oneShotStartStep;
+
                         for (int px = 0; px < w; ++px)
                         {
-                            const int samplePx = clip.reversed ? (w - 1 - px) : px;
-                            const double step0 = renderOffset + (static_cast<double>(samplePx) / static_cast<double>(w)) * span;
-                            const double step1 = renderOffset + (static_cast<double>(samplePx + 1) / static_cast<double>(w)) * span;
+                            const double rel0 = (static_cast<double>(px) / static_cast<double>(w)) * span;
+                            const double rel1 = (static_cast<double>(px + 1) / static_cast<double>(w)) * span;
 
                             std::int64_t f0 = 0;
                             std::int64_t f1 = 0;
                             if (isLoop)
                             {
-                                const double cyc0 = std::fmod(step0, fullSampleSteps);
-                                double cyc1 = std::fmod(step1, fullSampleSteps);
-                                if (cyc1 <= cyc0)
-                                    cyc1 = fullSampleSteps;
+                                double s0 = 0.0;
+                                double s1 = 0.0;
+                                if (rel0 < firstCycleSteps - 1e-9)
+                                {
+                                    const double c0 = std::clamp(rel0, 0.0, firstCycleSteps);
+                                    const double c1 = std::clamp(rel1, c0, firstCycleSteps);
+                                    if (clip.reversed)
+                                    {
+                                        s0 = (initialPhaseSteps + firstCycleSteps) - c1;
+                                        s1 = (initialPhaseSteps + firstCycleSteps) - c0;
+                                    }
+                                    else
+                                    {
+                                        s0 = initialPhaseSteps + c0;
+                                        s1 = initialPhaseSteps + c1;
+                                    }
+                                }
+                                else
+                                {
+                                    const double afterFirst = std::max(0.0, rel0 - firstCycleSteps);
+                                    const double cycleIdx = std::floor(afterFirst / fullSampleSteps);
+                                    const double cycleStartInClip = firstCycleSteps + cycleIdx * fullSampleSteps;
+                                    const double thisCycleSteps = std::max(1e-9, std::min(fullSampleSteps, span - cycleStartInClip));
+                                    const double c0 = std::clamp(rel0 - cycleStartInClip, 0.0, thisCycleSteps);
+                                    const double c1 = std::clamp(rel1 - cycleStartInClip, c0, thisCycleSteps);
+                                    if (clip.reversed)
+                                    {
+                                        s0 = thisCycleSteps - c1;
+                                        s1 = thisCycleSteps - c0;
+                                    }
+                                    else
+                                    {
+                                        s0 = c0;
+                                        s1 = c1;
+                                    }
+                                }
+
                                 f0 = std::clamp<std::int64_t>(
-                                    static_cast<std::int64_t>((cyc0 / fullSampleSteps) * static_cast<double>(totalFrames)),
-                                    0, totalFrames);
+                                    static_cast<std::int64_t>((s0 / fullSampleSteps) * static_cast<double>(totalFrames)),
+                                    0, totalFrames - 1);
                                 f1 = std::clamp<std::int64_t>(
-                                    static_cast<std::int64_t>((cyc1 / fullSampleSteps) * static_cast<double>(totalFrames)),
+                                    static_cast<std::int64_t>(std::ceil((s1 / fullSampleSteps) * static_cast<double>(totalFrames))),
                                     f0 + 1, totalFrames);
                             }
                             else
                             {
-                                f0 = std::clamp<std::int64_t>(
-                                    static_cast<std::int64_t>((step0 / fullSampleSteps) * static_cast<double>(totalFrames)),
-                                    0, totalFrames);
-                                f1 = std::clamp<std::int64_t>(
-                                    static_cast<std::int64_t>((step1 / fullSampleSteps) * static_cast<double>(totalFrames)),
-                                    f0, totalFrames);
+                                if (rel0 >= oneShotPlayedSteps || oneShotPlayedSteps <= 1e-9)
+                                {
+                                    f0 = totalFrames;
+                                    f1 = totalFrames;
+                                }
+                                else
+                                {
+                                    const double c0 = std::clamp(rel0, 0.0, oneShotPlayedSteps);
+                                    const double c1 = std::clamp(rel1, c0, oneShotPlayedSteps);
+                                    double s0 = 0.0;
+                                    double s1 = 0.0;
+                                    if (clip.reversed)
+                                    {
+                                        s0 = oneShotEndStep - c1;
+                                        s1 = oneShotEndStep - c0;
+                                    }
+                                    else
+                                    {
+                                        s0 = oneShotStartStep + c0;
+                                        s1 = oneShotStartStep + c1;
+                                    }
+                                    f0 = std::clamp<std::int64_t>(
+                                        static_cast<std::int64_t>((s0 / fullSampleSteps) * static_cast<double>(totalFrames)),
+                                        0, totalFrames - 1);
+                                    f1 = std::clamp<std::int64_t>(
+                                        static_cast<std::int64_t>(std::ceil((s1 / fullSampleSteps) * static_cast<double>(totalFrames))),
+                                        f0 + 1, totalFrames);
+                                }
                             }
 
                             float minVal = 0.0f;
@@ -1105,8 +1222,10 @@ void PatternGrid::paint(juce::Graphics& g)
                                 }
                             }
 
-                            const float y1 = cy - maxVal * maxAmp;
-                            const float y2 = cy - minVal * maxAmp;
+                            const float scaledMax = std::clamp(maxVal * waveformDisplayGain_, -1.0f, 1.0f);
+                            const float scaledMin = std::clamp(minVal * waveformDisplayGain_, -1.0f, 1.0f);
+                            const float y1 = cy - scaledMax * maxAmp;
+                            const float y2 = cy - scaledMin * maxAmp;
                             const float topY = std::min(y1, y2);
                             const float botY = std::max(y1, y2);
                             const float lineH = std::max(1.2f, botY - topY);
@@ -1671,6 +1790,57 @@ void PatternGrid::paint(juce::Graphics& g)
         }
     }
 
+    // Live growing recording clip + waveform preview
+    if (liveRecording_.active && liveRecording_.trackIndex >= 0 && liveRecording_.lengthSteps > 0.0)
+    {
+        const auto rBounds = clipBounds(liveRecording_.trackIndex, liveRecording_.startStep, liveRecording_.lengthSteps)
+                                 .reduced(1, 2);
+        if (rBounds.getWidth() >= 2 && rBounds.getHeight() >= 4)
+        {
+            const auto rf = rBounds.toFloat();
+            g.setColour(juce::Colour(0xff7f1d1d).withAlpha(0.78f));
+            g.fillRoundedRectangle(rf, 6.0f);
+
+            // Live waveform drawn from captured peak buckets
+            const auto& peaks = liveRecording_.peaks;
+            if (!peaks.empty())
+            {
+                const auto waveBounds = rBounds.reduced(2, 5);
+                const float midY = static_cast<float>(waveBounds.getCentreY());
+                const float maxAmp = std::max(2.0f, static_cast<float>(waveBounds.getHeight()) * 0.46f);
+                const int w = std::max(1, waveBounds.getWidth());
+                const std::size_t numPeaks = peaks.size();
+
+                g.setColour(juce::Colour(0xfffca5a5).withAlpha(0.92f));
+                for (int px = 0; px < w; ++px)
+                {
+                    const std::size_t idx0 = (static_cast<std::size_t>(px) * numPeaks) / static_cast<std::size_t>(w);
+                    const std::size_t idx1 = std::max(
+                        idx0 + 1,
+                        ((static_cast<std::size_t>(px) + 1) * numPeaks) / static_cast<std::size_t>(w));
+                    float pk = 0.0f;
+                    for (std::size_t k = idx0; k < std::min(idx1, numPeaks); ++k)
+                        pk = std::max(pk, peaks[k]);
+                    const float h = std::max(1.0f, std::min(1.0f, pk * waveformDisplayGain_) * maxAmp);
+                    g.drawVerticalLine(waveBounds.getX() + px, midY - h, midY + h);
+                }
+            }
+
+            g.setColour(juce::Colour(0xffef4444));
+            g.drawRoundedRectangle(rf, 6.0f, 1.5f);
+
+            if (rBounds.getWidth() >= 34)
+            {
+                const auto badge = juce::Rectangle<float>(rf.getX() + 4.0f, rf.getY() + 3.0f, 28.0f, 13.0f);
+                g.setColour(juce::Colour(0xffdc2626));
+                g.fillRoundedRectangle(badge, 3.0f);
+                g.setColour(juce::Colours::white);
+                g.setFont(Typography::bold(8.5f));
+                g.drawText("REC", badge, juce::Justification::centred, false);
+            }
+        }
+    }
+
     // Paint tool live clip preview
     if (drag_.active && drag_.mode == DragMode::PaintClip && paintTrack_ >= 0 && paintCurrentLen_ > 0.0)
     {
@@ -1948,6 +2118,9 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
             envPresetMenu.addItem(505, "Pan Preset: Sweep Left -> Right");
             envPresetMenu.addItem(506, "Pan Preset: Ping-Pong L-R-L");
             envPresetMenu.addSeparator();
+            envPresetMenu.addItem(508, "Reverse Multi-Point Curve(s)",
+                                  !clip->volumeEnvelope.empty() || !clip->panEnvelope.empty());
+            envPresetMenu.addItem(509, "Reverse Curve with Clip (Env Lock)", true, song_.envelopeLockEnabled());
             envPresetMenu.addItem(507, "Clear Multi-Point Envelopes", !clip->volumeEnvelope.empty() || !clip->panEnvelope.empty());
             m.addSubMenu("Multi-Point Envelopes", envPresetMenu);
 
@@ -2004,8 +2177,13 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                     listener_.clipsJoinRequested(selectedClips_);
                                     return;
                                 }
-                                if (res >= 501 && res <= 507)
+                                if (res >= 501 && res <= 509)
                                 {
+                                    if (res == 509)
+                                    {
+                                        listener_.envelopeLockToggleRequested();
+                                        return;
+                                    }
                                     if (const Clip* c = song_.findClip(patternId_, cid))
                                     {
                                         const double sp = std::max(0.1, clipSpan(*c));
@@ -2046,6 +2224,13 @@ void PatternGrid::mouseDown(const juce::MouseEvent& e)
                                         {
                                             listener_.clipVolumeEnvelopeChanged(cid, {});
                                             listener_.clipPanEnvelopeChanged(cid, {});
+                                        }
+                                        else if (res == 508)
+                                        {
+                                            if (!c->volumeEnvelope.empty())
+                                                listener_.clipVolumeEnvelopeChanged(cid, reverseEnvelope(c->volumeEnvelope, 0.0, 1.0));
+                                            if (!c->panEnvelope.empty())
+                                                listener_.clipPanEnvelopeChanged(cid, reverseEnvelope(c->panEnvelope, 0.0, 1.0));
                                         }
                                     }
                                     return;
@@ -2879,6 +3064,9 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
             return;
         }
 
+        const int prevLoopStart = loopStartStep_;
+        const int prevLoopEnd = loopEndStep_;
+
         if (rulerDragMode_ == RulerDragMode::SetRegion)
         {
             loopStartStep_ = std::min(rulerDragRegionAnchorStep_, snapStep);
@@ -2910,10 +3098,17 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         }
         else if (rulerDragMode_ == RulerDragMode::MoveMarker)
         {
-            draggingMarkerStep_ = e.mods.isShiftDown()
-                ? std::clamp(xToStep(e.getPosition().x), 0.0, static_cast<double>(totalSteps))
-                : static_cast<double>(snapStep);
+            if (e.getScreenPosition().getDistanceFrom(rulerDragStartScreenPos_) >= 4)
+            {
+                draggingMarkerStep_ = e.mods.isShiftDown()
+                    ? std::clamp(xToStep(e.getPosition().x), 0.0, static_cast<double>(totalSteps))
+                    : static_cast<double>(snapStep);
+            }
         }
+
+        if (loopStartStep_ != prevLoopStart || loopEndStep_ != prevLoopEnd)
+            listener_.loopRegionChanged(loopStartStep_, loopEndStep_);
+
         repaint();
         return;
     }
@@ -3044,30 +3239,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Move %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), clampedDelta)
-                        : juce::String::formatted("Move %d clips -> Step %g", static_cast<int>(drag_.items.size()),
-                                                  (primaryItem != nullptr ? primaryItem->currentStartStep + 1.0 : 1.0));
-            }
-            else if (!drag_.items.empty())
-            {
-                const double stepDisplay = drag_.items[0].currentStartStep + 1.0;
-                if (e.mods.isAltDown())
-                {
-                    dragTooltipText_ = disableSnap
-                                           ? juce::String::formatted("Duplicate -> Step %.2f (Free)", stepDisplay)
-                                           : juce::String::formatted("Duplicate -> Step %g", stepDisplay);
-                }
-                else
-                {
-                    dragTooltipText_ = disableSnap ? juce::String::formatted("Step %.2f (Free / No Snap)", stepDisplay)
-                                                   : juce::String::formatted("Step %g", stepDisplay);
-                }
-            }
+            dragTooltipText_.clear();
             repaint();
         }
 
@@ -3129,22 +3301,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Resize %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), deltaStepsRaw)
-                        : juce::String::formatted("Resize %d clips (%+d st)", static_cast<int>(drag_.items.size()),
-                                                  juce::roundToInt(deltaStepsRaw / raster) * effectiveRasterSteps);
-            }
-            else if (!drag_.items.empty())
-            {
-                dragTooltipText_ = disableSnap
-                                       ? juce::String::formatted("Length: %.2f steps (Free / No Snap)",
-                                                                 drag_.items[0].currentLengthSteps)
-                                       : juce::String::formatted("Length: %g steps", drag_.items[0].currentLengthSteps);
-            }
+            dragTooltipText_.clear();
             repaint();
         }
     }
@@ -3195,22 +3352,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& e)
         if (anyChanged)
         {
             listener_.clipsDragging(drag_.items);
-            if (drag_.items.size() > 1)
-            {
-                dragTooltipText_ =
-                    disableSnap
-                        ? juce::String::formatted("Resize %d clips (Free: %+.2f st)",
-                                                  static_cast<int>(drag_.items.size()), -deltaStepsRaw)
-                        : juce::String::formatted("Resize %d clips (%+d st)", static_cast<int>(drag_.items.size()),
-                                                  -juce::roundToInt(deltaStepsRaw / raster) * effectiveRasterSteps);
-            }
-            else if (!drag_.items.empty())
-            {
-                dragTooltipText_ =
-                    disableSnap ? juce::String::formatted("Start: %.2f steps (Free / No Snap)",
-                                                          drag_.items[0].currentStartStep + 1.0)
-                                : juce::String::formatted("Start: %g steps", drag_.items[0].currentStartStep + 1.0);
-            }
+            dragTooltipText_.clear();
             repaint();
         }
     }
@@ -3376,7 +3518,6 @@ void PatternGrid::mouseUp(const juce::MouseEvent& e)
             {
                 listener_.playheadSeekRequested(juce::roundToInt(movedStep));
                 setPlayheadStep(movedStep);
-                listener_.markerRenameRequested(movedMarkerId);
             }
             else if (movedMarkerId >= 0)
             {
@@ -3625,6 +3766,7 @@ void PatternGrid::mouseDoubleClick(const juce::MouseEvent& e)
             repaint();
             return;
         }
+        listener_.clipDoubleClicked(clip->id);
         return;
     }
 
@@ -4092,8 +4234,7 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key)
             }
             if (key.isKeyCode('D'))
             {
-                for (auto cid : selectedClips_)
-                    listener_.clipDuplicateRequested(cid);
+                listener_.clipDuplicateRequested(selectedClips_.back());
                 return true;
             }
         }

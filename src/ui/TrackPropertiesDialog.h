@@ -11,8 +11,8 @@
 namespace trami
 {
 
-/// Sonic Foundry ACID-style Track Properties panel (embedded in Bottom Dock) with
-/// General, Stretch (interactive transient markers), and Summary metadata sub-tabs.
+/// Unified Track Properties panel (embedded in Bottom Dock) combining General track settings
+/// and Summary metadata in a single view. Stretch editing lives in the Wave tab.
 class TrackPropertiesComponent : public juce::Component
 {
 public:
@@ -30,36 +30,16 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent& e) override;
-    void mouseDoubleClick(const juce::MouseEvent& e) override;
-    void mouseMove(const juce::MouseEvent& e) override;
-    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
-    void mouseMagnify(const juce::MouseEvent& e, float scaleFactor) override;
 
     static void showDialog(juce::Component* parent, Song& song, StretchCache& stretchCache,
                            PatternId patternId, int trackIndex, PropertiesChangedCallback onChanged);
 
 private:
-    enum class ActiveTab
-    {
-        General = 0,
-        Stretch = 1,
-        Summary = 2
-    };
-
-    void switchTab(ActiveTab tab);
     void rebuildTrackSelector();
     void loadFromModel();
     void applyGeneralChanges();
     void applySummaryChanges();
-    int hitTestMarker(juce::Point<int> pt) const;
     bool hasValidTrack() const;
-    void setStretchZoom(double newZoom, double anchorNorm = -1.0);
-    double stretchNormToX(double norm) const;
-    double stretchXToNorm(int x) const;
-    juce::Rectangle<int> stretchScrollThumbRect() const;
 
     Song& song_;
     StretchCache& stretchCache_;
@@ -69,16 +49,12 @@ private:
     PropertiesChangedCallback onChanged_;
     bool isLoading_ = false;
 
-    ActiveTab activeTab_ = ActiveTab::General;
-
-    // Header: Track selector + Sub-tab buttons
+    // Header: Track selector + File info summary
     juce::Label trackSelectLabel_{"trkSel", "Track:"};
     juce::ComboBox trackSelectorCombo_;
-    juce::TextButton generalTabBtn_{"General"};
-    juce::TextButton stretchTabBtn_{"Stretch"};
-    juce::TextButton summaryTabBtn_{"Summary"};
+    juce::Label fileInfoLabel_;
 
-    // General tab controls
+    // General controls (left column)
     juce::Label trackTypeLabel_{"tType", "Track Type:"};
     juce::ComboBox trackTypeCombo_;
 
@@ -94,27 +70,10 @@ private:
     juce::Label fxSendLabel_{"fx", "Aux FX Send (Delay):"};
     juce::Slider fxSendSlider_{juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight};
 
-    // Stretch tab controls
-    juce::TextButton autoDetectBtn_{"Auto-Detect Transients"};
-    juce::TextButton beatGridBtn_{"Even Beat Grid"};
-    juce::TextButton clearMarkersBtn_{"Clear Markers"};
-    juce::TextButton stretchZoomOutBtn_{"-"};
-    juce::Label stretchZoomLabel_;
-    juce::TextButton stretchZoomInBtn_{"+"};
-    juce::TextButton stretchZoomResetBtn_{"1:1"};
-    juce::Rectangle<int> stretchWaveformRect_;
-    juce::Rectangle<int> stretchScrollRect_;
-    double stretchZoom_ = 1.0;
-    double stretchScrollNorm_ = 0.0;
-    int draggingMarkerIdx_ = -1;
-    bool pushedUndoForMarkerDrag_ = false;
-    bool draggingStretchScroll_ = false;
-    int scrollDragStartX_ = 0;
-    double scrollDragStartNorm_ = 0.0;
-    int hoveredMarkerIdx_ = -1;
+    juce::Label recordInputLabel_{"recIn", "Recording Source:"};
+    juce::ComboBox recordInputCombo_;
 
-    // Summary tab controls
-    juce::Label fileInfoLabel_;
+    // Summary metadata controls (right column)
     juce::Label titleLabel_{"title", "Track / Sample Name:"};
     juce::TextEditor titleEditor_;
     juce::Label authorLabel_{"author", "Author / Artist:"};

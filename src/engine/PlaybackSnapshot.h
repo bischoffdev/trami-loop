@@ -67,6 +67,7 @@ struct PlaybackEvent
     std::uint32_t clipId = 0;
     bool reversed = false;
     bool hasClipFx = false;
+    int clipLatencySamples = 0;
     float fxSend = 0.0f;
     std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> volEnv{};
     int volEnvCount = 0;
@@ -80,6 +81,9 @@ struct TrackMixSnapshot
     float pan = 0.0f;
     bool muted = false;
     bool solo = false;
+    int manualLatencySamples = 0;  ///< Per-channel manual latency offset in samples
+    int fxLatencySamples = 0;      ///< Active track FX chain latency in samples
+    int maxClipLatencySamples = 0; ///< Max active clip FX latency among clips on this track
 };
 
 /// Immutable, fully resolved description of what the audio thread plays.
@@ -96,6 +100,9 @@ struct PlaybackSnapshot
     inline static constexpr int kMaxTrackMixes = 64;
     std::array<TrackMixSnapshot, kMaxTrackMixes> trackMixes{};
     bool hasTrackMixes = false;
+    bool pdcEnabled = true;
+    int masterLatencySamples = 0;
+    int projectLatencySamples = 0;
 
     std::array<PlaybackEnvelopeNode, kMaxPlaybackEnvNodes> masterVolEnv{};
     int masterVolEnvCount = 0;

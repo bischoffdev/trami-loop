@@ -41,6 +41,11 @@ enum class TrackEnvelopeType
 /// Evaluates a sorted breakpoint envelope at `pos`, returning `defaultVal` if `points` is empty.
 float evaluateEnvelope(const std::vector<EnvelopePoint>& points, double pos, float defaultVal) noexcept;
 
+/// Reverses a multi-point envelope horizontally across `[minPos, maxPos]`,
+/// reflecting node positions (`minPos + maxPos - pos`) and inverting segment curves (`Fast <-> Slow`).
+std::vector<EnvelopePoint> reverseEnvelope(const std::vector<EnvelopePoint>& points,
+                                           double minPos = 0.0, double maxPos = 1.0);
+
 /// Serializable descriptor for an external VST3 / AU audio effect plugin slot.
 struct PluginSlot
 {
@@ -49,8 +54,12 @@ struct PluginSlot
     std::string fileOrIdentifier; ///< JUCE PluginDescription::fileOrIdentifier
     std::string identifierString; ///< JUCE PluginDescription::createIdentifierString()
     bool bypassed = false;
+    int latencySamples = 0;       ///< Reported processing latency in samples (for PDC & project persistence)
     std::string stateBase64;      ///< Persisted plugin chunk state (Base64)
 };
+
+/// Returns the total latency in samples of all active (non-bypassed) plugin slots in `chain`.
+int activeChainLatencySamples(const std::vector<PluginSlot>& chain) noexcept;
 
 /// Named timeline marker / section anchor on a song ruler.
 struct TimelineMarker
@@ -135,6 +144,8 @@ struct PatternTrack
     bool muted = false;
     bool solo = false;
     bool armed = false;
+    int inputChannel = 0;    ///< 0-based hardware audio input channel index (0 = Input 1, or Input 1-2 in stereo).
+    bool inputStereo = true; ///< True = Stereo input pair (ch, ch+1); False = Mono single channel (ch).
     float fxSend = 0.0f; ///< Aux FX send level [0.0 .. 1.0].
     TrackEnvelopeType visibleEnvelope = TrackEnvelopeType::None;
     std::vector<EnvelopePoint> volumeAutomation; ///< Position in steps.
@@ -143,6 +154,7 @@ struct PatternTrack
     SampleId sampleId;
     std::optional<SampleKind> kindOverride;
     std::uint32_t colorArgb = 0;     ///< 0 = automatic color from sample; otherwise 0xFFRRGGBB custom track color.
+    int latencySamples = 0;          ///< Per-channel latency in samples (manual/additional channel delay for PDC).
     std::vector<PluginSlot> fxChain; ///< Track-level VST3/AU plugin chain.
     std::vector<Clip> clips;
 };

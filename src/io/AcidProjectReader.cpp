@@ -533,20 +533,81 @@ ParsedAcidProject parseRiffAcid(const std::vector<std::uint8_t>& buffer)
                         std::memcpy(&count, p + 4, 4);
                         if (count > 0 && count <= 512)
                         {
-                            for (std::uint32_t m = 0; m < count; ++m)
+                            const std::size_t payloadBytes = tc.size - 28;
+                            const std::size_t stride = payloadBytes / static_cast<std::size_t>(count);
+
+                            auto extractMarkers = [&](std::size_t entryStride, std::size_t fieldOff, bool is64Bit)
                             {
-                                const std::size_t off = 28 + static_cast<std::size_t>(m) * 4;
-                                if (off + 4 > tc.size)
-                                    break;
-                                std::uint32_t framePos = 0;
-                                std::memcpy(&framePos, p + off, 4);
-                                if (framePos > 0 && framePos < acidTrack.totalSampleFrames)
+                                std::vector<double> out;
+                                std::uint64_t prevPos = 0;
+                                bool monotonic = true;
+                                for (std::uint32_t m = 0; m < count; ++m)
                                 {
-                                    const double norm = static_cast<double>(framePos) / static_cast<double>(acidTrack.totalSampleFrames);
-                                    if (acidTrack.stretchMarkers.empty() || std::abs(norm - acidTrack.stretchMarkers.back()) > 0.002)
-                                        acidTrack.stretchMarkers.push_back(norm);
+                                    const std::size_t off = 28 + static_cast<std::size_t>(m) * entryStride + fieldOff;
+                                    const std::size_t width = is64Bit ? 8u : 4u;
+                                    if (off + width > tc.size)
+                                        break;
+                                    std::uint64_t framePos = 0;
+                                    if (is64Bit)
+                                    {
+                                        std::memcpy(&framePos, p + off, 8);
+                                    }
+                                    else
+                                    {
+                                        std::uint32_t f32 = 0;
+                                        std::memcpy(&f32, p + off, 4);
+                                        framePos = f32;
+                                    }
+                                    if (framePos == 0 || framePos >= acidTrack.totalSampleFrames)
+                                        continue;
+                                    if (!out.empty() && framePos <= prevPos)
+                                    {
+                                        monotonic = false;
+                                        break;
+                                    }
+                                    prevPos = framePos;
+                                    const double norm = static_cast<double>(framePos) /
+                                                        static_cast<double>(acidTrack.totalSampleFrames);
+                                    if (out.empty() || std::abs(norm - out.back()) > 0.002)
+                                        out.push_back(norm);
+                                }
+                                if (!monotonic)
+                                    out.clear();
+                                return out;
+                            };
+
+                            std::vector<double> bestMarkers;
+                            if (stride >= 16)
+                            {
+                                // Standard ACID strc slice records are 24 bytes (uint64 samplePos at +8, or uint32 at +4/+8/+0).
+                                struct Layout { std::size_t off; bool is64; };
+                                const Layout layouts[] = {
+                                    {8, true}, {8, false}, {4, false}, {0, false}, {12, false}
+                                };
+                                double bestScore = -1.0;
+                                for (const auto& lay : layouts)
+                                {
+                                    if (lay.off + (lay.is64 ? 8u : 4u) > stride)
+                                        continue;
+                                    auto cand = extractMarkers(stride, lay.off, lay.is64);
+                                    if (cand.empty())
+                                        continue;
+                                    const double coverage = cand.back() - cand.front();
+                                    const double score = static_cast<double>(cand.size()) * (0.5 + coverage);
+                                    if (score > bestScore)
+                                    {
+                                        bestScore = score;
+                                        bestMarkers = std::move(cand);
+                                    }
                                 }
                             }
+                            else if (stride >= 4)
+                            {
+                                bestMarkers = extractMarkers(stride, 0, false);
+                            }
+
+                            if (!bestMarkers.empty())
+                                acidTrack.stretchMarkers = std::move(bestMarkers);
                         }
                     }
                     else if (tc.id == "LIST" && tc.subType == "xlst")
@@ -853,15 +914,7 @@ std::optional<Song> AcidProjectReader::parseAcdFile(const std::filesystem::path&
                 return candidateDirect;
         }
 
-        // 2. Direct match in dir / "samples"
-        for (const auto& cand : candidates)
-        {
-            const auto candidateSamples = dir / "samples" / utf8ToPath(cand);
-            if (std::filesystem::exists(candidateSamples, ec) && std::filesystem::is_regular_file(candidateSamples, ec))
-                return candidateSamples;
-        }
-
-        // 3. Case-insensitive & Unicode-normalized filename match in dir (and subdirectories of dir)
+        // 2. Case-insensitive & Unicode-normalized filename match in dir (top-level files first, then subdirectories)
         for (const auto& cand : candidates)
         {
             auto found = findFileCaseInsensitive(dir, cand);

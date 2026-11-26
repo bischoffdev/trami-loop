@@ -125,9 +125,75 @@ void Sequencer::resetTrackMix() noexcept
         trackMix_[static_cast<std::size_t>(t)].pan.store(0.0f, std::memory_order_relaxed);
         trackMix_[static_cast<std::size_t>(t)].muted.store(false, std::memory_order_relaxed);
         trackMix_[static_cast<std::size_t>(t)].solo.store(false, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].manualLatencySamples.store(0, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].fxLatencySamples.store(0, std::memory_order_relaxed);
+        trackMix_[static_cast<std::size_t>(t)].maxClipLatencySamples.store(0, std::memory_order_relaxed);
     }
     anySolo_.store(false, std::memory_order_relaxed);
+    if (scratch_ != nullptr)
+        scratch_->clearAllPdc();
     updateAllVoiceGains();
+}
+
+void Sequencer::setTrackLatencySamples(int track, int latencySamples) noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+    trackMix_[static_cast<std::size_t>(track)].manualLatencySamples.store(std::max(0, latencySamples),
+                                                                          std::memory_order_relaxed);
+}
+
+int Sequencer::trackLatencySamples(int track) const noexcept
+{
+    if (track < 0 || track >= kMaxTracks)
+        return 0;
+    const auto& tm = trackMix_[static_cast<std::size_t>(track)];
+    const int manualLat = std::max(0, tm.manualLatencySamples.load(std::memory_order_relaxed));
+    const int modelFxLat = std::max(0, tm.fxLatencySamples.load(std::memory_order_relaxed));
+    const int modelClipLat = std::max(0, tm.maxClipLatencySamples.load(std::memory_order_relaxed));
+    const AudioPluginProcessor* proc = pluginProcessor_.load(std::memory_order_acquire);
+    const int liveFxLat = (proc != nullptr) ? std::max(0, proc->trackLatencySamples(track)) : 0;
+    return manualLat + std::max(modelFxLat, liveFxLat) + modelClipLat;
+}
+
+int Sequencer::maxTrackLatencySamples() const noexcept
+{
+    const bool anySolo = anySolo_.load(std::memory_order_relaxed);
+    int maxLat = 0;
+    for (int t = 0; t < kMaxTracks; ++t)
+    {
+        const auto& tm = trackMix_[static_cast<std::size_t>(t)];
+        const bool muted = tm.muted.load(std::memory_order_relaxed);
+        const bool solo = tm.solo.load(std::memory_order_relaxed);
+        if (muted || (anySolo && !solo))
+            continue;
+        maxLat = std::max(maxLat, trackLatencySamples(t));
+    }
+    return maxLat;
+}
+
+int Sequencer::trackCompensationSamples(int track) const noexcept
+{
+    if (!pdcEnabled_.load(std::memory_order_relaxed) || track < 0 || track >= kMaxTracks)
+        return 0;
+    const auto& tm = trackMix_[static_cast<std::size_t>(track)];
+    const bool muted = tm.muted.load(std::memory_order_relaxed);
+    const bool solo = tm.solo.load(std::memory_order_relaxed);
+    const bool anySolo = anySolo_.load(std::memory_order_relaxed);
+    if (muted || (anySolo && !solo))
+        return 0;
+    return std::max(0, maxTrackLatencySamples() - trackLatencySamples(track));
+}
+
+int Sequencer::totalLatencySamples() const noexcept
+{
+    const int projLat = std::max(0, projectLatencySamples_.load(std::memory_order_relaxed));
+    if (!pdcEnabled_.load(std::memory_order_relaxed))
+        return projLat;
+    const AudioPluginProcessor* proc = pluginProcessor_.load(std::memory_order_acquire);
+    const int liveMasterLat = (proc != nullptr) ? std::max(0, proc->masterLatencySamples()) : 0;
+    const int masterLat = std::max(std::max(0, modelMasterLatencySamples_.load(std::memory_order_relaxed)), liveMasterLat);
+    return maxTrackLatencySamples() + masterLat + projLat;
 }
 
 void Sequencer::setMasterVolume(float volume) noexcept
@@ -148,7 +214,14 @@ Sequencer::OutputLevels Sequencer::outputLevels() const noexcept
 
 void Sequencer::syncTrackMixFromSnapshot() noexcept
 {
-    if (current_ == nullptr || !current_->hasTrackMixes)
+    if (current_ == nullptr)
+        return;
+
+    pdcEnabled_.store(current_->pdcEnabled, std::memory_order_relaxed);
+    projectLatencySamples_.store(std::max(0, current_->projectLatencySamples), std::memory_order_relaxed);
+    modelMasterLatencySamples_.store(std::max(0, current_->masterLatencySamples), std::memory_order_relaxed);
+
+    if (!current_->hasTrackMixes)
         return;
 
     for (std::size_t t = 0; t < current_->trackMixes.size() && t < static_cast<std::size_t>(kMaxTracks); ++t)
@@ -158,6 +231,9 @@ void Sequencer::syncTrackMixFromSnapshot() noexcept
         trackMix_[t].pan.store(m.pan, std::memory_order_relaxed);
         trackMix_[t].muted.store(m.muted, std::memory_order_relaxed);
         trackMix_[t].solo.store(m.solo, std::memory_order_relaxed);
+        trackMix_[t].manualLatencySamples.store(m.manualLatencySamples, std::memory_order_relaxed);
+        trackMix_[t].fxLatencySamples.store(m.fxLatencySamples, std::memory_order_relaxed);
+        trackMix_[t].maxClipLatencySamples.store(m.maxClipLatencySamples, std::memory_order_relaxed);
     }
 
     bool any = false;
@@ -209,13 +285,15 @@ void Sequencer::updateAllVoiceGains() noexcept
         updateVoiceGainsForTrack(t);
 }
 
-void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples, bool loopPreview)
+void Sequencer::triggerPreview(std::shared_ptr<const AudioData> audio, int startDelaySamples,
+                               bool loopPreview, std::int64_t initialReadPosition)
 {
     collectPreviewGarbage();
     if (audio == nullptr || audio->numFrames() == 0)
         return;
 
-    auto* item = new PreviewItem{std::move(audio), std::max(0, startDelaySamples), loopPreview};
+    const std::int64_t clampedStart = std::clamp<std::int64_t>(initialReadPosition, 0, audio->numFrames() - 1);
+    auto* item = new PreviewItem{std::move(audio), std::max(0, startDelaySamples), loopPreview, clampedStart};
     if (PreviewItem* prev = pendingPreview_.exchange(item, std::memory_order_acq_rel))
         delete prev;
 }
@@ -270,10 +348,14 @@ void Sequencer::handlePreviewRequests() noexcept
 
         currentPreview_ = next;
         previewLooping_ = currentPreview_->loopPreview;
-        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, 0, 0, currentPreview_->audio->numFrames(),
+        const std::int64_t totalFrames = currentPreview_->audio->numFrames();
+        const std::int64_t startPos = std::clamp<std::int64_t>(currentPreview_->initialReadPosition, 0,
+                                                               std::max<std::int64_t>(0, totalFrames - 1));
+        previewVoice_ = Voice{currentPreview_->audio.get(), nullptr, startPos, 0, totalFrames,
                               currentPreview_->startDelaySamples, 0.85f, 0.85f, 0.85f, 0.85f, true, -1, 0, 0, 0};
         previewPlaying_.store(true, std::memory_order_release);
-        previewProgress_.store(0.0, std::memory_order_relaxed);
+        previewProgress_.store(totalFrames > 0 ? static_cast<double>(startPos) / static_cast<double>(totalFrames) : 0.0,
+                               std::memory_order_relaxed);
     }
 }
 
@@ -343,10 +425,11 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
         int offset = 0;
         while (offset < numSamples)
         {
-            const std::int64_t segEnd = (isLooping && loopEnd > loopStart) ? loopEnd : current_->lengthSamples;
+            const bool canHitLoopEnd = isLooping && loopEnd > loopStart && position_ < loopEnd;
+            const std::int64_t segEnd = canHitLoopEnd ? loopEnd : current_->lengthSamples;
             if (position_ >= segEnd)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -364,7 +447,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
             const auto chunk = std::min<std::int64_t>(numSamples - offset, segEnd - position_);
             if (chunk <= 0)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -387,7 +470,7 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
 
             if (position_ >= segEnd)
             {
-                if (isLooping && loopEnd > loopStart)
+                if (canHitLoopEnd)
                 {
                     stopTrackVoicesAt(offset);
                     position_ = loopStart;
@@ -396,12 +479,9 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
                 else
                 {
                     position_ = 0;
-                    if (!isLooping)
-                    {
-                        playing_.store(false);
-                        playRequested_.store(false);
-                        break;
-                    }
+                    playing_.store(false);
+                    playRequested_.store(false);
+                    break;
                 }
             }
         }
@@ -462,6 +542,15 @@ void Sequencer::process(float* left, float* right, int numSamples) noexcept
         clipOccurred_.store(true, std::memory_order_relaxed);
 
     renderMetronome(left, right, numSamples);
+
+    int activeCount = previewVoice_.active ? 1 : 0;
+    for (const auto& v : voices_)
+        if (v.active)
+            ++activeCount;
+    for (const auto& mv : metronomeVoices_)
+        if (mv.active)
+            ++activeCount;
+    activeVoiceCount_.store(activeCount, std::memory_order_relaxed);
 
     publishedPosition_.store(position_);
 }
@@ -568,6 +657,7 @@ void Sequencer::adoptPendingSnapshot() noexcept
                     voice.baseGainLeft = matchingEv->gainLeft;
                     voice.baseGainRight = matchingEv->gainRight;
                     voice.hasClipFx = matchingEv->hasClipFx;
+                    voice.clipLatencySamples = matchingEv->clipLatencySamples;
                     voice.fxSend = matchingEv->fxSend;
                     voice.volEnv = matchingEv->volEnv;
                     voice.volEnvCount = matchingEv->volEnvCount;
@@ -764,15 +854,29 @@ void Sequencer::startMetronomeVoice(const AudioData* audio, int delay, float gai
     *target = Voice{audio, nullptr, 0, 0, audio->numFrames(), delay, gainL, gainR, gainL, gainR, true, -1, 0, 0, 0, false};
 }
 
-void Sequencer::renderMetronome(float* left, float* right, int numSamples) noexcept
+void Sequencer::triggerCountInClick(bool accent, int delay) noexcept
 {
-    if (!playing_.load(std::memory_order_relaxed) && !metronomeEnabled_.load(std::memory_order_relaxed))
-    {
-        for (auto& voice : metronomeVoices_)
-            voice.active = false;
+    const AudioData* sound = accent ? &accentClick_ : &click_;
+    if (sound == nullptr || sound->numFrames() == 0)
         return;
+
+    Voice* target = &metronomeVoices_.front();
+    for (auto& voice : metronomeVoices_)
+    {
+        if (!voice.active)
+        {
+            target = &voice;
+            break;
+        }
+        if (voice.readPosition > target->readPosition)
+            target = &voice;
     }
 
+    *target = Voice{sound, nullptr, 0, 0, sound->numFrames(), std::max(0, delay), 0.55f, 0.55f, 0.55f, 0.55f, true, -2, 0, 0, 0, false};
+}
+
+void Sequencer::renderMetronome(float* left, float* right, int numSamples) noexcept
+{
     for (auto& voice : metronomeVoices_)
     {
         if (!voice.active || voice.audio == nullptr)
@@ -853,6 +957,7 @@ void Sequencer::startVoice(const AudioData* audio, const PlaybackSnapshot* owner
     if (srcEvent != nullptr)
     {
         target->hasClipFx = srcEvent->hasClipFx;
+        target->clipLatencySamples = srcEvent->clipLatencySamples;
         target->fxSend = srcEvent->fxSend;
         target->volEnv = srcEvent->volEnv;
         target->volEnvCount = srcEvent->volEnvCount;
@@ -875,8 +980,10 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
 
     const int n = std::min(numSamples, kMaxScratchSamples);
     AudioPluginProcessor* pluginProc = pluginProcessor_.load(std::memory_order_acquire);
+    const bool pdcOn = pdcEnabled_.load(std::memory_order_relaxed);
 
     std::array<bool, kMaxTracks> trackUsed{};
+    std::array<int, kMaxTracks> activeClipLatOnTrack{};
 
     for (auto& voice : voices_)
     {
@@ -913,6 +1020,18 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         }
 
         const bool useClipFx = (pluginProc != nullptr && voice.hasClipFx && voice.clipId != 0);
+        const int clipLat = pdcOn
+            ? std::max(voice.clipLatencySamples,
+                       useClipFx ? std::max(0, pluginProc->clipLatencySamples(voice.clipId)) : 0)
+            : 0;
+        if (validTrack && clipLat > 0)
+        {
+            auto& slotLat = activeClipLatOnTrack[static_cast<std::size_t>(voice.track)];
+            slotLat = std::max(slotLat, clipLat);
+            scratch_->lastClipLat[static_cast<std::size_t>(voice.track)] =
+                std::max(scratch_->lastClipLat[static_cast<std::size_t>(voice.track)], clipLat);
+        }
+
         if (useClipFx)
         {
             std::fill_n(scratch_->clipBufL.data(), n, 0.0f);
@@ -926,46 +1045,51 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
             ? scratch_->clipBufR.data()
             : (validTrack ? scratch_->trackR(voice.track) : right);
 
+        const std::int64_t flushEndPosition = voice.endPosition + (useClipFx ? clipLat : 0);
+
         for (int i = voice.startDelay; i < n; ++i)
         {
-            if (voice.readPosition >= voice.endPosition)
+            if (voice.readPosition >= flushEndPosition)
             {
                 voice.active = false;
                 voice.owner = nullptr;
                 break;
             }
 
-            float env = 1.0f;
-            const std::int64_t offsetFromStart = voice.readPosition - voice.startPosition;
-            if (voice.fadeInSamples > 0 && offsetFromStart < voice.fadeInSamples)
-                env *= static_cast<float>(offsetFromStart) / static_cast<float>(voice.fadeInSamples);
-            if (voice.fadeOutSamples > 0)
+            if (voice.readPosition < voice.endPosition)
             {
-                const std::int64_t remaining = voice.endPosition - voice.readPosition;
-                if (remaining < voice.fadeOutSamples)
-                    env *= static_cast<float>(remaining) / static_cast<float>(voice.fadeOutSamples);
+                float env = 1.0f;
+                const std::int64_t offsetFromStart = voice.readPosition - voice.startPosition;
+                if (voice.fadeInSamples > 0 && offsetFromStart < voice.fadeInSamples)
+                    env *= static_cast<float>(offsetFromStart) / static_cast<float>(voice.fadeInSamples);
+                if (voice.fadeOutSamples > 0)
+                {
+                    const std::int64_t remaining = voice.endPosition - voice.readPosition;
+                    if (remaining < voice.fadeOutSamples)
+                        env *= static_cast<float>(remaining) / static_cast<float>(voice.fadeOutSamples);
+                }
+
+                const float normPos = static_cast<float>(offsetFromStart) * invSpan;
+                if (voice.volEnvCount > 0)
+                    env *= evaluatePlaybackEnvelope(voice.volEnv, voice.volEnvCount, normPos, 1.0f);
+
+                float panScaleL = 1.0f;
+                float panScaleR = 1.0f;
+                if (voice.panEnvCount > 0)
+                {
+                    const float panOffset = evaluatePlaybackEnvelope(voice.panEnv, voice.panEnvCount, normPos, 0.0f);
+                    const auto [pL, pR] = SnapshotBuilder::panGains(panOffset);
+                    panScaleL = pL;
+                    panScaleR = pR;
+                }
+
+                const std::int64_t frameIdx = voice.reversed
+                    ? (voice.endPosition - 1 - offsetFromStart)
+                    : voice.readPosition;
+
+                destL[i] += srcL[frameIdx] * voice.gainLeft * env * panScaleL;
+                destR[i] += srcR[frameIdx] * voice.gainRight * env * panScaleR;
             }
-
-            const float normPos = static_cast<float>(offsetFromStart) * invSpan;
-            if (voice.volEnvCount > 0)
-                env *= evaluatePlaybackEnvelope(voice.volEnv, voice.volEnvCount, normPos, 1.0f);
-
-            float panScaleL = 1.0f;
-            float panScaleR = 1.0f;
-            if (voice.panEnvCount > 0)
-            {
-                const float panOffset = evaluatePlaybackEnvelope(voice.panEnv, voice.panEnvCount, normPos, 0.0f);
-                const auto [pL, pR] = SnapshotBuilder::panGains(panOffset);
-                panScaleL = pL;
-                panScaleR = pR;
-            }
-
-            const std::int64_t frameIdx = voice.reversed
-                ? (voice.endPosition - 1 - offsetFromStart)
-                : voice.readPosition;
-
-            destL[i] += srcL[frameIdx] * voice.gainLeft * env * panScaleL;
-            destR[i] += srcR[frameIdx] * voice.gainRight * env * panScaleR;
 
             ++voice.readPosition;
         }
@@ -984,11 +1108,49 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         }
     }
 
-    // Process per-track VST3/AU FX, measure per-track live peak meters, and sum into master bus
+    // Compute per-channel latencies and maximum channel latency for Plugin Delay Compensation (PDC)
+    std::array<int, kMaxTracks> effTrackLat{};
+    int maxTrackLat = 0;
+    const bool anySolo = anySolo_.load(std::memory_order_relaxed);
+    if (pdcOn)
+    {
+        for (int t = 0; t < kMaxTracks; ++t)
+        {
+            const auto idx = static_cast<std::size_t>(t);
+            const auto& tm = trackMix_[idx];
+            const bool muted = tm.muted.load(std::memory_order_relaxed);
+            const bool solo = tm.solo.load(std::memory_order_relaxed);
+            if (muted || (anySolo && !solo))
+                continue;
+
+            const int manualLat = std::max(0, tm.manualLatencySamples.load(std::memory_order_relaxed));
+            const int modelFxLat = std::max(0, tm.fxLatencySamples.load(std::memory_order_relaxed));
+            const int liveFxLat = (pluginProc != nullptr) ? std::max(0, pluginProc->trackLatencySamples(t)) : 0;
+            const int clipLat = std::max({0, tm.maxClipLatencySamples.load(std::memory_order_relaxed),
+                                          activeClipLatOnTrack[idx], scratch_->lastClipLat[idx]});
+            effTrackLat[idx] = manualLat + std::max(modelFxLat, liveFxLat) + clipLat;
+            maxTrackLat = std::max(maxTrackLat, effTrackLat[idx]);
+        }
+    }
+
+    // Process per-track VST3/AU FX, apply per-channel PDC delay line, measure live peak meters, and sum into master bus
     for (int t = 0; t < kMaxTracks; ++t)
     {
         const auto idx = static_cast<std::size_t>(t);
-        if (!trackUsed[idx])
+        const int compDelay = pdcOn ? std::clamp(maxTrackLat - effTrackLat[idx], 0, kPdcBufferSize - 1) : 0;
+
+        if (trackUsed[idx])
+        {
+            scratch_->trackTailRemaining[idx] = std::max(scratch_->trackTailRemaining[idx],
+                                                         effTrackLat[idx] + compDelay);
+        }
+        else if (scratch_->trackTailRemaining[idx] > 0)
+        {
+            std::fill_n(scratch_->trackL(t), n, 0.0f);
+            std::fill_n(scratch_->trackR(t), n, 0.0f);
+            scratch_->trackTailRemaining[idx] = std::max(0, scratch_->trackTailRemaining[idx] - n);
+        }
+        else
         {
             trackPeakL_[idx].store(0.0f, std::memory_order_relaxed);
             trackPeakR_[idx].store(0.0f, std::memory_order_relaxed);
@@ -999,6 +1161,32 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         float* tR = scratch_->trackR(t);
         if (pluginProc != nullptr)
             pluginProc->processTrack(t, tL, tR, n);
+
+        // Apply per-channel PDC compensation delay so all channels align at maxTrackLat
+        if (compDelay > 0 || scratch_->pdcActiveDelay[idx] > 0)
+        {
+            if (scratch_->pdcActiveDelay[idx] == 0 && compDelay > 0)
+            {
+                std::fill_n(scratch_->ringL(t), kPdcBufferSize, 0.0f);
+                std::fill_n(scratch_->ringR(t), kPdcBufferSize, 0.0f);
+                scratch_->pdcWritePos[idx] = 0;
+            }
+            scratch_->pdcActiveDelay[idx] = compDelay;
+
+            float* rL = scratch_->ringL(t);
+            float* rR = scratch_->ringR(t);
+            int wPos = scratch_->pdcWritePos[idx];
+            for (int i = 0; i < n; ++i)
+            {
+                rL[wPos] = tL[i];
+                rR[wPos] = tR[i];
+                const int rPos = (wPos - compDelay) & kPdcBufferMask;
+                tL[i] = rL[rPos];
+                tR[i] = rR[rPos];
+                wPos = (wPos + 1) & kPdcBufferMask;
+            }
+            scratch_->pdcWritePos[idx] = wPos;
+        }
 
         float pL = 0.0f;
         float pR = 0.0f;
@@ -1015,11 +1203,11 @@ void Sequencer::renderVoices(float* left, float* right, int numSamples) noexcept
         trackPeakR_[idx].store(pR, std::memory_order_relaxed);
     }
 
-    // Apply Master Bus Volume Automation across the song timeline
+    // Apply Master Bus Volume Automation across the song timeline (compensated for maxTrackLat when PDC is active)
     if (current_ != nullptr && current_->masterVolEnvCount > 0 && current_->lengthSamples > 0)
     {
         const double invLen = 1.0 / static_cast<double>(current_->lengthSamples);
-        const std::int64_t blockStartPos = std::max<std::int64_t>(0, position_ - n);
+        const std::int64_t blockStartPos = std::max<std::int64_t>(0, position_ - n - maxTrackLat);
         for (int i = 0; i < n; ++i)
         {
             const float normPos = static_cast<float>(std::clamp(static_cast<double>(blockStartPos + i) * invLen, 0.0, 1.0));
@@ -1043,9 +1231,13 @@ void Sequencer::stopAllVoices() noexcept
     }
     for (auto& voice : metronomeVoices_)
     {
+        if (voice.track == -2)
+            continue; // Preserve active pre-count clicks while playhead is parked
         voice.active = false;
         voice.owner = nullptr;
     }
+    if (scratch_ != nullptr)
+        scratch_->clearAllPdc();
 }
 
 void Sequencer::stopTrackVoicesAt(int offsetInBlock) noexcept

@@ -32,6 +32,7 @@ public:
     void setRawAudio(SampleId id, std::shared_ptr<const AudioData> audio);
     std::shared_ptr<const AudioData> getRawAudio(SampleId id) const;
     SampleBank getRawBank() const;
+    void restoreRawBank(SampleBank bank);
     void removeSample(SampleId id);
     void invalidateSample(SampleId id);
     void clear();

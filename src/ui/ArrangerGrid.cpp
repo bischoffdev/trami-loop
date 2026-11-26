@@ -171,13 +171,26 @@ void ArrangerGrid::paint(juce::Graphics& g)
         g.fillRect(0, y, renderWidth, trackHeight_);
     }
 
+    // Shade every second measure lighter in the background
+    if (barWidth_ >= 4)
+    {
+        const int maxBars = std::max(totalBars, (renderWidth + barWidth_ - 1) / barWidth_);
+        const int fillH = std::max(totalHeight, getHeight()) - kRulerHeight;
+        g.setColour(juce::Colours::white.withAlpha(0.055f));
+        for (int bar = 1; bar <= maxBars; bar += 2)
+        {
+            if (fillH > 0)
+                g.fillRect(bar * barWidth_, kRulerHeight, barWidth_, fillH);
+        }
+    }
+
     for (int bar = 0; bar <= totalBars; ++bar)
     {
         const int x = bar * barWidth_;
         if (barWidth_ < 18 && bar % 4 != 0)
             continue;
 
-        g.setColour(bar % 4 == 0 ? Palette::gridBarLine : Palette::gridLine);
+        g.setColour(bar % 4 == 0 ? Palette::gridBarLine.brighter(0.14f) : Palette::gridLine.brighter(0.08f));
         g.drawVerticalLine(x, static_cast<float>(kRulerHeight), static_cast<float>(totalHeight));
     }
 

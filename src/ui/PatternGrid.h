@@ -44,6 +44,7 @@ class PatternGrid : public juce::Component,
       public:
         virtual ~Listener() = default;
         virtual void clipClicked(ClipId clipId) = 0;
+        virtual void clipDoubleClicked(ClipId /*clipId*/) {}
         virtual void clipMoved(ClipId clipId, int newTrack, double newStep) = 0;
         virtual void clipsMoved(const std::vector<ClipMoveInfo>& moves)
         {
@@ -73,6 +74,7 @@ class PatternGrid : public juce::Component,
         virtual void tabLoopToMarkerSection(int /*direction*/) {}
         virtual void clipReverseRequested(ClipId /*clipId*/) {}
         virtual void clipsReverseRequested(const std::vector<ClipId>& /*clipIds*/) {}
+        virtual void envelopeLockToggleRequested() {}
         virtual void clipFxRequested(ClipId /*clipId*/) {}
         virtual void clipFxBypassRequested(ClipId /*clipId*/) {}
         virtual void clipsTransposeDelta(const std::vector<ClipId>& /*clipIds*/, int /*deltaSemitones*/) {}
@@ -120,6 +122,25 @@ class PatternGrid : public juce::Component,
     double lastClickedStepOnClip() const noexcept { return lastClickedStepOnClip_; }
     void setPlayheadStep(double step);
     double playheadStep() const noexcept { return playheadStep_; }
+    bool isRulerHorizontalDrag() const noexcept
+    {
+        return rulerDragMode_ == RulerDragMode::SeekPlayhead ||
+               rulerDragMode_ == RulerDragMode::SetRegion ||
+               rulerDragMode_ == RulerDragMode::MoveRegion ||
+               rulerDragMode_ == RulerDragMode::ResizeStart ||
+               rulerDragMode_ == RulerDragMode::ResizeEnd;
+    }
+
+    struct LiveRecordingPreview
+    {
+        bool active = false;
+        int trackIndex = -1;
+        double startStep = 0.0;
+        double lengthSteps = 0.0;
+        std::vector<float> peaks;
+    };
+    void setLiveRecordingPreview(LiveRecordingPreview preview);
+    void clearLiveRecordingPreview();
     double clipSpan(const Clip& clip, int trackIndex = -1) const;
     int loopStartStep() const noexcept { return loopStartStep_; }
     int loopEndStep() const noexcept { return loopEndStep_; }
@@ -152,6 +173,17 @@ class PatternGrid : public juce::Component,
 
     void setEditTool(EditTool tool) noexcept { editTool_ = tool; repaint(); }
     EditTool editTool() const noexcept { return editTool_; }
+
+    void setWaveformDisplayGain(float scale) noexcept
+    {
+        const float clamped = std::clamp(scale, 0.5f, 4.0f);
+        if (std::abs(waveformDisplayGain_ - clamped) > 0.001f)
+        {
+            waveformDisplayGain_ = clamped;
+            repaint();
+        }
+    }
+    float waveformDisplayGain() const noexcept { return waveformDisplayGain_; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -313,6 +345,8 @@ class PatternGrid : public juce::Component,
     int rulerDragOriginalStart_ = 0;
     int rulerDragOriginalEnd_ = 16;
     juce::String currentTooltip_;
+    LiveRecordingPreview liveRecording_;
+    float waveformDisplayGain_ = 1.0f;
 };
 
 } // namespace trami

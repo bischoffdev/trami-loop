@@ -38,6 +38,46 @@ float evaluateEnvelope(const std::vector<EnvelopePoint>& points, double pos, flo
     return points.back().value;
 }
 
+namespace
+{
+EnvelopeCurve invertEnvelopeCurve(EnvelopeCurve c) noexcept
+{
+    if (c == EnvelopeCurve::Fast)
+        return EnvelopeCurve::Slow;
+    if (c == EnvelopeCurve::Slow)
+        return EnvelopeCurve::Fast;
+    return EnvelopeCurve::Linear;
+}
+} // namespace
+
+std::vector<EnvelopePoint> reverseEnvelope(const std::vector<EnvelopePoint>& points, double minPos, double maxPos)
+{
+    if (points.empty())
+        return {};
+
+    const std::size_t n = points.size();
+    std::vector<EnvelopePoint> out(n);
+    for (std::size_t k = 0; k < n; ++k)
+    {
+        const auto& src = points[n - 1 - k];
+        out[k].position = std::clamp((minPos + maxPos) - src.position, minPos, maxPos);
+        out[k].value = src.value;
+        out[k].curve = (k + 1 < n) ? invertEnvelopeCurve(points[n - 2 - k].curve) : EnvelopeCurve::Linear;
+    }
+    return out;
+}
+
+int activeChainLatencySamples(const std::vector<PluginSlot>& chain) noexcept
+{
+    int total = 0;
+    for (const auto& s : chain)
+    {
+        if (!s.bypassed && s.latencySamples > 0)
+            total += s.latencySamples;
+    }
+    return total;
+}
+
 int Pattern::lengthSteps() const noexcept
 {
     return lengthBars * stepsPerBar;

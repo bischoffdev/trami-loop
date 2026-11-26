@@ -43,18 +43,25 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void parentHierarchyChanged() override;
     bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     void updateAllViews();
+    void updateWindowTitle();
+    juce::String activeProjectDisplayName() const;
 
     Song& song_;
     AudioEngine& engine_;
     StretchCache& stretchCache_;
     SongHistory history_;
+    std::vector<SampleBank> undoAudioStack_;
+    std::vector<SampleBank> redoAudioStack_;
     SampleImporter importer_;
 
     std::optional<std::filesystem::path> currentProjectDir_;
+    juce::String currentProjectName_;
+    bool currentProjectIsAcidImport_ = false;
 
     IconButton undoButton_{"Undo", IconButton::Icon::Undo, "Undo"};
     IconButton redoButton_{"Redo", IconButton::Icon::Redo, "Redo"};

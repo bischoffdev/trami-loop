@@ -1,3 +1,4 @@
+#include "engine/AudioRecorder.h"
 #include "engine/Sequencer.h"
 #include "engine/SnapshotBuilder.h"
 #include "engine/SnapshotExchange.h"
@@ -1199,4 +1200,291 @@ TEST_CASE("Loop starting mid-clip chases and plays audio on second and subsequen
     // Pass 3 (samples 24000..35999): mid-pass sample 30000 must STILL be audible
     REQUIRE(rendered[24000 + 100] == Catch::Approx(0.6f).margin(0.01f));
     REQUIRE(rendered[30000] == Catch::Approx(0.6f).margin(0.01f));
+}
+
+TEST_CASE("Sequencer Plugin Delay Compensation (PDC) aligns channels with different plugin latencies across blocks")
+{
+    // Mock processor where Track 0 has a 600-sample delay line (latency = 600 samples across multiple 256-sample blocks)
+    // and Track 1 has 0 latency. Both tracks trigger an impulse at sample 0.
+    // With PDC enabled, Track 1 must be automatically delayed by 600 samples so both impulses arrive at sample 600!
+    struct DelayedTrackProcessor : public AudioPluginProcessor
+    {
+        int kLatency = 600;
+        std::vector<float> delayLineL = std::vector<float>(600, 0.0f);
+        std::vector<float> delayLineR = std::vector<float>(600, 0.0f);
+        int writeIdx = 0;
+
+        void processClip(std::uint32_t, float*, float*, int) noexcept override {}
+        void processTrack(int trackIndex, float* l, float* r, int n) noexcept override
+        {
+            if (trackIndex != 0)
+                return;
+            for (int i = 0; i < n; ++i)
+            {
+                const float inL = l[i];
+                const float inR = r[i];
+                l[i] = delayLineL[static_cast<std::size_t>(writeIdx)];
+                r[i] = delayLineR[static_cast<std::size_t>(writeIdx)];
+                delayLineL[static_cast<std::size_t>(writeIdx)] = inL;
+                delayLineR[static_cast<std::size_t>(writeIdx)] = inR;
+                writeIdx = (writeIdx + 1) % kLatency;
+            }
+        }
+        void processMaster(float*, float*, int) noexcept override {}
+
+        int trackLatencySamples(int trackIndex) const noexcept override
+        {
+            return (trackIndex == 0) ? kLatency : 0;
+        }
+    };
+
+    Fixture f;
+    f.song.addTrackToPattern(f.pattern, f.sample);
+    f.song.placeClip(f.pattern, 0, f.sample, 0.0); // Track 0: impulse at step 0 (has 600-sample plugin latency)
+    f.song.placeClip(f.pattern, 1, f.sample, 0.0); // Track 1: impulse at step 0 (0-sample plugin latency)
+
+    SnapshotExchange exchange;
+    exchange.publish(f.snapshot());
+    Sequencer seq(exchange, kRate);
+    DelayedTrackProcessor proc;
+    seq.setPluginProcessor(&proc);
+    seq.requestPlaying(true);
+
+    REQUIRE(seq.trackLatencySamples(0) == 600);
+    REQUIRE(seq.trackLatencySamples(1) == 0);
+    REQUIRE(seq.trackCompensationSamples(0) == 0);
+    REQUIRE(seq.trackCompensationSamples(1) == 600);
+    REQUIRE(seq.totalLatencySamples() == 600);
+
+    // Render 2048 samples in 256-sample blocks
+    std::vector<float> outL(2048, 0.0f), outR(2048, 0.0f);
+    for (int pos = 0; pos < 2048; pos += 256)
+        seq.process(outL.data() + pos, outR.data() + pos, 256);
+
+    // Because both tracks are aligned at sample 600, sample 0 must be 0.0f and sample 600 must be 2.0f (1.0 + 1.0)!
+    REQUIRE(outL[0] == Catch::Approx(0.0f).margin(1e-5f));
+    REQUIRE(outL[600] == Catch::Approx(2.0f).margin(1e-4f));
+}
+
+TEST_CASE("AudioRecorder measures per-channel input peak levels and records selected mono or stereo inputs")
+{
+    AudioRecorder rec;
+    constexpr int kFrames = 128;
+    std::vector<float> ch0(kFrames, 0.25f);
+    std::vector<float> ch1(kFrames, 0.50f);
+    std::vector<float> ch2(kFrames, 0.75f);
+    std::vector<float> ch3(kFrames, 0.90f);
+    const float* inputs[4] = {ch0.data(), ch1.data(), ch2.data(), ch3.data()};
+
+    // 1. Live input metering works even while Idle (monitoring armed tracks)
+    rec.processInput(inputs, 4, kFrames);
+    REQUIRE(rec.activeInputChannels() == 4);
+
+    // Mono input metering on channel 1 (Input 2) reflects 0.50 on both L and R meter bars
+    const auto [monoL, monoR] = rec.inputPeakLevels(1, false);
+    REQUIRE(monoL == Catch::Approx(0.50f).margin(1e-4f));
+    REQUIRE(monoR == Catch::Approx(0.50f).margin(1e-4f));
+
+    // Stereo input metering on channels 2-3 (Input 3-4) reflects 0.75 on L and 0.90 on R
+    const auto [stL, stR] = rec.inputPeakLevels(2, true);
+    REQUIRE(stL == Catch::Approx(0.75f).margin(1e-4f));
+    REQUIRE(stR == Catch::Approx(0.90f).margin(1e-4f));
+
+    // 2. Recording Mono from Input 2 (channel index 1) produces 1-channel AudioData with 0.50f
+    AudioData recordedMono;
+    rec.start(0, 0, [&](AudioData data) { recordedMono = std::move(data); }, /*inputChannel=*/1, /*stereo=*/false);
+    rec.processInput(inputs, 4, kFrames);
+    rec.stop();
+
+    REQUIRE(recordedMono.numChannels() == 1);
+    REQUIRE(recordedMono.numFrames() == kFrames);
+    REQUIRE(recordedMono.left()[0] == Catch::Approx(0.50f).margin(1e-5f));
+    REQUIRE(recordedMono.right()[0] == Catch::Approx(0.50f).margin(1e-5f));
+
+    // 3. Recording Stereo from Input 3-4 (channel index 2) produces 2-channel AudioData with L=0.75f, R=0.90f
+    AudioData recordedStereo;
+    rec.start(0, 0, [&](AudioData data) { recordedStereo = std::move(data); }, /*inputChannel=*/2, /*stereo=*/true);
+    rec.processInput(inputs, 4, kFrames);
+    rec.stop();
+
+    REQUIRE(recordedStereo.numChannels() == 2);
+    REQUIRE(recordedStereo.numFrames() == kFrames);
+    REQUIRE(recordedStereo.left()[0] == Catch::Approx(0.75f).margin(1e-5f));
+    REQUIRE(recordedStereo.right()[0] == Catch::Approx(0.90f).margin(1e-5f));
+}
+
+TEST_CASE("AudioRecorder pre-count fires exact time-signature beats independently of metronome and tracks live waveform peaks")
+{
+    AudioRecorder rec;
+    REQUIRE(rec.isPreCountEnabled() == false);
+    rec.setPreCountEnabled(true);
+    REQUIRE(rec.isPreCountEnabled() == true);
+
+    // 3/4 time signature: 3 beats of 1000 samples each = 3000 samples total pre-count
+    constexpr int kBeatSamples = 1000;
+    constexpr int kTotalCountIn = kBeatSamples * 3;
+    rec.start(kTotalCountIn, 0, nullptr, 0, false, kBeatSamples);
+    REQUIRE(rec.isCountingIn());
+    REQUIRE(rec.countInTotalBeats() == 3);
+    REQUIRE(rec.currentCountInBeat() == 1);
+
+    int clicksTriggered = 0;
+    int accentsTriggered = 0;
+    bool finished = false;
+
+    for (int pos = 0; pos < kTotalCountIn; pos += 250)
+    {
+        const auto adv = rec.advanceSamples(250);
+        if (adv.triggerClick)
+        {
+            ++clicksTriggered;
+            if (adv.clickAccent)
+                ++accentsTriggered;
+        }
+        if (adv.countInFinished)
+            finished = true;
+    }
+
+    REQUIRE(clicksTriggered == 3);
+    REQUIRE(accentsTriggered == 1);
+    REQUIRE(finished == true);
+    REQUIRE(rec.isRecording());
+
+    // Live waveform peaks grow as audio is captured
+    std::vector<float> buf(512, 0.6f);
+    const float* inPtrs[1] = {buf.data()};
+    rec.processInput(inPtrs, 1, 512);
+    REQUIRE(rec.recordedFrames() == 512);
+    const auto peaks = rec.copyLiveWaveformPeaks();
+    REQUIRE(peaks.size() == 2); // 512 / 256
+    REQUIRE(peaks[0] == Catch::Approx(0.6f).margin(1e-4f));
+
+    // Sequencer::triggerCountInClick renders audible click even when stopped & metronome is OFF
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, 44100.0);
+    seq.setMetronomeEnabled(false);
+    REQUIRE(!seq.isPlaying());
+    REQUIRE(!seq.isMetronomeEnabled());
+    seq.triggerCountInClick(true, 0);
+    std::vector<float> outL(256, 0.0f), outR(256, 0.0f);
+    seq.process(outL.data(), outR.data(), 256);
+    float maxOut = 0.0f;
+    for (float v : outL)
+        maxOut = std::max(maxOut, std::abs(v));
+    REQUIRE(maxOut > 0.05f);
+
+    rec.stop();
+    REQUIRE(rec.recordedFrames() == 0);
+    REQUIRE(rec.copyLiveWaveformPeaks().empty());
+}
+
+TEST_CASE("StretchCache restoreRawBank supports full undo/redo of raw sample audio edits")
+{
+    StretchCache cache;
+    const SampleId sid{42};
+
+    AudioData orig;
+    orig.channels = {{0.1f, 0.2f, 0.3f, 0.4f}};
+    cache.setRawAudio(sid, std::make_shared<const AudioData>(orig));
+
+    const SampleBank snapshotBefore = cache.getRawBank();
+
+    // Simulate a destructive wave edit (e.g. removing middle frames)
+    AudioData edited;
+    edited.channels = {{0.1f, 0.4f}};
+    cache.setRawAudio(sid, std::make_shared<const AudioData>(edited));
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 2);
+
+    const SampleBank snapshotAfter = cache.getRawBank();
+
+    // Undo restores original 4 frames
+    cache.restoreRawBank(snapshotBefore);
+    REQUIRE(cache.getRawAudio(sid) != nullptr);
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 4);
+    REQUIRE(cache.getRawAudio(sid)->left()[1] == Catch::Approx(0.2f));
+
+    // Redo restores edited 2 frames
+    cache.restoreRawBank(snapshotAfter);
+    REQUIRE(cache.getRawAudio(sid) != nullptr);
+    REQUIRE(cache.getRawAudio(sid)->numFrames() == 2);
+    REQUIRE(cache.getRawAudio(sid)->left()[1] == Catch::Approx(0.4f));
+}
+
+TEST_CASE("Sequencer plays from playhead outside loop region and loops once it enters")
+{
+    SnapshotExchange exchange;
+    auto snap = std::make_unique<PlaybackSnapshot>();
+    snap->lengthSamples = 4000;
+    snap->looping = true;
+    snap->loopStartSample = 1000;
+    snap->loopEndSample = 2000;
+    exchange.publish(std::move(snap));
+
+    Sequencer seq(exchange, 48000.0);
+    seq.setLoopingEnabled(true);
+
+    std::vector<float> outL(500, 0.0f), outR(500, 0.0f);
+
+    // 1. Playhead BEFORE loop region (at 200): plays through 700 -> enters loop -> wraps at 2000 back to 1000
+    seq.requestSeek(200);
+    seq.requestPlaying(true);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 700); // Did NOT jump to loopStart (1000)
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1200); // Entered loop region
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1700);
+
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 1200); // Wrapped at 2000 -> 1000 + 200
+
+    // 2. Playhead AFTER loop region (at 2500): plays from 2500 -> 3000 without jumping back to 1000
+    seq.requestSeek(2500);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 3000);
+    REQUIRE(seq.isPlaying());
+
+    // Continues to end of song (4000) and stops cleanly
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.position() == 3500);
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(!seq.isPlaying());
+}
+
+TEST_CASE("Sequencer preview supports initialReadPosition and continuous loopPreview")
+{
+    SnapshotExchange exchange;
+    Sequencer seq(exchange, 48000.0);
+
+    // 1000-frame ramp sample so we can verify exact sample positions
+    auto audio = std::make_shared<AudioData>();
+    audio->channels.resize(2);
+    audio->channels[0].resize(1000);
+    audio->channels[1].resize(1000);
+    for (int i = 0; i < 1000; ++i)
+    {
+        const float v = static_cast<float>(i + 1) / 1000.0f;
+        audio->channels[0][static_cast<std::size_t>(i)] = v;
+        audio->channels[1][static_cast<std::size_t>(i)] = v;
+    }
+
+    // Start looping preview at frame 600
+    seq.triggerPreview(audio, 0, true, 600);
+    REQUIRE(seq.isPreviewActive());
+
+    std::vector<float> outL(500, 0.0f), outR(500, 0.0f);
+    // Process 500 samples: plays 600..999 (400 samples), wraps to 0..99 (100 samples)
+    seq.process(outL.data(), outR.data(), 500);
+    REQUIRE(seq.isPreviewActive());
+    REQUIRE(outL[0] == Catch::Approx((601.0f / 1000.0f) * 0.85f).margin(0.01f));
+    REQUIRE(outL[400] == Catch::Approx((1.0f / 1000.0f) * 0.85f).margin(0.01f));
+    REQUIRE(seq.previewProgress() == Catch::Approx(100.0 / 1000.0).margin(0.01));
+
+    // Process another 1500 samples (1.5 full loops): must remain active and looping
+    std::vector<float> outL2(1500, 0.0f), outR2(1500, 0.0f);
+    seq.process(outL2.data(), outR2.data(), 1500);
+    REQUIRE(seq.isPreviewActive());
+    REQUIRE(seq.previewProgress() == Catch::Approx(600.0 / 1000.0).margin(0.01));
 }

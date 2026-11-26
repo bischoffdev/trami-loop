@@ -189,6 +189,8 @@ private:
             juce::String label = juce::String(slot.name);
             if (!slot.format.empty())
                 label += "  [" + juce::String(slot.format) + "]";
+            if (slot.latencySamples > 0)
+                label += "  (" + juce::String(slot.latencySamples) + " smp)";
             nameLabel.setText(label, juce::dontSendNotification);
             nameLabel.setFont(juce::Font(juce::FontOptions(12.5f)));
             nameLabel.setColour(juce::Label::textColourId,
@@ -202,7 +204,7 @@ private:
             bypassBtn.onClick = std::move(onBypass);
 
             addAndMakeVisible(editBtn);
-            editBtn.setTooltip("Open native VST3/AU plugin editor window");
+            editBtn.setTooltip("Open / close native VST3/AU plugin editor window (click again to close)");
             editBtn.onClick = std::move(onEdit);
 
             addAndMakeVisible(upBtn);
@@ -366,7 +368,7 @@ private:
                 },
                 [this, i]
                 {
-                    if (!host_.openPluginEditor(targetKind_, targetId_, i))
+                    if (!host_.openPluginEditor(targetKind_, targetId_, i, true))
                         statusLabel_.setText("Could not open plugin editor (plugin may not be installed or has no UI).",
                                              juce::dontSendNotification);
                 },

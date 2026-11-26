@@ -42,7 +42,7 @@ public:
         if (plugins_.empty())
         {
             g.setColour(Palette::textDim.withAlpha(0.7f));
-            g.setFont(Typography::regular(11.0f));
+            g.setFont(Typography::regular(13.0f));
             g.drawText("No matching plugins.\nClick \"Scan...\" to scan VST3/AU.",
                        getLocalBounds().reduced(10), juce::Justification::centred, true);
             return;
@@ -78,28 +78,28 @@ public:
             g.setColour((isHov || isSel) ? Palette::accent.withAlpha(0.32f) : Palette::panelHeader);
             g.fillRoundedRectangle(addBtn.toFloat(), 3.0f);
             g.setColour((isHov || isSel) ? Palette::accent : Palette::textDim);
-            g.setFont(Typography::bold(12.0f));
+            g.setFont(Typography::bold(14.0f));
             g.drawText("+", addBtn, juce::Justification::centred, false);
 
             // Format badge (VST3 / AU)
-            const auto fmtRect = juce::Rectangle<int>(addBtn.getX() - 36, row.getY() + 6, 32, 14);
+            const auto fmtRect = juce::Rectangle<int>(addBtn.getX() - 42, row.getY() + 10, 38, 17);
             g.setColour(Palette::panelHeader);
-            g.fillRoundedRectangle(fmtRect.toFloat(), 2.5f);
+            g.fillRoundedRectangle(fmtRect.toFloat(), 3.0f);
             g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(8.5f));
+            g.setFont(Typography::bold(10.0f));
             const juce::String shortFmt = d.pluginFormatName.containsIgnoreCase("AudioUnit") ? "AU" : d.pluginFormatName;
             g.drawText(shortFmt, fmtRect, juce::Justification::centred, false);
 
             // Name + manufacturer
-            auto textArea = row.withTrimmedLeft(8).withRight(fmtRect.getX() - 4);
+            auto textArea = row.withTrimmedLeft(8).withRight(fmtRect.getX() - 4).reduced(0, 2);
             g.setColour(Palette::text);
-            g.setFont(Typography::bold(11.0f));
-            g.drawText(d.name, textArea.removeFromTop(15), juce::Justification::centredLeft, true);
+            g.setFont(Typography::bold(13.5f));
+            g.drawText(d.name, textArea.removeFromTop(19), juce::Justification::centredLeft, true);
 
             if (d.manufacturerName.isNotEmpty())
             {
                 g.setColour(Palette::textDim);
-                g.setFont(Typography::regular(9.5f));
+                g.setFont(Typography::regular(11.5f));
                 g.drawText(d.manufacturerName, textArea, juce::Justification::centredLeft, true);
             }
         }
@@ -151,11 +151,11 @@ public:
     }
 
 private:
-    static constexpr int kRowH = 30;
+    static constexpr int kRowH = 38;
 
     static juce::Rectangle<int> addButtonRectForRow(const juce::Rectangle<int>& row)
     {
-        return {row.getRight() - 26, row.getY() + 5, 20, 20};
+        return {row.getRight() - 28, row.getY() + 8, 22, 22};
     }
 
     int hitRow(int y) const
@@ -216,8 +216,8 @@ public:
         removeBtn_.onClick = std::move(onRemove);
         addAndMakeVisible(removeBtn_);
 
-        editBtn_.setButtonText("Open UI");
-        editBtn_.setTooltip("Open native VST3/AU plugin editor window");
+        editBtn_.setButtonText("UI");
+        editBtn_.setTooltip("Open / close the native VST3/AU plugin editor window (click again to close)");
         editBtn_.onClick = [this]()
         {
             if (onEdit_)
@@ -261,8 +261,8 @@ public:
 
         // Slot number badge
         g.setColour(Palette::textDim);
-        g.setFont(Typography::bold(10.0f));
-        g.drawText("#" + juce::String(index_ + 1), 8, 9, 24, 18, juce::Justification::centredLeft, false);
+        g.setFont(Typography::bold(11.5f));
+        g.drawText("#" + juce::String(index_ + 1), 8, 9, 26, 18, juce::Justification::centredLeft, false);
 
         // Header divider
         g.setColour(Palette::gridLine.withAlpha(0.8f));
@@ -271,19 +271,26 @@ public:
         // Plugin name (centered in module body)
         auto body = getLocalBounds().reduced(10, 0).withTop(36).withBottom(getHeight() - 36);
         g.setColour(slot_.bypassed ? Palette::textDim : Palette::text);
-        g.setFont(Typography::bold(12.5f));
-        g.drawFittedText(juce::String(slot_.name), body.withTrimmedBottom(18), juce::Justification::centred, 2, 0.85f);
+        g.setFont(Typography::bold(14.0f));
+        g.drawFittedText(juce::String(slot_.name), body.withTrimmedBottom(20), juce::Justification::centred, 2, 0.85f);
 
-        // Format pill badge
-        if (!slot_.format.empty())
+        // Format + Latency pill badge
+        if (!slot_.format.empty() || slot_.latencySamples > 0)
         {
-            const juce::String fmt = juce::String(slot_.format).containsIgnoreCase("AudioUnit") ? "AU" : juce::String(slot_.format);
-            const auto pill = juce::Rectangle<float>(static_cast<float>(getWidth()) * 0.5f - 22.0f,
-                                                     static_cast<float>(body.getBottom() - 16), 44.0f, 14.0f);
+            juce::String fmt = juce::String(slot_.format).containsIgnoreCase("AudioUnit") ? "AU" : juce::String(slot_.format);
+            if (slot_.latencySamples > 0)
+            {
+                if (fmt.isNotEmpty())
+                    fmt += " · ";
+                fmt += juce::String(slot_.latencySamples) + " smp";
+            }
+            const float pillW = (slot_.latencySamples > 0) ? 104.0f : 50.0f;
+            const auto pill = juce::Rectangle<float>(static_cast<float>(getWidth()) * 0.5f - pillW * 0.5f,
+                                                     static_cast<float>(body.getBottom() - 18), pillW, 16.0f);
             g.setColour(Palette::background.withAlpha(0.85f));
             g.fillRoundedRectangle(pill, 3.0f);
             g.setColour(Palette::textDim);
-            g.setFont(Typography::bold(8.5f));
+            g.setFont(Typography::bold(10.0f));
             g.drawText(fmt, pill.toNearestInt(), juce::Justification::centred, false);
         }
     }
@@ -460,6 +467,25 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
     };
     addAndMakeVisible(switchPartnerButton_);
 
+    pdcToggleButton_.setClickingTogglesState(true);
+    pdcToggleButton_.setToggleState(song_.pdcEnabled(), juce::dontSendNotification);
+    pdcToggleButton_.setColour(juce::TextButton::buttonOnColourId, Palette::accent.withAlpha(0.35f));
+    pdcToggleButton_.setColour(juce::TextButton::textColourOnId, Palette::accent);
+    pdcToggleButton_.setTooltip("Plugin Delay Compensation (PDC): Automatically time-align channels for plugin & channel latency");
+    pdcToggleButton_.onClick = [this]()
+    {
+        if (onPushUndo)
+            onPushUndo();
+        const bool on = pdcToggleButton_.getToggleState();
+        song_.setPdcEnabled(on);
+        engine_.sequencer().setPdcEnabled(on);
+        rebuildRackModules();
+        if (onChainModified)
+            onChainModified();
+        repaint();
+    };
+    addAndMakeVisible(pdcToggleButton_);
+
     bypassAllButton_.setClickingTogglesState(true);
     bypassAllButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb45309));
     bypassAllButton_.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
@@ -478,7 +504,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
 
     // Left pane: Plugin Browser
     browserTitleLabel_.setText("PLUGINS", juce::dontSendNotification);
-    browserTitleLabel_.setFont(Typography::bold(10.5f));
+    browserTitleLabel_.setFont(Typography::bold(12.0f));
     browserTitleLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     addAndMakeVisible(browserTitleLabel_);
 
@@ -486,6 +512,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
     scanButton_.onClick = [this]() { toggleScanPlugins(); };
     addAndMakeVisible(scanButton_);
 
+    searchBox_.setFont(Typography::regular(13.0f));
     searchBox_.setTextToShowWhenEmpty("Search VST3 / AU...", Palette::textDim.withAlpha(0.6f));
     searchBox_.setColour(juce::TextEditor::backgroundColourId, Palette::background);
     searchBox_.setColour(juce::TextEditor::textColourId, Palette::text);
@@ -499,7 +526,7 @@ FxRackPanel::FxRackPanel(Song& song, AudioEngine& engine, PatternId patternId)
     browserViewport_.setScrollBarsShown(true, false);
     addAndMakeVisible(browserViewport_);
 
-    statusLabel_.setFont(Typography::regular(10.0f));
+    statusLabel_.setFont(Typography::regular(11.5f));
     statusLabel_.setColour(juce::Label::textColourId, Palette::textDim);
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(statusLabel_);
@@ -800,6 +827,9 @@ void FxRackPanel::rebuildTargetSelector()
 
 void FxRackPanel::loadChainFromModel()
 {
+    if (auto* patMut = song_.findPattern(patternId_))
+        engine_.pluginHost().syncLatenciesIntoPattern(*patMut);
+
     chain_.clear();
     const auto* pat = song_.findPattern(patternId_);
     if (pat != nullptr)
@@ -815,6 +845,7 @@ void FxRackPanel::loadChainFromModel()
         }
     }
 
+    pdcToggleButton_.setToggleState(song_.pdcEnabled(), juce::dontSendNotification);
     rebuildRackModules();
     updateNavigationControls();
     repaint();
@@ -837,8 +868,20 @@ void FxRackPanel::commitChain(std::vector<PluginSlot> newChain)
     else if (scope_ == Scope::Clip)
         song_.setClipFxChain(patternId_, targetClip_, chain_);
 
-    if (const auto* pat = song_.findPattern(patternId_))
+    if (auto* pat = song_.findPattern(patternId_))
+    {
         engine_.pluginHost().syncFromPattern(*pat);
+        engine_.pluginHost().syncLatenciesIntoPattern(*pat);
+        if (scope_ == Scope::Master)
+            chain_ = pat->masterFxChain;
+        else if (scope_ == Scope::Track && targetTrack_ >= 0 && targetTrack_ < static_cast<int>(pat->tracks.size()))
+            chain_ = pat->tracks[static_cast<std::size_t>(targetTrack_)].fxChain;
+        else if (scope_ == Scope::Clip && targetClip_.isValid())
+        {
+            if (const Clip* c = song_.findClip(patternId_, targetClip_))
+                chain_ = c->fxChain;
+        }
+    }
 
     rebuildTargetSelector();
     rebuildRackModules();
@@ -878,7 +921,7 @@ void FxRackPanel::refreshAvailablePlugins()
     applyPluginFilter();
 
     if (available_.isEmpty())
-        statusLabel_.setText("0 plugins cached — click Scan...", juce::dontSendNotification);
+        statusLabel_.setText("0 plugins cached - click Scan...", juce::dontSendNotification);
     else
         statusLabel_.setText(juce::String(available_.size()) + " VST3/AU plugins", juce::dontSendNotification);
 }
@@ -995,7 +1038,7 @@ void FxRackPanel::rebuildRackModules()
             },
             [this, i]()
             {
-                if (!engine_.pluginHost().openPluginEditor(currentHostTargetKind(), currentHostTargetId(), i))
+                if (!engine_.pluginHost().openPluginEditor(currentHostTargetKind(), currentHostTargetId(), i, true))
                     statusLabel_.setText("Could not open plugin UI", juce::dontSendNotification);
             },
             [this, i]()
@@ -1052,6 +1095,16 @@ void FxRackPanel::rebuildRackModules()
                                                      [](const PluginSlot& s) { return s.bypassed; });
     bypassAllButton_.setEnabled(hasSlots);
     bypassAllButton_.setToggleState(allBypassed, juce::dontSendNotification);
+
+    const int chainLat = activeChainLatencySamples(chain_);
+    const int projLat = song_.totalProjectLatencySamples(patternId_);
+    const double sr = std::max(8000.0, engine_.sampleRate());
+    const double projMs = (static_cast<double>(projLat) * 1000.0) / sr;
+    pdcToggleButton_.setButtonText(projLat > 0 ? ("PDC (" + juce::String(projLat) + " smp)") : "PDC");
+    pdcToggleButton_.setTooltip("Plugin Delay Compensation: " + juce::String(song_.pdcEnabled() ? "ON" : "OFF") +
+                                " | Chain Latency: " + juce::String(chainLat) + " smp" +
+                                " | Total Project PDC: " + juce::String(projLat) + " smp (" +
+                                juce::String(projMs, 1) + " ms)");
 }
 
 void FxRackPanel::layoutRackModules()
@@ -1123,6 +1176,8 @@ void FxRackPanel::resized()
 
     bypassAllButton_.setBounds(topBar.removeFromRight(84));
     topBar.removeFromRight(6);
+    pdcToggleButton_.setBounds(topBar.removeFromRight(92));
+    topBar.removeFromRight(6);
 
     if (switchPartnerButton_.isVisible())
     {
@@ -1151,10 +1206,10 @@ void FxRackPanel::resized()
     browserTitleLabel_.setBounds(leftHeader);
     leftPane.removeFromTop(4);
 
-    searchBox_.setBounds(leftPane.removeFromTop(22));
+    searchBox_.setBounds(leftPane.removeFromTop(26));
     leftPane.removeFromTop(4);
 
-    statusLabel_.setBounds(leftPane.removeFromBottom(16));
+    statusLabel_.setBounds(leftPane.removeFromBottom(18));
     leftPane.removeFromBottom(2);
 
     browserViewport_.setBounds(leftPane);
