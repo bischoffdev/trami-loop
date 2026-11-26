@@ -84,9 +84,15 @@ jobs:
             -DTRAMI_VERSION="$TRAMI_VER" \
             -DTRAMI_BUILD_TESTS=ON
 
-      - name: Build Application (Release)
+      - name: Build Application (Release, macOS)
+        if: runner.os == 'macOS'
         run: |
-          cmake --build build --config Release --parallel
+          cmake --build build --config Release --parallel 3
+
+      - name: Build Application (Release, Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake --build build --config Release --parallel 4
 
       - name: Run Tests
         run: |

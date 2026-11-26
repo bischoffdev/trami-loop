@@ -17,8 +17,13 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
-        run: cmake --build build --config Release --parallel
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build build --config Release --parallel 3
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --parallel 4
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
