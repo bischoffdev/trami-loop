@@ -22,10 +22,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shaded every second measure (Measures 2, 4, 6, …) with a lighter background column overlay and brighter bar boundary lines across the Track View grid, Bar Ruler, Master Bus automation lane, and Arranger grid.
 - **Toolbar Button Vector Icons**:
   - Added custom vector icons to all Track View toolbar tool and mode buttons (`Select`, `Paint`, `Erase`, `Split`, `Join`, `Marker`, `X-Fade`, `Env Lock`, and `Ripple`) matching the top application toolbar styling.
+- **Docked Wave Editor Tab (`Wave`)**:
+  - Added a dedicated `Wave` tab in the bottom dock (`Explorer` | `Properties` | `Wave` | `Mixer` | `FX`) supporting both **Track Sample** (destructive, Undo/Redoable across all clips using the sample) and **Selected Clip** (non-destructive) editing scopes, plus clip double-click to open directly in the Wave Editor.
+  - Waveform region editing: drag to mark a region, drag left/right borders to resize the marked region, drag up/down inside a marked region for live visual + dB volume adjustment (with `Shift` for fine control), plus **Trim**, **Delete** (`Delete`/`Backspace`), **Silence**, **Normalize**, **Fade In/Out**, **Gain + Apply**, **Clip Trim**, **Reverse**, and **Make Unique**.
+  - **Create track from selection**: extract any marked waveform slice (e.g., a single drum hit from a full beat) into a new `OneShot` sample and track with full Undo/Redo support.
+  - **Independent Wave Playhead & Transport**: click the waveform or top beat ruler to place/scrub the wave playhead, use dedicated vector symbol **Play/Stop** (`▶`/`■`) and **Loop** buttons (or press `Space` while the Wave Editor is focused) to audition from the placed playhead or loop the marked selection.
+  - Moved **Stretch Marker** tools into a clearly grouped **`Stretch:`** bar (`Auto-Detect`, `Beat Grid`, `Clear`) inside the Wave Editor with zoom/pan controls.
+- **Live Recording Enhancements**:
+  - Independent, time-signature-aware **Pre-Count** (`PRE 1 / N` readout in the Transport Bar) that counts a full measure with audible count-in clicks independent of the metronome toggle and holds the playhead until count-in completes.
+  - Live growing **`REC`** clip with real-time waveform preview on the timeline while recording, plus automatic measure appending when recording approaches the end of the timeline.
+  - Hardware-aware input source menus showing only real channels of the active audio input device (no synthetic stereo pairs on mono mics), active device header, mono clamping on 1-channel inputs, and an `Audio Settings...` shortcut.
+- **Clip Waveform Display Size Slider**:
+  - Added a `Wave:` scale slider (`0.5x–4.0x`) in the Track View toolbar to boost or reduce waveform display amplitude across all timeline clips.
 - **Project Name in Application Title Bar**:
-  - Displayed the currently open project name in both the native OS window title bar (`TramiLoop v0.5.0 - <Project Name>`) and the top application bar, updating automatically on New, Open, Save, Undo/Redo, and song rename.
+  - Displayed the currently open project name in the native OS window title bar (`TramiLoop v0.5.0 - <Project Name>`), updating automatically on New, Open, Save, Undo/Redo, and song rename.
+
+### Changed
+- **Unified Track Properties View**: Combined the General and Summary tabs in Track Properties into a single two-column layout.
+- **Empty New Tracks**: Newly added tracks now start `[empty]` instead of being assigned a random sample.
+- **Single Open FX Plugin UI**: Opening or inserting a VST3/AU effect plugin automatically opens its editor and closes any previously open effect UI so only one plugin window is open at a time; filtered plugin scanning to audio effects only (excluding synths/instruments/MIDI generators).
+- **Playhead & Loop Playback Behavior**:
+  - Starting playback outside a loop region now plays from the playhead's current position (entering and looping once it reaches the loop region, or playing to song end if past it).
+  - Adjusting the loop region while playing updates the audio engine in real time.
+  - Dragging the playhead or loop region past the left/right viewport edge smoothly auto-scrolls the main timeline.
+- **Timeline Marker Interactions**: Single-clicking a marker now jumps the playhead to the marker position without opening the dialog; dragging moves the marker, and double-clicking opens the marker properties/rename window.
+- **UI Readability & Ergonomics**:
+  - Enlarged font sizes in the Explorer right-hand file browser and the FX Rack / VST plugin list.
+  - Widened the track color bar click target in Track Headers and added `Track Color...` to the track right-click menu.
+  - Removed unnecessary 32nd-note step position HUD tooltips when dragging or resizing clips.
+  - Clearing a clip selection or clicking another clip automatically clears the Wave Editor's marked region.
 
 ### Fixed
+- **Multi-Clip Copy, Cut, Duplicate & Paste**:
+  - Fixed `Cmd+C`, `Cmd+X`, `Cmd+D`, and right-click Copy collapsing multi-clip selections down to a single clip.
+  - Preserved exact relative timing, clip count, and track alignment when pasting multiple clips (growing pattern length automatically instead of wrapping clips via `fmod`).
+- **ACID `strc` Stretch Marker Parsing**: Fixed ACID project `strc` chunk parsing to compute dynamic slice record strides and detect monotonic frame offsets across 24-byte slice records instead of clustering markers in the first ~25% of the waveform.
+- **Project Reload & Mixer Selection**:
+  - Fixed opening `.trami` / ACID projects occasionally displaying an empty timeline due to `resetPlayhead()` clearing `currentPattern_`.
+  - Polished Mixer multi-channel selection (`Shift+click` anchor preservation, ignoring child right-clicks, linked typed dB volume, and clearing stale selections on pattern change).
+- **UI Encoding**: Fixed remaining UTF-8 em-dash mojibake in the Transport Bar, FX Rack, and Sample Browser.
 - **Reversed Clip Waveform & Multi-Point Curve Reversal**:
   - Fixed reversed clip waveform rendering in `PatternGrid` for both Loop and One-Shot/Disk clips (`offsetSteps` and wrap-around sample indexing).
   - Reversing a clip with **Envelope Lock** (`Env Lock`) enabled now automatically mirrors the clip's multi-point volume and pan envelopes, swaps `fadeInSteps` and `fadeOutSteps` (inverting `Fast` $\leftrightarrow$ `Slow` curve shapes), and reverses track automation points within the clip's span.
